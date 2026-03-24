@@ -1,0 +1,54 @@
+# Core
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# Database
+sqlalchemy==2.0.30
+aiomysql==0.2.0
+alembic==1.13.1
+pymysql==1.1.0
+
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.3
+
+# Pydantic / Settings
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# Celery + Redis
+celery==5.4.0
+redis==5.0.4
+kombu==5.3.5
+
+# AI / Groq / Agno
+groq==0.9.0
+agno==1.1.9
+
+# PDF + OCR
+pymupdf==1.24.3
+pytesseract==0.3.10
+Pillow==10.3.0
+
+# AWS S3
+boto3==1.34.95
+botocore==1.34.95
+
+# Email
+sendgrid==6.11.0
+jinja2==3.1.4
+
+# HTTP
+httpx==0.27.0
+aiofiles==23.2.1
+
+# PDF Generation
+reportlab==4.1.0
+qrcode==7.4.2
+
+# Utils
+python-dotenv==1.0.1
+python-dateutil==2.9.0
+websockets==12.0
