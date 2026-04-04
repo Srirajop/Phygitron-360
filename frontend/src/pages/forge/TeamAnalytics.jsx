@@ -1,71 +1,194 @@
 import React, { useEffect, useState } from 'react';
 import { forgeApi } from '../../api';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Users, Award, BookOpen } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { Users, Award, TrendingUp, BookOpen, CheckCircle, Target } from 'lucide-react';
+import toast from 'react-hot-toast';
+
+function MiniBar({ value, max, color = 'var(--primary)' }) {
+  const pct = max > 0 ? (value / max) * 100 : 0;
+  return (
+    <div className="progress-bar" style={{ height: 6 }}>
+      <div style={{ height: '100%', background: color, borderRadius: 999, width: `${pct}%`, transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)' }} />
+    </div>
+  );
+}
 
 export default function TeamAnalytics() {
-  const [data, setData] = useState([]);
+  const { user } = useAuth();
+  const [team, setTeam] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    forgeApi.teamAnalytics().then(r => setData(r.data.data || [])).finally(() => setLoading(false));
+    forgeApi.teamAnalytics()
+      .then(r => setTeam(r.data.data || []))
+      .catch(() => toast.error('Failed to load team analytics'))
+      .finally(() => setLoading(false));
   }, []);
 
-  const chartData = data.map(d => ({ name: d.name?.split(' ')[0], enrolled: d.enrolled, completed: d.completed, certs: d.certificates }));
+  const maxEnrolled = Math.max(...team.map(t => t.enrolled || 0), 1);
+  const totalEnrolled = team.reduce((s, t) => s + (t.enrolled || 0), 0);
+  const totalCompleted = team.reduce((s, t) => s + (t.completed || 0), 0);
+  const totalCerts = team.reduce((s, t) => s + (t.certificates || 0), 0);
+  const compRate = totalEnrolled > 0 ? Math.round((totalCompleted / totalEnrolled) * 100) : 0;
+
+  // Sort by completions desc
+  const sorted = [...team].sort((a, b) => (b.completed || 0) - (a.completed || 0));
+  const topLearner = sorted[0];
 
   return (
     <div>
-      <div className="page-header"><h1>Team Learning Analytics</h1><p>Track your team's learning progress</p></div>
+      <div className="page-header">
+        <h1>Team Learning Analytics</h1>
+        <p>Track your team's learning progress, completions, and certificate achievements</p>
+      </div>
       <div className="page-body">
-        {loading ? <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><div className="spinner spinner-lg" /></div> : (<>
-          <div className="stats-grid animate-fade-in">
-            {[
-              { label: 'Team Members', value: data.length, icon: <Users size={18} /> },
-              { label: 'Total Enrolled', value: data.reduce((s, d) => s + d.enrolled, 0), icon: <BookOpen size={18} /> },
-              { label: 'Total Certs', value: data.reduce((s, d) => s + d.certificates, 0), icon: <Award size={18} /> },
-            ].map((s, i) => (
-              <div key={i} className={`stat-card animate-fade-in stagger-${i+1}`}>
-                <div className="stat-icon">{s.icon}</div>
-                <div className="stat-value">{s.value}</div>
-                <div className="stat-label">{s.label}</div>
-              </div>
-            ))}
-          </div>
-
-          {chartData.length > 0 && (
-            <div className="card animate-fade-in" style={{ marginBottom: 24 }}>
-              <div className="card-header"><h4>Team Learning Progress</h4></div>
-              <div className="card-body">
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={chartData}>
-                    <XAxis dataKey="name" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="enrolled" fill="#A855F7" name="Enrolled" radius={[4,4,0,0]} />
-                    <Bar dataKey="completed" fill="#10B981" name="Completed" radius={[4,4,0,0]} />
-                    <Bar dataKey="certs" fill="#F59E0B" name="Certificates" radius={[4,4,0,0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+        {/* Summary Stats */}
+        <div className="stats-grid animate-fade-in" style={{ marginBottom: 32 }}>
+          {[
+            { label: 'Team Members', value: team.length, icon: <Users size={18} /> },
+            { label: 'Total Enrollments', value: totalEnrolled, icon: <BookOpen size={18} /> },
+            { label: 'Completions', value: totalCompleted, icon: <CheckCircle size={18} /> },
+            { label: 'Completion Rate', value: `${compRate}%`, icon: <TrendingUp size={18} /> },
+            { label: 'Certificates', value: totalCerts, icon: <Award size={18} /> },
+          ].map((s, i) => (
+            <div key={i} className={`stat-card animate-fade-in stagger-${i+1}`}>
+              <div className="stat-icon">{s.icon}</div>
+              <div className="stat-value">{s.value}</div>
+              <div className="stat-label">{s.label}</div>
             </div>
-          )}
+          ))}
+        </div>
 
-          <div className="card animate-fade-in">
-            <div className="table-container">
-              <table>
-                <thead><tr><th>Name</th><th>Department</th><th>Enrolled</th><th>Completed</th><th>Certificates</th></tr></thead>
-                <tbody>
-                  {data.map((d, i) => (
-                    <tr key={i}><td style={{ fontWeight: 600 }}>{d.name}</td><td>{d.department || '—'}</td>
-                      <td>{d.enrolled}</td><td>{d.completed}</td>
-                      <td><span className="badge badge-primary">{d.certificates}</span></td>
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><div className="spinner spinner-lg" /></div>
+        ) : team.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon">👥</div>
+            <p>No team members found. Employees will appear here once added.</p>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 24, alignItems: 'start' }}>
+            {/* Main Table */}
+            <div className="card animate-fade-in" style={{ overflow: 'hidden' }}>
+              <div className="card-header">
+                <h4 style={{ margin: 0 }}>Team Learning Progress</h4>
+              </div>
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Member</th>
+                      <th>Department</th>
+                      <th>Enrolled</th>
+                      <th>Completed</th>
+                      <th>Certs</th>
+                      <th>Activity</th>
                     </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map((member, i) => {
+                      const rate = member.enrolled > 0 ? Math.round((member.completed / member.enrolled) * 100) : 0;
+                      const isTop = i === 0 && member.completed > 0;
+                      return (
+                        <tr key={member.employee_id} className={`animate-fade-in stagger-${Math.min(i+1,5)}`}>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <div style={{
+                                width: 34, height: 34, borderRadius: '50%',
+                                background: isTop
+                                  ? 'linear-gradient(135deg, #F59E0B, #D97706)'
+                                  : 'linear-gradient(135deg, var(--primary), var(--primary-light))',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                color: 'white', fontWeight: 700, fontSize: '0.85rem', flexShrink: 0,
+                              }}>
+                                {isTop ? '🏆' : (member.name?.[0] || '?')}
+                              </div>
+                              <div>
+                                <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{member.name}</div>
+                                {isTop && <div style={{ fontSize: '0.65rem', color: '#D97706', fontWeight: 700 }}>Top Learner</div>}
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{member.department || '—'}</td>
+                          <td><span className="badge badge-info">{member.enrolled}</span></td>
+                          <td><span className="badge badge-success">{member.completed}</span></td>
+                          <td>
+                            {member.certificates > 0 ? (
+                              <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 700, color: '#D97706' }}>
+                                🏅 {member.certificates}
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                          <td style={{ width: 120 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                              <MiniBar
+                                value={member.enrolled}
+                                max={maxEnrolled}
+                                color={rate >= 80 ? 'var(--success)' : rate >= 50 ? '#3B82F6' : 'var(--primary)'}
+                              />
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{rate}% done</div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Right sidebar stats */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Leaderboard */}
+              <div className="card animate-fade-in stagger-2">
+                <div className="card-header"><h4 style={{ margin: 0 }}>🏆 Top Performers</h4></div>
+                <div className="card-body" style={{ padding: '12px 20px' }}>
+                  {sorted.slice(0, 5).map((m, i) => (
+                    <div key={m.employee_id} style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '10px 0',
+                      borderBottom: i < 4 ? '1px solid var(--border)' : 'none',
+                    }}>
+                      <div style={{
+                        width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
+                        background: ['#F59E0B','#9CA3AF','#B45309','var(--primary-lighter)','var(--primary-lighter)'][i] || 'var(--primary-lighter)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: i < 3 ? 'white' : 'var(--primary)', fontWeight: 900, fontSize: '0.75rem',
+                      }}>
+                        {['🥇','🥈','🥉',i+1,i+1][i] || i+1}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{m.completed} completed · {m.certificates} certs</div>
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                  {sorted.length === 0 && <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '16px 0' }}>No data yet</p>}
+                </div>
+              </div>
+
+              {/* Coverage */}
+              <div className="card animate-fade-in stagger-3">
+                <div className="card-header"><h4 style={{ margin: 0 }}>📊 Learning Coverage</h4></div>
+                <div className="card-body">
+                  {[
+                    { label: 'With any enrollment', value: team.filter(t => t.enrolled > 0).length, total: team.length, color: '#3B82F6' },
+                    { label: 'At least 1 completion', value: team.filter(t => t.completed > 0).length, total: team.length, color: '#10B981' },
+                    { label: 'Certificate holder', value: team.filter(t => t.certificates > 0).length, total: team.length, color: '#F59E0B' },
+                  ].map((item, i) => (
+                    <div key={i} style={{ marginBottom: 14 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: 5 }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{item.value}/{item.total}</span>
+                      </div>
+                      <MiniBar value={item.value} max={item.total} color={item.color} />
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
-        </>)}
+        )}
       </div>
     </div>
   );

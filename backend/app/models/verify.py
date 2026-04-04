@@ -37,6 +37,7 @@ class ProctoringFlagType(str, enum.Enum):
     copy_paste = "copy_paste"
     timing_anomaly = "timing_anomaly"
     screenshot = "screenshot"
+    camera_denied = "camera_denied"
 
 
 class Assessment(Base):

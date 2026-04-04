@@ -15,9 +15,12 @@ export default function CandidateProfile() {
   const [jobRoles, setJobRoles] = useState([]);
   const [inviting, setInviting] = useState(false);
   const [showConvert, setShowConvert] = useState(false);
-  const [convertForm, setConvertForm] = useState({ salary: '', role_title: '', department: '', location: 'Office', start_date: '' });
+  const [convertForm, setConvertForm] = useState({ salary: '', role_title: '', department: '', location: 'Office', start_date: '', recipient_email: '' });
   const [converting, setConverting] = useState(false);
   const [reverting, setReverting] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const openInviteModal = () => {
     sourceApi.listJobRoles().then(r => setJobRoles(r.data.data)).catch(console.error);
@@ -50,12 +53,26 @@ export default function CandidateProfile() {
   const handleConvert = async (e) => {
     e.preventDefault();
     if (!convertForm.salary || !convertForm.role_title || !convertForm.department) return toast.error('Please fill required fields');
+    setPreviewing(true);
+    try {
+      const r = await sourceApi.previewOfferLetter(id, convertForm);
+      setPreviewData(r.data.data);
+      setShowPreview(true);
+      setShowConvert(false);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to generate preview');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const handleFinalSubmit = async (e) => {
+    e.preventDefault();
     setConverting(true);
     try {
-      await sourceApi.convertToEmployee(id, convertForm);
+      await sourceApi.convertToEmployee(id, { ...convertForm, offer_content: previewData });
       toast.success('Hired! Employee created and Offer Letter sent! 🎊');
-      setShowConvert(false);
-      // Refresh data
+      setShowPreview(false);
       const r = await sourceApi.getCandidate(id);
       setData(r.data.data);
     } catch (err) {
@@ -87,7 +104,11 @@ export default function CandidateProfile() {
     sourceApi.getCandidate(id)
       .then(r => {
         setData(r.data.data);
-        setConvertForm(f => ({ ...f, role_title: r.data.data.user?.job_role_title || '' }));
+        setConvertForm(f => ({ 
+          ...f, 
+          role_title: r.data.data.user?.job_role_title || '',
+          recipient_email: r.data.data.user?.email || ''
+        }));
       })
       .finally(() => setLoading(false));
   }, [id]);
@@ -280,6 +301,10 @@ export default function CandidateProfile() {
                 <p style={{ marginBottom: 16, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
                   This will convert <strong>{data.user?.full_name}</strong> to an Employee and automatically send the Job Offer Letter.
                 </p>
+                <div className="form-group">
+                  <label className="form-label">Recipient Email *</label>
+                  <input type="email" required className="form-control" placeholder="candidate@example.com" value={convertForm.recipient_email} onChange={e => setConvertForm(f => ({...f, recipient_email: e.target.value}))} />
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                   <div className="form-group">
                     <label className="form-label">Role Title *</label>
@@ -307,8 +332,77 @@ export default function CandidateProfile() {
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-ghost" onClick={() => setShowConvert(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={previewing} style={{ background: '#10B981', borderColor: '#10B981' }}>
+                  {previewing ? 'Generating...' : 'Generate Offer Letter'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Preview Modal */}
+      {showPreview && previewData && (
+        <div className="modal-overlay" onClick={() => setShowPreview(false)}>
+          <div className="modal" style={{ maxWidth: 800 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h4>Review Offer Letter</h4>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowPreview(false)}>✕</button>
+            </div>
+            <form onSubmit={handleFinalSubmit}>
+              <div className="modal-body">
+                <p style={{ marginBottom: 16, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                  Review and edit the AI-generated offer letter before sending it to the candidate.
+                </p>
+                
+                <div className="form-group">
+                  <label className="form-label">Recipient Email *</label>
+                  <input type="email" required className="form-control" value={convertForm.recipient_email} onChange={e => setConvertForm(f => ({...f, recipient_email: e.target.value}))} />
+                  <small style={{ color: 'var(--text-muted)' }}>The offer letter will be sent to this address.</small>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Email Subject</label>
+                  <input required className="form-control" value={previewData.subject} onChange={e => setPreviewData({...previewData, subject: e.target.value})} />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Salutation</label>
+                  <input required className="form-control" value={previewData.salutation} onChange={e => setPreviewData({...previewData, salutation: e.target.value})} />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Letter Body</label>
+                  <textarea 
+                    required 
+                    className="form-control" 
+                    style={{ minHeight: 300, lineHeight: 1.6 }} 
+                    value={previewData.body_paragraphs.join('\n\n')} 
+                    onChange={e => setPreviewData({...previewData, body_paragraphs: e.target.value.split('\n\n')})}
+                  />
+                  <small style={{ color: 'var(--text-muted)' }}>Separate paragraphs with a double line break.</small>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <div className="form-group">
+                    <label className="form-label">Closing</label>
+                    <input required className="form-control" value={previewData.closing} onChange={e => setPreviewData({...previewData, closing: e.target.value})} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Signatory Name</label>
+                    <input required className="form-control" value={previewData.signatory_name} onChange={e => setPreviewData({...previewData, signatory_name: e.target.value})} />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Signatory Title</label>
+                  <input required className="form-control" value={previewData.signatory_title} onChange={e => setPreviewData({...previewData, signatory_title: e.target.value})} />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-ghost" onClick={() => { setShowPreview(false); setShowConvert(true); }}>Back</button>
                 <button type="submit" className="btn btn-primary" disabled={converting} style={{ background: '#10B981', borderColor: '#10B981' }}>
-                  {converting ? 'Processing...' : 'Confirm & Send Offer'}
+                  {converting ? 'Sending...' : 'Confirm & Send Offer'}
                 </button>
               </div>
             </form>

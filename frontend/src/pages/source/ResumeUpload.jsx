@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 function FileItem({ file, status }) {
   const icons = { pending: <Loader size={16} className="spinner" style={{ animation: 'spin 0.8s linear infinite' }} />, processing: <Loader size={16} style={{ animation: 'spin 0.8s linear infinite', color: 'var(--primary)' }} />, done: <CheckCircle size={16} color="var(--success)" />, error: <AlertCircle size={16} color="var(--danger)" /> };
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--primary-lightest)', borderRadius: 'var(--radius)', marginBottom: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', marginBottom: 8 }}>
       <File size={18} color="var(--primary)" />
       <span style={{ flex: 1, fontSize: '0.875rem', fontWeight: 600 }}>{file.name}</span>
       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{(file.size / 1024).toFixed(0)} KB</span>
@@ -86,7 +86,7 @@ export default function ResumeUpload() {
           </div>
         )}
 
-        <div className="card animate-fade-in" style={{ marginTop: 24, background: 'var(--primary-lightest)', border: '1px solid var(--primary-lighter)' }}>
+        <div className="card animate-fade-in" style={{ marginTop: 24, background: 'var(--bg-card-alt)', border: '1px solid var(--border)' }}>
           <div className="card-body">
             <h4 style={{ marginBottom: 12, color: 'var(--primary)' }}>🤖 What happens after upload?</h4>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

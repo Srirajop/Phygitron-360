@@ -2,15 +2,18 @@ import json
 import secrets
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+import os
+import shutil
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_, and_
 from pydantic import BaseModel
 from app.database import get_db
 from app.models.user import User
 from app.models.forge import (
     Course, CourseSection, SectionQuiz, Enrollment, LearningProgress,
-    Certificate, CourseStatus, EnrollmentTrigger
+    Certificate, CourseStatus, EnrollmentTrigger, CourseDifficulty
 )
 from app.models.skill_taxonomy import SkillTaxonomy
 from app.models.verify import AssessmentResult
@@ -526,3 +529,242 @@ async def get_transcript(
             "verification_code": cert.verification_code, "pdf_url": cert.pdf_url,
         } for cert, course in certs_res.all()],
     })
+
+
+# ── Course Library (search + filter) ────────────────────────────────────────
+
+@router.get("/library")
+async def course_library(
+    q: Optional[str] = Query(None),
+    difficulty: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(Course).where(
+        Course.org_id == current_user.org_id,
+        Course.status == CourseStatus.published
+    )
+    if q:
+        query = query.where(or_(
+            Course.title.ilike(f"%{q}%"),
+            Course.description.ilike(f"%{q}%")
+        ))
+    if difficulty:
+        query = query.where(Course.difficulty == difficulty)
+
+    count_q = select(func.count()).select_from(query.subquery())
+    total_res = await db.execute(count_q)
+    total = total_res.scalar() or 0
+
+    query = query.order_by(Course.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    result = await db.execute(query)
+    courses = result.scalars().all()
+
+    # For each course, check if user is enrolled
+    enrolled_ids = set()
+    if courses:
+        enroll_res = await db.execute(
+            select(Enrollment.course_id).where(
+                Enrollment.user_id == current_user.id,
+                Enrollment.course_id.in_([c.id for c in courses])
+            )
+        )
+        enrolled_ids = {r for r in enroll_res.scalars()}
+
+    return success({
+        "courses": [{
+            "id": c.id, "title": c.title, "description": c.description,
+            "difficulty": c.difficulty.value,
+            "estimated_hours": float(c.estimated_hours) if c.estimated_hours else None,
+            "thumbnail_url": c.thumbnail_url, "skill_ids": c.skill_ids,
+            "enrolled": c.id in enrolled_ids,
+            "created_at": c.created_at.isoformat(),
+        } for c in courses],
+        "total": total,
+        "page": page,
+        "pages": (total + limit - 1) // limit if total else 1,
+    })
+
+
+# ── Instructor: My Courses ───────────────────────────────────────────────────
+
+@router.get("/my-courses")
+async def my_courses(
+    current_user: User = Depends(require_role(["instructor", "admin", "hr"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Course).where(Course.instructor_id == current_user.id)
+        .order_by(Course.created_at.desc())
+    )
+    courses = result.scalars().all()
+
+    out = []
+    for c in courses:
+        sec_count = await db.execute(select(func.count()).select_from(CourseSection).where(CourseSection.course_id == c.id))
+        enroll_count = await db.execute(select(func.count()).select_from(Enrollment).where(Enrollment.course_id == c.id))
+        completed_count = await db.execute(select(func.count()).select_from(Enrollment).where(Enrollment.course_id == c.id, Enrollment.completed_at != None))
+        cert_count = await db.execute(select(func.count()).select_from(Certificate).where(Certificate.course_id == c.id))
+        out.append({
+            "id": c.id, "title": c.title, "description": c.description,
+            "difficulty": c.difficulty.value, "status": c.status.value,
+            "estimated_hours": float(c.estimated_hours) if c.estimated_hours else None,
+            "thumbnail_url": c.thumbnail_url,
+            "sections": sec_count.scalar() or 0,
+            "enrollments": enroll_count.scalar() or 0,
+            "completions": completed_count.scalar() or 0,
+            "certificates_issued": cert_count.scalar() or 0,
+            "created_at": c.created_at.isoformat(),
+        })
+    return success(out)
+
+
+# ── Update Course ────────────────────────────────────────────────────────────
+
+class CourseUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    difficulty: Optional[str] = None
+    estimated_hours: Optional[float] = None
+    thumbnail_url: Optional[str] = None
+
+
+@router.put("/courses/{course_id}")
+async def update_course(
+    course_id: int,
+    body: CourseUpdate,
+    current_user: User = Depends(require_role(["instructor", "admin", "hr"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Course).where(Course.id == course_id))
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.instructor_id != current_user.id and current_user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if body.title is not None:
+        course.title = body.title
+    if body.description is not None:
+        course.description = body.description
+    if body.difficulty is not None:
+        course.difficulty = body.difficulty
+    if body.estimated_hours is not None:
+        course.estimated_hours = body.estimated_hours
+    if body.thumbnail_url is not None:
+        course.thumbnail_url = body.thumbnail_url
+
+    await db.commit()
+    return success({"id": course.id}, "Course updated")
+
+
+# ── Delete Course ────────────────────────────────────────────────────────────
+
+@router.delete("/courses/{course_id}")
+async def delete_course(
+    course_id: int,
+    current_user: User = Depends(require_role(["instructor", "admin", "hr"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Course).where(Course.id == course_id))
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.instructor_id != current_user.id and current_user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+    if course.status == CourseStatus.published:
+        raise HTTPException(status_code=400, detail="Cannot delete a published course")
+
+    await db.delete(course)
+    await db.commit()
+    return success(message="Course deleted")
+
+
+# ── Submit for Review ────────────────────────────────────────────────────────
+
+@router.post("/courses/{course_id}/submit-review")
+async def submit_for_review(
+    course_id: int,
+    current_user: User = Depends(require_role(["instructor", "admin", "hr"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Course).where(Course.id == course_id))
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.instructor_id != current_user.id and current_user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    course.status = CourseStatus.pending_review
+    await db.commit()
+    return success(message="Course submitted for review")
+
+
+# ── Enrollments List for an Instructor's Course ──────────────────────────────
+
+@router.get("/courses/{course_id}/enrollments")
+async def course_enrollments(
+    course_id: int,
+    current_user: User = Depends(require_role(["instructor", "admin", "hr", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Course).where(Course.id == course_id))
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    enroll_res = await db.execute(
+        select(Enrollment, User).join(User, User.id == Enrollment.user_id)
+        .where(Enrollment.course_id == course_id)
+        .order_by(Enrollment.created_at.desc())
+    )
+    rows = enroll_res.all()
+    return success([{
+        "enrollment_id": e.id,
+        "user_id": u.id,
+        "learner_name": u.full_name or u.email,
+        "progress_percent": float(e.progress_percent),
+        "enrolled_at": e.created_at.isoformat() if e.created_at else None,
+        "completed_at": e.completed_at.isoformat() if e.completed_at else None,
+        "triggered_by": e.triggered_by.value,
+    } for e, u in rows])
+
+
+# ── HR Bulk Enroll ───────────────────────────────────────────────────────────
+
+class BulkEnrollBody(BaseModel):
+    course_id: int
+    user_ids: List[int]
+    deadline: Optional[str] = None
+
+
+@router.post("/bulk-enroll")
+async def bulk_enroll(
+    body: BulkEnrollBody,
+    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    enrolled = 0
+    skipped = 0
+    for uid in body.user_ids:
+        existing = await db.execute(
+            select(Enrollment).where(Enrollment.user_id == uid, Enrollment.course_id == body.course_id)
+        )
+        if existing.scalar_one_or_none():
+            skipped += 1
+            continue
+        from datetime import date
+        deadline = datetime.fromisoformat(body.deadline) if body.deadline else None
+        e = Enrollment(
+            user_id=uid,
+            course_id=body.course_id,
+            triggered_by=EnrollmentTrigger.hr_push,
+            deadline=deadline,
+        )
+        db.add(e)
+        enrolled += 1
+    await db.commit()
+    return success({"enrolled": enrolled, "skipped": skipped})
+

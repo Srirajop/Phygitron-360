@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { sourceApi } from '../../api';
-import { Search, UserCheck } from 'lucide-react';
+import { Search, UserCheck, Milestone } from 'lucide-react';
 import toast from 'react-hot-toast';
+import AssignJourneyModal from '../../components/AssignJourneyModal';
 
 export default function ActiveCandidates() {
   const [candidates, setCandidates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  
+  // Journey Assignment Modal State
+  const [journeyModal, setJourneyModal] = useState({ isOpen: false, userId: null, userName: '' });
 
   useEffect(() => {
     sourceApi.activeCandidates()
@@ -14,6 +18,10 @@ export default function ActiveCandidates() {
       .catch(() => toast.error('Failed to load candidates'))
       .finally(() => setLoading(false));
   }, []);
+
+  const openAssignModal = (c) => {
+    setJourneyModal({ isOpen: true, userId: c.id, userName: c.name });
+  };
 
   const filtered = candidates.filter(c => 
     c.name.toLowerCase().includes(search.toLowerCase()) || 
@@ -57,6 +65,7 @@ export default function ActiveCandidates() {
                   <th style={{ padding: '16px 24px', fontWeight: 600 }}>Email</th>
                   <th style={{ padding: '16px 24px', fontWeight: 600 }}>Status</th>
                   <th style={{ padding: '16px 24px', fontWeight: 600 }}>Joined</th>
+                  <th style={{ padding: '16px 24px', fontWeight: 600 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -72,6 +81,11 @@ export default function ActiveCandidates() {
                     <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
                       {new Date(c.created_at).toLocaleDateString()}
                     </td>
+                    <td style={{ padding: '16px 24px' }}>
+                       <button className="btn btn-ghost btn-sm" style={{ gap: '6px' }} onClick={() => openAssignModal(c)}>
+                          <Milestone size={14} color="var(--primary)" /> Assign Journey
+                       </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -79,6 +93,13 @@ export default function ActiveCandidates() {
           </div>
         )}
       </div>
+
+      <AssignJourneyModal 
+        isOpen={journeyModal.isOpen} 
+        onClose={() => setJourneyModal({ ...journeyModal, isOpen: false })}
+        userIds={journeyModal.userId ? [journeyModal.userId] : []}
+        userName={journeyModal.userName}
+      />
     </div>
   );
 }

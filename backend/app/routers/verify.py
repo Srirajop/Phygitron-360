@@ -10,7 +10,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.verify import (
     Assessment, AssessmentQuestion, AssessmentAssignment,
-    AssessmentResult, ProctoringFlag, AssessmentStatus, AssignmentStatus
+    AssessmentResult, ProctoringFlag, ProctoringFlagType, AssessmentStatus, AssignmentStatus
 )
 from app.utils.auth import get_current_user, require_role
 
@@ -452,21 +452,9 @@ Respond ONLY with a JSON object containing:
   - If an argument is a list/array, format it as a JSON array (e.g. [1, 2, 3]) on one line.
   - If an argument is a number or string, put it on its own line.
 - "programming_language": Set to "python".
-
-Example for Two Sum (nums: list, target: int):
-{{
-  "starter_code": "def twoSum(nums, target):\\n    pass",
-  "test_cases": [
-    {{"input": "[2, 7, 11, 15]\\n9", "expected_output": "[0, 1]"}}
-  ],
-  "programming_language": "python"
-}}"""
-
-    try:
-        data = call_llm(system_prompt, user_prompt)
-        return success(data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI generation failed: {str(e)}")
+"""
+    ai_res = call_llm(system_prompt, user_prompt)
+    return success(ai_res)
 
 
 # ── Submit Assessment ─────────────────────────────────────────────────────────
@@ -485,277 +473,292 @@ async def submit_assessment(
     db: AsyncSession = Depends(get_db),
 ):
     import logging
+    import traceback
     from decimal import Decimal
     logger = logging.getLogger(__name__)
 
-    # Create result record
-    result_record = AssessmentResult(
-        assessment_id=body.assessment_id,
-        user_id=current_user.id,
-        answers=body.answers,
-        time_taken_seconds=body.time_taken_seconds,
-        submitted_at=datetime.utcnow(),
-    )
-    db.add(result_record)
-    await db.flush()
-
-    # Log proctoring events
-    for event in (body.proctoring_events or []):
-        flag = ProctoringFlag(
-            assessment_result_id=result_record.id,
-            flag_type=event.get("type", "tab_switch"),
-            details=event.get("details"),
-        )
-        db.add(flag)
-
-    # Update assignment status
-    assgn_res = await db.execute(
-        select(AssessmentAssignment).where(
-            AssessmentAssignment.assessment_id == body.assessment_id,
-            AssessmentAssignment.user_id == current_user.id,
-        )
-    )
-    assgn = assgn_res.scalar_one_or_none()
-    if assgn:
-        assgn.status = AssignmentStatus.submitted
-
-    # ── Inline grading (no Celery needed) ─────────────────────────────────
     try:
-        assessment_res = await db.execute(select(Assessment).where(Assessment.id == body.assessment_id))
-        assessment = assessment_res.scalar_one_or_none()
-
-        questions_res = await db.execute(
-            select(AssessmentQuestion).where(AssessmentQuestion.assessment_id == body.assessment_id)
+        # Create result record
+        result_record = AssessmentResult(
+            assessment_id=body.assessment_id,
+            user_id=current_user.id,
+            answers=body.answers,
+            time_taken_seconds=body.time_taken_seconds,
+            submitted_at=datetime.utcnow(),
         )
-        questions = questions_res.scalars().all()
-        answers = body.answers or {}
-        scores_per_q = {}
-        question_data_for_feedback = []
-        total_marks = 0
-        earned_marks = 0
+        db.add(result_record)
+        await db.flush()
 
-        async def grade_coding_question(q, candidate_answer, marks):
-            test_cases = q.test_cases or []
-            if isinstance(test_cases, str):
-                try: test_cases = json.loads(test_cases)
-                except: test_cases = []
-            
-            if not test_cases or not candidate_answer:
-                return 0.0
-            
-            try:
-                ans_dict = json.loads(candidate_answer)
-                lang = ans_dict.get("language", "python").lower()
-                code = ans_dict.get("code", "")
+        # Log proctoring events
+        valid_flag_types = [t.value for t in ProctoringFlagType]
+        for event in (body.proctoring_events or []):
+            etype = event.get("type")
+            if etype not in valid_flag_types:
+                logger.warning(f"Unknown proctoring event type: {etype}. Falling back to tab_switch.")
+                etype = ProctoringFlagType.tab_switch.value
                 
-                passed = 0
-                import httpx, re, asyncio
-                p_lang = "cpp" if lang == "c++" else lang
-                tests_to_run = test_cases[:10]
-                wrapped_code = wrap_code_for_execution(code, p_lang, tests_to_run)
-                
-                payload = {
-                    "language": p_lang,
-                    "version": "3.10.0" if p_lang == "python" else "*",
-                    "files": [{"content": wrapped_code}]
-                }
-                
-                max_retries = 2
-                resp_data = None
-                for attempt in range(max_retries + 1):
-                    try:
-                        async with httpx.AsyncClient() as client:
-                            resp = await client.post("https://emkc.org/api/v2/piston/execute", json=payload, timeout=12.0)
-                            if resp.status_code == 200:
-                                resp_data = resp.json()
-                                break
-                            elif resp.status_code == 429 and attempt < max_retries:
-                                await asyncio.sleep(1.5 ** attempt)
-                                continue
-                    except Exception:
-                        if attempt < max_retries:
-                            await asyncio.sleep(1)
-                            continue
-                
-                if resp_data:
-                    stdout = resp_data.get("run", {}).get("stdout", "")
-                    marker_start = "---BATCH_RESULTS_START---"
-                    marker_end = "---BATCH_RESULTS_END---"
-                    if marker_start in stdout and marker_end in stdout:
-                        try:
-                            results_str = stdout.split(marker_start)[1].split(marker_end)[0].strip()
-                            batch_results = json.loads(results_str)
-                            for idx, r in enumerate(batch_results):
-                                out = r.get("stdout", "").strip()
-                                exp = str(tests_to_run[idx].get("expected_output", "")).strip()
-                                if re.sub(r'\s+', '', out).strip() == re.sub(r'\s+', '', exp).strip():
-                                    passed += 1
-                        except: pass
-                    return (passed / len(tests_to_run)) * marks if tests_to_run else 0
-                else:
-                    # Fallback to AI grading if Piston is blocked/failed
-                    logger.warning(f"Piston failed for q {q.id}, falling back to AI grading")
-                    from app.agents.agents import call_llm
-                    ai_prompt = f"""Grade this code based on test cases. 
-Code: {code}
-Test Cases: {json.dumps(tests_to_run)}
-Max Marks: {marks}
-Respond ONLY with JSON: {{"score": 0.0, "reason": ""}}"""
-                    ai_res = call_llm("You are a code grading AI.", ai_prompt)
-                    return min(float(ai_res.get("score", 0)), marks)
-            except Exception as e:
-                logger.warning(f"Grading coding {q.id} failed: {e}")
-                return 0.0
-
-        grading_tasks = []
-        coding_indices = []
-        
-        for idx, q in enumerate(questions):
-            q_id = str(q.id)
-            candidate_answer = answers.get(q_id, "")
-            marks = float(q.marks)
-            total_marks += marks
-            
-            qt = q.question_type.value if hasattr(q.question_type, 'value') else q.question_type
-
-            if qt == "mcq":
-                q_score = marks if str(candidate_answer).strip().upper() == str(q.correct_answer or "").strip().upper() else 0
-                scores_per_q[q_id] = {"score": q_score, "max": marks}
-                earned_marks += q_score
-                question_data_for_feedback.append({
-                    "id": q.id, "text": q.question_text, "type": qt,
-                    "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
-                    "marks": marks, "earned": q_score, "skill_id": q.skill_id,
-                })
-            elif qt == "coding":
-                coding_indices.append(len(question_data_for_feedback))
-                grading_tasks.append(grade_coding_question(q, candidate_answer, marks))
-                # Placeholder for feedback data (updated later)
-                question_data_for_feedback.append({
-                    "id": q.id, "text": q.question_text, "type": qt,
-                    "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
-                    "marks": marks, "earned": 0, "skill_id": q.skill_id,
-                })
-            elif qt == "written":
-                # Collected for batching later
-                question_data_for_feedback.append({
-                    "id": q.id, "text": q.question_text, "type": qt,
-                    "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
-                    "marks": marks, "earned": 0, "skill_id": q.skill_id,
-                })
-            elif qt == "file_upload":
-                scores_per_q[q_id] = {"score": None, "status": "pending_review"}
-                question_data_for_feedback.append({
-                    "id": q.id, "text": q.question_text, "type": qt,
-                    "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
-                    "marks": marks, "earned": None, "skill_id": q.skill_id,
-                })
-
-        # ── Execute Coding Grading Concurrently ──
-        if grading_tasks:
-            import asyncio
-            coding_scores = await asyncio.gather(*grading_tasks)
-            for i, score in enumerate(coding_scores):
-                q_idx = coding_indices[i]
-                q_data = question_data_for_feedback[q_idx]
-                q_id_str = str(q_data["id"])
-                scores_per_q[q_id_str] = {"score": score, "max": q_data["marks"]}
-                earned_marks += score
-                question_data_for_feedback[q_idx]["earned"] = score
-
-        # ── Batch grading for written questions ──
-        written_indices = [i for i, q in enumerate(question_data_for_feedback) if q["type"] == "written"]
-        if written_indices:
-            try:
-                from app.agents.agents import call_llm
-                grading_batch = []
-                for idx in written_indices:
-                    q_data = question_data_for_feedback[idx]
-                    grading_batch.append({
-                        "id": q_data["id"],
-                        "question": q_data["text"],
-                        "model_answer": q_data["correct_answer"] or "General knowledge",
-                        "student_answer": q_data["candidate_answer"],
-                        "max_marks": q_data["marks"]
-                    })
-                
-                batch_system = "You are a specialized written assessment grading AI. Grade the following student answers based on the provided questions and model answers."
-                batch_prompt = f"Grade these {len(grading_batch)} answers. Return a JSON object with a 'grades' key containing a list of objects with 'id', 'score', and 'explanation'.\n\nBatch:\n{json.dumps(grading_batch)}"
-                
-                batch_res = call_llm(batch_system, batch_prompt)
-                grades_list = batch_res.get("grades", [])
-                grades_map = {str(g["id"]): g for g in grades_list}
-                
-                for idx in written_indices:
-                    q_data = question_data_for_feedback[idx]
-                    q_id_str = str(q_data["id"])
-                    grade = grades_map.get(q_id_str, {"score": q_data["marks"] * 0.5})
-                    q_score = min(float(grade.get("score", 0)), q_data["marks"])
-                    
-                    earned_marks += q_score
-                    scores_per_q[q_id_str] = {"score": q_score, "max": q_data["marks"]}
-                    question_data_for_feedback[idx]["earned"] = q_score
-            except Exception as e:
-                logger.warning(f"Batch written grading failed: {e}. Falling back to 50% score.")
-                for idx in written_indices:
-                    q_id_str = str(question_data_for_feedback[idx]["id"])
-                    if q_id_str not in scores_per_q:
-                        scores_per_q[q_id_str] = {"score": question_data_for_feedback[idx]["marks"] * 0.5, "max": question_data_for_feedback[idx]["marks"]}
-                        earned_marks += question_data_for_feedback[idx]["marks"] * 0.5
-                        question_data_for_feedback[idx]["earned"] = question_data_for_feedback[idx]["marks"] * 0.5
-
-        # Calculate final score
-        pct_score = (earned_marks / total_marks * 100) if total_marks > 0 else 0
-        passed = pct_score >= float(assessment.pass_score) if assessment else False
-
-        # Generate AI feedback (best-effort)
-        weak_skill_ids = []
-        try:
-            from app.agents.agents import run_generate_feedback_agent
-            feedback_data = run_generate_feedback_agent(
-                questions=[{"text": q["text"], "type": q["type"]} for q in question_data_for_feedback],
-                answers={str(q["id"]): q["candidate_answer"] for q in question_data_for_feedback},
-                scores={str(q["id"]): q["earned"] for q in question_data_for_feedback},
-                total_score=round(pct_score, 2),
-                passed=passed,
+            flag = ProctoringFlag(
+                assessment_result_id=result_record.id,
+                flag_type=etype,
+                details=str(event.get("details", "")),
             )
-            is_released = assessment.show_result_immediately if hasattr(assessment, "show_result_immediately") else True
-            feedback_text = json.dumps({
-                "summary": feedback_data.get("summary", ""),
-                "strengths": feedback_data.get("strengths", []),
-                "improvement_areas": feedback_data.get("improvement_areas", []),
-                "study_recommendations": feedback_data.get("study_recommendations", []),
-                "_is_released": is_released
-            })
-            weak_skill_ids = feedback_data.get("weak_skill_ids", [])
-        except Exception as e:
-            logger.warning(f"AI feedback generation failed: {e}")
-            feedback_text = json.dumps({
-                "summary": f"Score: {round(pct_score, 1)}%. {'Passed' if passed else 'Did not pass'}.",
-                "strengths": [], "improvement_areas": [], "study_recommendations": []
-            })
+            db.add(flag)
 
-        # Update result
-        result_record.scores_per_question = scores_per_q
-        result_record.score = Decimal(str(round(pct_score, 2)))
-        result_record.pass_status = passed
-        result_record.feedback = feedback_text
-        result_record.weak_skill_ids = weak_skill_ids
-
+        # Update assignment status
+        assgn_res = await db.execute(
+            select(AssessmentAssignment).where(
+                AssessmentAssignment.assessment_id == body.assessment_id,
+                AssessmentAssignment.user_id == current_user.id,
+            )
+        )
+        assgn = assgn_res.scalar_one_or_none()
         if assgn:
-            assgn.status = "graded"
+            assgn.status = AssignmentStatus.submitted
 
-        logger.info(f"Assessment graded inline: {round(pct_score, 2)}% - {'PASS' if passed else 'FAIL'}")
+        # ── Inline grading (no Celery needed) ─────────────────────────────────
+        try:
+            assessment_res = await db.execute(select(Assessment).where(Assessment.id == body.assessment_id))
+            assessment = assessment_res.scalar_one_or_none()
+
+            questions_res = await db.execute(
+                select(AssessmentQuestion).where(AssessmentQuestion.assessment_id == body.assessment_id)
+            )
+            questions = questions_res.scalars().all()
+            answers = body.answers or {}
+            scores_per_q = {}
+            question_data_for_feedback = []
+            total_marks = 0
+            earned_marks = 0
+
+            async def grade_coding_question(q, candidate_answer, marks):
+                test_cases = q.test_cases or []
+                if isinstance(test_cases, str):
+                    try: test_cases = json.loads(test_cases)
+                    except: test_cases = []
+                
+                if not test_cases or not candidate_answer:
+                    return 0.0
+                
+                try:
+                    if not isinstance(candidate_answer, str):
+                        logger.warning(f"Candidate answer for coding q {q.id} is not a string: {type(candidate_answer)}")
+                        return 0.0
+                    
+                    ans_dict = json.loads(candidate_answer)
+                    lang = ans_dict.get("language", "python").lower()
+                    code = ans_dict.get("code", "")
+                    
+                    passed = 0
+                    import httpx, re, asyncio
+                    p_lang = "cpp" if lang == "c++" else lang
+                    tests_to_run = test_cases[:10]
+                    wrapped_code = wrap_code_for_execution(code, p_lang, tests_to_run)
+                    
+                    payload = {
+                        "language": p_lang,
+                        "version": "3.10.0" if p_lang == "python" else "*",
+                        "files": [{"content": wrapped_code}]
+                    }
+                    
+                    max_retries = 2
+                    resp_data = None
+                    for attempt in range(max_retries + 1):
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                resp = await client.post("https://emkc.org/api/v2/piston/execute", json=payload, timeout=12.0)
+                                if resp.status_code == 200:
+                                    resp_data = resp.json()
+                                    break
+                                elif resp.status_code == 429 and attempt < max_retries:
+                                    await asyncio.sleep(1.5 ** attempt)
+                                    continue
+                        except Exception:
+                            if attempt < max_retries:
+                                await asyncio.sleep(1)
+                                continue
+                    
+                    if resp_data:
+                        stdout = resp_data.get("run", {}).get("stdout", "")
+                        marker_start = "---BATCH_RESULTS_START---"
+                        marker_end = "---BATCH_RESULTS_END---"
+                        if marker_start in stdout and marker_end in stdout:
+                            try:
+                                results_str = stdout.split(marker_start)[1].split(marker_end)[0].strip()
+                                batch_results = json.loads(results_str)
+                                for idx, r in enumerate(batch_results):
+                                    out = r.get("stdout", "").strip()
+                                    exp = str(tests_to_run[idx].get("expected_output", "")).strip()
+                                    if re.sub(r'\s+', '', out).strip() == re.sub(r'\s+', '', exp).strip():
+                                        passed += 1
+                            except: pass
+                        return (passed / len(tests_to_run)) * marks if tests_to_run else 0
+                    else:
+                        # Fallback to AI grading if Piston is blocked/failed
+                        logger.warning(f"Piston failed for q {q.id}, falling back to AI grading")
+                        from app.agents.agents import call_llm
+                        ai_prompt = f"""Grade this code based on test cases. 
+    Code: {code}
+    Test Cases: {json.dumps(tests_to_run)}
+    Max Marks: {marks}
+    Respond ONLY with JSON: {{"score": 0.0, "reason": ""}}"""
+                        ai_res = call_llm("You are a code grading AI.", ai_prompt)
+                        return min(float(ai_res.get("score", 0)), marks)
+                except Exception as e:
+                    logger.warning(f"Grading coding {q.id} failed: {e}")
+                    return 0.0
+
+            grading_tasks = []
+            coding_indices = []
+            
+            for idx, q in enumerate(questions):
+                q_id = str(q.id)
+                candidate_answer = answers.get(q_id, "")
+                marks = float(q.marks)
+                total_marks += marks
+                
+                qt = q.question_type.value if hasattr(q.question_type, 'value') else q.question_type
+
+                if qt == "mcq":
+                    q_score = marks if str(candidate_answer).strip().upper() == str(q.correct_answer or "").strip().upper() else 0
+                    scores_per_q[q_id] = {"score": q_score, "max": marks}
+                    earned_marks += q_score
+                    question_data_for_feedback.append({
+                        "id": q.id, "text": q.question_text, "type": qt,
+                        "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
+                        "marks": marks, "earned": q_score, "skill_id": q.skill_id,
+                    })
+                elif qt == "coding":
+                    coding_indices.append(len(question_data_for_feedback))
+                    grading_tasks.append(grade_coding_question(q, candidate_answer, marks))
+                    # Placeholder for feedback data (updated later)
+                    question_data_for_feedback.append({
+                        "id": q.id, "text": q.question_text, "type": qt,
+                        "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
+                        "marks": marks, "earned": 0, "skill_id": q.skill_id,
+                    })
+                elif qt == "written":
+                    # Collected for batching later
+                    question_data_for_feedback.append({
+                        "id": q.id, "text": q.question_text, "type": qt,
+                        "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
+                        "marks": marks, "earned": 0, "skill_id": q.skill_id,
+                    })
+                elif qt == "file_upload":
+                    scores_per_q[q_id] = {"score": None, "status": "pending_review"}
+                    question_data_for_feedback.append({
+                        "id": q.id, "text": q.question_text, "type": qt,
+                        "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
+                        "marks": marks, "earned": None, "skill_id": q.skill_id,
+                    })
+
+            # ── Execute Coding Grading Concurrently ──
+            if grading_tasks:
+                import asyncio
+                coding_scores = await asyncio.gather(*grading_tasks)
+                for i, score in enumerate(coding_scores):
+                    q_idx = coding_indices[i]
+                    q_data = question_data_for_feedback[q_idx]
+                    q_id_str = str(q_data["id"])
+                    scores_per_q[q_id_str] = {"score": score, "max": q_data["marks"]}
+                    earned_marks += score
+                    question_data_for_feedback[q_idx]["earned"] = score
+
+            # ── Batch grading for written questions ──
+            written_indices = [i for i, q in enumerate(question_data_for_feedback) if q["type"] == "written"]
+            if written_indices:
+                try:
+                    from app.agents.agents import call_llm
+                    grading_batch = []
+                    for idx in written_indices:
+                        q_data = question_data_for_feedback[idx]
+                        grading_batch.append({
+                            "id": q_data["id"],
+                            "question": q_data["text"],
+                            "model_answer": q_data["correct_answer"] or "General knowledge",
+                            "student_answer": q_data["candidate_answer"],
+                            "max_marks": q_data["marks"]
+                        })
+                    
+                    batch_system = "You are a specialized written assessment grading AI. Grade the following student answers based on the provided questions and model answers."
+                    batch_prompt = f"Grade these {len(grading_batch)} answers. Return a JSON object with a 'grades' key containing a list of objects with 'id', 'score', and 'explanation'.\n\nBatch:\n{json.dumps(grading_batch)}"
+                    
+                    batch_res = call_llm(batch_system, batch_prompt)
+                    grades_list = batch_res.get("grades", [])
+                    grades_map = {str(g["id"]): g for g in grades_list}
+                    
+                    for idx in written_indices:
+                        q_data = question_data_for_feedback[idx]
+                        q_id_str = str(q_data["id"])
+                        grade = grades_map.get(q_id_str, {"score": q_data["marks"] * 0.5})
+                        q_score = min(float(grade.get("score", 0)), q_data["marks"])
+                        
+                        earned_marks += q_score
+                        scores_per_q[q_id_str] = {"score": q_score, "max": q_data["marks"]}
+                        question_data_for_feedback[idx]["earned"] = q_score
+                except Exception as e:
+                    logger.warning(f"Batch written grading failed: {e}. Falling back to 50% score.")
+                    for idx in written_indices:
+                        q_id_str = str(question_data_for_feedback[idx]["id"])
+                        if q_id_str not in scores_per_q:
+                            scores_per_q[q_id_str] = {"score": question_data_for_feedback[idx]["marks"] * 0.5, "max": question_data_for_feedback[idx]["marks"]}
+                            earned_marks += question_data_for_feedback[idx]["marks"] * 0.5
+                            question_data_for_feedback[idx]["earned"] = question_data_for_feedback[idx]["marks"] * 0.5
+
+            # Calculate final score
+            pct_score = (earned_marks / total_marks * 100) if total_marks > 0 else 0
+            passed = pct_score >= float(assessment.pass_score) if assessment else False
+
+            # Generate AI feedback (best-effort)
+            weak_skill_ids = []
+            try:
+                from app.agents.agents import run_generate_feedback_agent
+                feedback_data = run_generate_feedback_agent(
+                    questions=[{"text": q["text"], "type": q["type"]} for q in question_data_for_feedback],
+                    answers={str(q["id"]): q["candidate_answer"] for q in question_data_for_feedback},
+                    scores={str(q["id"]): q["earned"] for q in question_data_for_feedback},
+                    total_score=round(pct_score, 2),
+                    passed=passed,
+                )
+                is_released = assessment.show_result_immediately if hasattr(assessment, "show_result_immediately") else True
+                feedback_text = json.dumps({
+                    "summary": feedback_data.get("summary", ""),
+                    "strengths": feedback_data.get("strengths", []),
+                    "improvement_areas": feedback_data.get("improvement_areas", []),
+                    "study_recommendations": feedback_data.get("study_recommendations", []),
+                    "_is_released": is_released
+                })
+                weak_skill_ids = feedback_data.get("weak_skill_ids", [])
+            except Exception as e:
+                logger.warning(f"AI feedback generation failed: {e}")
+                feedback_text = json.dumps({
+                    "summary": f"Score: {round(pct_score, 1)}%. {'Passed' if passed else 'Did not pass'}.",
+                    "strengths": [], "improvement_areas": [], "study_recommendations": []
+                })
+
+            # Update result
+            result_record.scores_per_question = scores_per_q
+            result_record.score = Decimal(str(round(pct_score, 2)))
+            result_record.pass_status = passed
+            result_record.feedback = feedback_text
+            result_record.weak_skill_ids = weak_skill_ids
+
+            if assgn:
+                assgn.status = "graded"
+
+            logger.info(f"Assessment graded inline: {round(pct_score, 2)}% - {'PASS' if passed else 'FAIL'}")
+
+        except Exception as e:
+            logger.error(f"Inline grading failed: {e}")
+            # Still save the submission even if grading fails
+            result_record.feedback = json.dumps({"summary": "Grading pending. Please check back later.", "strengths": [], "improvement_areas": [], "study_recommendations": [], "_is_released": False})
+
+        await db.commit()
+        return success({"result_id": result_record.id, "score": float(result_record.score) if result_record.score else None, "passed": result_record.pass_status}, "Assessment submitted and graded.")
 
     except Exception as e:
-        logger.error(f"Inline grading failed: {e}")
-        # Still save the submission even if grading fails
-        result_record.feedback = json.dumps({"summary": "Grading pending. Please check back later.", "strengths": [], "improvement_areas": [], "study_recommendations": [], "_is_released": False})
-
-    await db.commit()
-
-    return success({"result_id": result_record.id, "score": float(result_record.score) if result_record.score else None, "passed": result_record.pass_status}, "Assessment submitted and graded.")
-
+        err_msg = f"Submission error: {str(e)}\n{traceback.format_exc()}"
+        logger.error(err_msg)
+        raise HTTPException(status_code=500, detail=err_msg)
 
 # ── Results ───────────────────────────────────────────────────────────────────
 

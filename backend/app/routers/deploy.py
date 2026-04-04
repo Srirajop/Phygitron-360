@@ -119,6 +119,12 @@ async def get_employee_profile(
     certs_res = await db.execute(select(Certificate).where(Certificate.user_id == emp.user_id))
     certs = [{"course_id": c.course_id, "issued_at": c.issued_at.isoformat(), "verification_code": c.verification_code} for c in certs_res.scalars()]
 
+    # Learning progress
+    enroll_res = await db.execute(
+        select(Enrollment).where(Enrollment.user_id == emp.user_id).order_by(Enrollment.created_at.desc()).limit(5)
+    )
+    enrollments = [{"course_id": e.course_id, "progress_percent": float(e.progress_percent), "completed": e.completed_at is not None} for e in enroll_res.scalars()]
+
     return success({
         "id": emp.id, "emp_id": emp.emp_id,
         "user": {"id": user.id, "email": user.email, "full_name": user.full_name} if user else {},
@@ -130,6 +136,7 @@ async def get_employee_profile(
         "deployments": deployments,
         "assessment_history": assessments,
         "certificates": certs,
+        "learning": enrollments,
     })
 
 
@@ -143,6 +150,135 @@ async def my_profile(
     if not emp:
         raise HTTPException(status_code=404, detail="Employee profile not found")
     return await get_employee_profile(emp.id, current_user, db)
+
+
+# ── Create Employee Manually ──────────────────────────────────────────────────
+
+class EmployeeCreate(BaseModel):
+    user_id: int
+    emp_id: Optional[str] = None
+    department: Optional[str] = None
+    join_date: Optional[str] = None
+    manager_id: Optional[int] = None
+
+
+@router.post("/employees")
+async def create_employee(
+    body: EmployeeCreate,
+    current_user: User = Depends(require_role(["hr", "admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from datetime import date
+    existing = await db.execute(select(Employee).where(Employee.user_id == body.user_id))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Employee record already exists for this user")
+    emp = Employee(
+        user_id=body.user_id, org_id=current_user.org_id,
+        emp_id=body.emp_id, department=body.department,
+        manager_id=body.manager_id, status=EmployeeStatus.active,
+    )
+    if body.join_date:
+        emp.join_date = date.fromisoformat(body.join_date)
+    db.add(emp)
+    await db.commit()
+    return success({"id": emp.id}, "Employee created")
+
+
+# ── Update Employee ───────────────────────────────────────────────────────────
+
+class EmployeeUpdate(BaseModel):
+    emp_id: Optional[str] = None
+    department: Optional[str] = None
+    status: Optional[str] = None
+    join_date: Optional[str] = None
+    manager_id: Optional[int] = None
+
+
+@router.put("/employees/{employee_id}")
+async def update_employee(
+    employee_id: int, body: EmployeeUpdate,
+    current_user: User = Depends(require_role(["hr", "admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from datetime import date
+    result = await db.execute(select(Employee).where(Employee.id == employee_id))
+    emp = result.scalar_one_or_none()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if body.emp_id is not None: emp.emp_id = body.emp_id
+    if body.department is not None: emp.department = body.department
+    if body.status is not None: emp.status = body.status
+    if body.join_date is not None: emp.join_date = date.fromisoformat(body.join_date)
+    if body.manager_id is not None: emp.manager_id = body.manager_id
+    await db.commit()
+    return success({"id": emp.id}, "Employee updated")
+
+
+# ── Employee Skills CRUD ──────────────────────────────────────────────────────
+
+class SkillAdd(BaseModel):
+    skill_id: int
+    level: str = "beginner"
+    verified_by: str = "self_reported"
+
+
+@router.post("/employees/{employee_id}/skills")
+async def add_employee_skill(
+    employee_id: int, body: SkillAdd,
+    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Employee).where(Employee.id == employee_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Employee not found")
+    existing = await db.execute(
+        select(EmployeeSkill).where(EmployeeSkill.employee_id == employee_id, EmployeeSkill.skill_id == body.skill_id)
+    )
+    es = existing.scalar_one_or_none()
+    if es:
+        es.level = body.level
+        es.verified_by = body.verified_by
+        es.last_verified_at = datetime.utcnow()
+    else:
+        db.add(EmployeeSkill(
+            employee_id=employee_id, skill_id=body.skill_id,
+            level=body.level, verified_by=body.verified_by,
+            last_verified_at=datetime.utcnow(),
+        ))
+    await db.commit()
+    return success(message="Skill updated")
+
+
+@router.delete("/employees/{employee_id}/skills/{skill_id}")
+async def remove_employee_skill(
+    employee_id: int, skill_id: int,
+    current_user: User = Depends(require_role(["hr", "admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(EmployeeSkill).where(EmployeeSkill.employee_id == employee_id, EmployeeSkill.skill_id == skill_id)
+    )
+    es = result.scalar_one_or_none()
+    if not es:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    await db.delete(es)
+    await db.commit()
+    return success(message="Skill removed")
+
+
+# ── Departments List ──────────────────────────────────────────────────────────
+
+@router.get("/departments")
+async def list_departments(
+    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Employee.department).where(
+            Employee.org_id == current_user.org_id, Employee.department != None
+        ).distinct()
+    )
+    return success(sorted([r for r in result.scalars() if r]))
 
 
 # ── Org Skill Map ─────────────────────────────────────────────────────────────
@@ -191,7 +327,7 @@ async def skill_map(
 class ProjectReqCreate(BaseModel):
     title: str
     client: Optional[str] = None
-    required_skills: Optional[list] = None  # [{skill_id, min_level, headcount}]
+    required_skills: Optional[list] = None
     headcount: int = 1
     start_date: Optional[str] = None
 
@@ -217,6 +353,23 @@ async def create_project_requirement(
     return success({"id": req.id})
 
 
+@router.get("/project-requirements")
+async def list_project_requirements(
+    current_user: User = Depends(require_role(["hr", "admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(ProjectRequirement).where(ProjectRequirement.org_id == current_user.org_id)
+        .order_by(ProjectRequirement.created_at.desc())
+    )
+    reqs = result.scalars().all()
+    return success([{
+        "id": r.id, "title": r.title, "client": r.client,
+        "headcount": r.headcount, "required_skills": r.required_skills,
+        "start_date": r.start_date.isoformat() if r.start_date else None,
+    } for r in reqs])
+
+
 @router.get("/project-match/{requirement_id}")
 async def project_match(
     requirement_id: int,
@@ -230,7 +383,6 @@ async def project_match(
     if not req:
         raise HTTPException(status_code=404, detail="Project requirement not found")
 
-    # Get all active employees with their skills
     emp_res = await db.execute(
         select(Employee).where(Employee.org_id == current_user.org_id, Employee.status == EmployeeStatus.active)
     )
@@ -252,8 +404,7 @@ async def project_match(
             employee_profiles=employee_profiles,
         )
         return success(result.get("ranked_employees", []))
-    except Exception as e:
-        # Return simple filter fallback
+    except Exception:
         return success(employee_profiles[:10])
 
 
@@ -280,7 +431,6 @@ async def assign_to_project(
             status=DeploymentStatus.active,
         )
         db.add(dep)
-        # Update employee status
         emp_res = await db.execute(select(Employee).where(Employee.id == emp_id))
         emp = emp_res.scalar_one_or_none()
         if emp:
@@ -317,4 +467,68 @@ async def workforce_analytics(
         "total_employees": total_employees.scalar() or 0,
         "active_deployments": active_deps.scalar() or 0,
         "avg_capability_index": round(float(avg_cap.scalar() or 0), 2),
+    })
+
+
+# ── Detailed Analytics ────────────────────────────────────────────────────────
+
+@router.get("/analytics/detailed")
+async def detailed_analytics(
+    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    status_res = await db.execute(
+        select(Employee.status, func.count()).select_from(Employee)
+        .where(Employee.org_id == current_user.org_id).group_by(Employee.status)
+    )
+    status_dist = {str(row[0]).split(".")[-1]: row[1] for row in status_res}
+
+    dept_res = await db.execute(
+        select(Employee.department, func.count()).select_from(Employee)
+        .where(Employee.org_id == current_user.org_id, Employee.department != None)
+        .group_by(Employee.department).order_by(func.count().desc()).limit(10)
+    )
+    dept_dist = [{"department": row[0], "count": row[1]} for row in dept_res]
+
+    skill_res = await db.execute(
+        select(SkillTaxonomy.name, func.count()).select_from(EmployeeSkill)
+        .join(Employee).join(SkillTaxonomy, EmployeeSkill.skill_id == SkillTaxonomy.id)
+        .where(Employee.org_id == current_user.org_id)
+        .group_by(SkillTaxonomy.name).order_by(func.count().desc()).limit(10)
+    )
+    top_skills = [{"skill": row[0], "count": row[1]} for row in skill_res]
+
+    total_emp_count = (await db.execute(
+        select(func.count()).select_from(Employee).where(Employee.org_id == current_user.org_id)
+    )).scalar() or 0
+
+    emp_user_ids = list((await db.execute(
+        select(Employee.user_id).where(Employee.org_id == current_user.org_id)
+    )).scalars())
+
+    enrolled_count = completed_count = cert_count = 0
+    if emp_user_ids:
+        enrolled_count = (await db.execute(
+            select(func.count()).select_from(Enrollment).where(Enrollment.user_id.in_(emp_user_ids))
+        )).scalar() or 0
+        completed_count = (await db.execute(
+            select(func.count()).select_from(Enrollment).where(
+                Enrollment.user_id.in_(emp_user_ids), Enrollment.completed_at != None
+            )
+        )).scalar() or 0
+        cert_count = (await db.execute(
+            select(func.count()).select_from(Certificate).where(Certificate.user_id.in_(emp_user_ids))
+        )).scalar() or 0
+
+    return success({
+        "status_distribution": status_dist,
+        "department_distribution": dept_dist,
+        "top_skills": top_skills,
+        "learning": {
+            "total_employees": total_emp_count,
+            "total_enrollments": enrolled_count,
+            "total_completions": completed_count,
+            "total_certificates": cert_count,
+            "completion_rate": round((completed_count / enrolled_count * 100) if enrolled_count else 0, 1),
+        },
     })

@@ -56,6 +56,7 @@ export const sourceApi = {
   createJobRole: (data) => api.post('/api/v1/source/job-roles', data),
   sendInvite: (data) => api.post('/api/v1/source/send-invite', data),
   inviteStatus: (jobRoleId) => api.get(`/api/v1/source/invite-status/${jobRoleId}`),
+  previewOfferLetter: (id, data) => api.post(`/api/v1/source/candidates/${id}/offer-preview`, data),
   convertCandidate: (id, data) => api.post(`/api/v1/source/candidates/${id}/convert`, data),
   convertToEmployee: (id, data) => api.post(`/api/v1/source/candidates/${id}/convert`, data),
   scoreCandidates: (data) => api.post('/api/v1/source/score-candidates', data),
@@ -90,25 +91,40 @@ export const forgeApi = {
   createCourse: (data) => api.post('/api/v1/forge/courses', data),
   listCourses: () => api.get('/api/v1/forge/courses'),
   getCourse: (id) => api.get(`/api/v1/forge/courses/${id}`),
+  updateCourse: (id, data) => api.put(`/api/v1/forge/courses/${id}`, data),
+  deleteCourse: (id) => api.delete(`/api/v1/forge/courses/${id}`),
   publishCourse: (id) => api.post(`/api/v1/forge/courses/${id}/publish`),
+  submitForReview: (id) => api.post(`/api/v1/forge/courses/${id}/submit-review`),
+  courseEnrollments: (id) => api.get(`/api/v1/forge/courses/${id}/enrollments`),
+  library: (params) => api.get('/api/v1/forge/library', { params }),
+  myCourses: () => api.get('/api/v1/forge/my-courses'),
   enroll: (courseId) => api.post('/api/v1/forge/enroll', null, { params: { course_id: courseId } }),
+  bulkEnroll: (data) => api.post('/api/v1/forge/bulk-enroll', data),
   completeSection: (sectionId, data) => api.post(`/api/v1/forge/sections/${sectionId}/complete`, data),
   myCertificates: (userId) => api.get(`/api/v1/forge/certificates/${userId}`),
   verifyCertificate: (code) => api.get(`/api/v1/forge/verify-certificate/${code}`),
   teamAnalytics: () => api.get('/api/v1/forge/team-analytics'),
   transcript: () => api.get('/api/v1/forge/transcript'),
+  uploadVideo: (fileData) => api.post('/api/v1/forge/upload-video', fileData, { headers: { 'Content-Type': 'multipart/form-data' } }),
 };
 
 // ── Deploy ────────────────────────────────────────────────────────────────
 export const deployApi = {
   listEmployees: (params) => api.get('/api/v1/deploy/employees', { params }),
   getEmployee: (id) => api.get(`/api/v1/deploy/employees/${id}`),
+  createEmployee: (data) => api.post('/api/v1/deploy/employees', data),
+  updateEmployee: (id, data) => api.put(`/api/v1/deploy/employees/${id}`, data),
+  addSkill: (empId, data) => api.post(`/api/v1/deploy/employees/${empId}/skills`, data),
+  removeSkill: (empId, skillId) => api.delete(`/api/v1/deploy/employees/${empId}/skills/${skillId}`),
+  departments: () => api.get('/api/v1/deploy/departments'),
   myProfile: () => api.get('/api/v1/deploy/my-profile'),
   skillMap: (params) => api.get('/api/v1/deploy/skill-map', { params }),
   createProject: (data) => api.post('/api/v1/deploy/project-requirements', data),
+  listProjects: () => api.get('/api/v1/deploy/project-requirements'),
   matchProject: (id) => api.get(`/api/v1/deploy/project-match/${id}`),
   assign: (employeeIds, requirementId) => api.post('/api/v1/deploy/assign', employeeIds, { params: { project_requirement_id: requirementId } }),
   analytics: () => api.get('/api/v1/deploy/analytics'),
+  analyticsDetailed: () => api.get('/api/v1/deploy/analytics/detailed'),
 };
 
 // ── Admin ─────────────────────────────────────────────────────────────────
@@ -120,4 +136,13 @@ export const adminApi = {
   orgSettings: () => api.get('/api/v1/admin/org-settings'),
   updateOrgSettings: (data) => api.put('/api/v1/admin/org-settings', data),
   listSkills: (q) => api.get('/api/v1/admin/skills', { params: { q } }),
+};
+
+// ── Journey ───────────────────────────────────────────────────────────────
+export const journeyApi = {
+  createJourney: (data) => api.post('/api/v1/journey/journeys', data),
+  listJourneys: () => api.get('/api/v1/journey/journeys'),
+  getJourney: (id) => api.get(`/api/v1/journey/journeys/${id}`),
+  assignJourney: (id, data) => api.post(`/api/v1/journey/journeys/${id}/assign`, data),
+  myJourneys: () => api.get('/api/v1/journey/my-journeys'),
 };

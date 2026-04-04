@@ -18,6 +18,7 @@ export default function SourceDashboard() {
   const [filters, setFilters] = useState({ pool: 'all', location: '', min_exp: 0, sort_by: 'newest', limit: 20, role_id: '' });
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteRoleId, setInviteRoleId] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
   const [showAddRole, setShowAddRole] = useState(false);
   const [newRole, setNewRole] = useState({ title: '', min_experience: 0 });
   const [addingRole, setAddingRole] = useState(false);
@@ -57,12 +58,31 @@ export default function SourceDashboard() {
   const sendInvites = async () => {
     if (!inviteRoleId) { toast.error('Select a job role'); return; }
     try {
-      await sourceApi.sendInvite({ candidate_ids: [...selected], job_role_id: parseInt(inviteRoleId) });
+      const payload = { 
+        candidate_ids: [...selected], 
+        job_role_id: parseInt(inviteRoleId) 
+      };
+      if (selected.size === 1 && inviteEmail) {
+        payload.email_addresses = [inviteEmail];
+      }
+      await sourceApi.sendInvite(payload);
+
       toast.success(`Invites sent to ${selected.size} candidates!`);
       setSelected(new Set()); setShowInviteModal(false);
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to send invites');
     }
+  };
+
+  const handleOpenInvite = () => {
+    if (selected.size === 1) {
+      const id = [...selected][0];
+      const cand = candidates.find(c => c.id === id);
+      if (cand) setInviteEmail(cand.email || '');
+    } else {
+      setInviteEmail('');
+    }
+    setShowInviteModal(true);
   };
 
   const handleCreateRole = async (e) => {
@@ -212,7 +232,7 @@ export default function SourceDashboard() {
       {selected.size > 0 && (
         <div className="fab-bar">
           <span>{selected.size} selected</span>
-          <button className="btn btn-primary" onClick={() => setShowInviteModal(true)}><Send size={16} /> Send Invite</button>
+          <button className="btn btn-primary" onClick={handleOpenInvite}><Send size={16} /> Send Invite</button>
           <button className="btn btn-ghost" onClick={() => setSelected(new Set())} style={{ color: 'rgba(255,255,255,0.7)' }}>Clear</button>
         </div>
       )}
@@ -227,6 +247,20 @@ export default function SourceDashboard() {
             </div>
             <div className="modal-body">
               <p style={{ marginBottom: 16 }}>Sending invites to <strong>{selected.size}</strong> candidate(s).</p>
+              
+              {selected.size === 1 && (
+                <div className="form-group">
+                  <label className="form-label">Candidate Email *</label>
+                  <input 
+                    type="email" 
+                    className="form-control" 
+                    value={inviteEmail} 
+                    onChange={e => setInviteEmail(e.target.value)}
+                    placeholder="e.g. candidate@example.com"
+                  />
+                </div>
+              )}
+
               <div className="form-group">
                 <label className="form-label">Job Role *</label>
                 <select className="form-control" value={inviteRoleId} onChange={e => setInviteRoleId(e.target.value)}>

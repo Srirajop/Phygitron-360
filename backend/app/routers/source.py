@@ -566,6 +566,38 @@ class ConvertRequest(BaseModel):
     department: str
     location: Optional[str] = "Office"
     start_date: Optional[str] = None
+    offer_content: Optional[dict] = None
+    recipient_email: Optional[EmailStr] = None
+
+
+@router.post("/candidates/{candidate_id}/offer-preview")
+async def offer_preview(
+    candidate_id: int,
+    body: ConvertRequest,
+    current_user: User = Depends(require_role(["hr", "admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    # Get candidate and user
+    cand_res = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
+    candidate = cand_res.scalar_one_or_none()
+    if not candidate or candidate.org_id != current_user.org_id:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    user_res = await db.execute(select(User).where(User.id == candidate.user_id))
+    user = user_res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    from app.agents.agents import run_generate_offer_letter_agent
+    hiring_details = {
+        "role": body.role_title,
+        "salary": body.salary,
+        "location": body.location,
+        "start_date": body.start_date,
+        "department": body.department
+    }
+    ai_content = run_generate_offer_letter_agent(user.full_name or user.email, hiring_details)
+    return success(ai_content)
 
 
 @router.post("/candidates/{candidate_id}/convert")
@@ -621,15 +653,19 @@ async def convert_to_employee(
         import tempfile
         import os
 
-        # 1. Generate AI Content
-        hiring_details = {
-            "role": body.role_title,
-            "salary": body.salary,
-            "location": body.location,
-            "start_date": body.start_date,
-            "department": body.department
-        }
-        ai_content = run_generate_offer_letter_agent(user.full_name or user.email, hiring_details)
+        # 1. Get Content (AI or Provided)
+        if body.offer_content:
+            ai_content = body.offer_content
+            logger.info(f"Using provided offer content for candidate {candidate_id}")
+        else:
+            hiring_details = {
+                "role": body.role_title,
+                "salary": body.salary,
+                "location": body.location,
+                "start_date": body.start_date,
+                "department": body.department
+            }
+            ai_content = run_generate_offer_letter_agent(user.full_name or user.email, hiring_details)
 
         # 2. Generate PDF
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -646,7 +682,7 @@ async def convert_to_employee(
 
         # 5. Send Email
         await send_offer_letter_email(
-            to_email=user.email,
+            to_email=body.recipient_email if body.recipient_email else user.email,
             candidate_name=user.full_name or user.email,
             company_name=org.name if org else "eWandzDigital",
             role_title=body.role_title,
@@ -661,7 +697,7 @@ async def convert_to_employee(
         try:
             from app.utils.email import send_offer_letter_email
             await send_offer_letter_email(
-                to_email=user.email,
+                to_email=body.recipient_email if body.recipient_email else user.email,
                 candidate_name=user.full_name or user.email,
                 company_name=org.name if org else "eWandzDigital",
                 role_title=body.role_title,

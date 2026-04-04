@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   Users, Upload, CheckSquare, BookOpen, Briefcase, Settings,
   LogOut, BarChart2, PlusCircle, FileText, Award, Map, Target,
-  Layers, UserCheck, Home, Cpu
+  Layers, UserCheck, Home, Cpu, Milestone
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -15,23 +15,29 @@ const roleNavItems = {
       { to: '/source/active', label: 'Active Candidates', icon: UserCheck },
       { to: '/source/upload', label: 'Upload Resumes', icon: Upload },
     ]},
-    { section: 'Verify', items: [
+    { section: 'Succession & Growth', items: [
+      { to: '/admin/journeys', label: 'Learning Journeys', icon: Milestone },
       { to: '/verify/manage', label: 'Assessments', icon: CheckSquare },
-      { to: '/verify/build', label: 'Build Assessment', icon: PlusCircle },
     ]},
-    { section: 'Deploy', items: [
+    { section: 'Forge — LXP', items: [
+      { to: '/forge', label: 'Learning Hub', icon: BookOpen },
+      { to: '/forge/library', label: 'Course Library', icon: Layers },
+      { to: '/forge/my-courses', label: 'My Courses', icon: FileText },
+      { to: '/forge/build', label: 'Build Course', icon: PlusCircle },
+      { to: '/forge/transcript', label: 'Transcript', icon: Award },
+      { to: '/forge/team', label: 'Team Analytics', icon: BarChart2 },
+    ]},
+    { section: 'Deploy — HRIS', items: [
       { to: '/deploy', label: 'Employees', icon: Briefcase },
       { to: '/deploy/skill-map', label: 'Skill Map', icon: Map },
       { to: '/deploy/projects', label: 'Project Match', icon: Target },
       { to: '/deploy/analytics', label: 'Analytics', icon: BarChart2 },
     ]},
-    { section: 'Forge', items: [
-      { to: '/forge', label: 'Learning Hub', icon: BookOpen },
-    ]},
   ],
   admin: [
     { section: 'Platform', items: [
       { to: '/admin/users', label: 'User Management', icon: Users },
+      { to: '/admin/journeys', label: 'Journey Builder', icon: Milestone },
       { to: '/admin/org-settings', label: 'Org Settings', icon: Settings },
     ]},
     { section: 'Source', items: [
@@ -42,41 +48,56 @@ const roleNavItems = {
     { section: 'Verify', items: [
       { to: '/verify/manage', label: 'Assessments', icon: CheckSquare },
     ]},
-    { section: 'Deploy', items: [
+    { section: 'Forge — LXP', items: [
+      { to: '/forge', label: 'Learning Hub', icon: BookOpen },
+      { to: '/forge/library', label: 'Course Library', icon: Layers },
+      { to: '/forge/my-courses', label: 'Manage Courses', icon: FileText },
+      { to: '/forge/team', label: 'Team Analytics', icon: BarChart2 },
+    ]},
+    { section: 'Deploy — HRIS', items: [
       { to: '/deploy', label: 'Employees', icon: Briefcase },
       { to: '/deploy/skill-map', label: 'Skill Map', icon: Map },
       { to: '/deploy/analytics', label: 'Analytics', icon: BarChart2 },
     ]},
-    { section: 'Forge', items: [
-      { to: '/forge', label: 'Courses', icon: BookOpen },
-    ]},
   ],
   candidate: [
-    { section: 'My Account', items: [
+    { section: 'My Career', items: [
+      { to: '/journey/my-path', label: 'My Journey', icon: Milestone },
       { to: '/verify/dashboard', label: 'My Assessments', icon: CheckSquare },
-      { to: '/forge', label: 'Learning', icon: BookOpen },
+      { to: '/forge', label: 'Learning Hub', icon: BookOpen },
+      { to: '/forge/library', label: 'Course Library', icon: Layers },
       { to: '/forge/transcript', label: 'My Transcript', icon: Award },
     ]},
   ],
   employee: [
-    { section: 'My Account', items: [
+    { section: 'My Growth', items: [
+      { to: '/journey/my-path', label: 'My Journey', icon: Milestone },
       { to: '/forge', label: 'Learning Hub', icon: BookOpen },
+      { to: '/forge/library', label: 'Course Library', icon: Layers },
       { to: '/forge/transcript', label: 'My Transcript', icon: Award },
+    ]},
+    { section: 'My Account', items: [
       { to: '/deploy/my-profile', label: 'My Profile', icon: UserCheck },
       { to: '/verify/dashboard', label: 'Assessments', icon: CheckSquare },
     ]},
   ],
   manager: [
-    { section: 'Team', items: [
+    { section: 'Team Growth', items: [
       { to: '/deploy', label: 'My Team', icon: Users },
+      { to: '/deploy/analytics', label: 'Workforce Analytics', icon: BarChart2 },
+    ]},
+    { section: 'Learning', items: [
       { to: '/forge/team', label: 'Team Learning', icon: BookOpen },
-      { to: '/deploy/analytics', label: 'Analytics', icon: BarChart2 },
+      { to: '/forge/library', label: 'Course Library', icon: Layers },
     ]},
   ],
   instructor: [
-    { section: 'Forge', items: [
-      { to: '/forge', label: 'My Courses', icon: BookOpen },
+    { section: 'Forge — LXP', items: [
+      { to: '/forge', label: 'Learning Hub', icon: BookOpen },
+      { to: '/forge/library', label: 'Course Library', icon: Layers },
+      { to: '/forge/my-courses', label: 'My Courses', icon: FileText },
       { to: '/forge/build', label: 'Build Course', icon: PlusCircle },
+      { to: '/forge/transcript', label: 'My Transcript', icon: Award },
     ]},
   ],
 };

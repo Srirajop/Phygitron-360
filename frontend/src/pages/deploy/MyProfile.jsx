@@ -1,8 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { deployApi, forgeApi } from '../../api';
-import { User, Mail, Briefcase, Award, Star, Activity, AlertTriangle } from 'lucide-react';
+import { Mail, Briefcase, Star, Activity, AlertTriangle, Calendar, Award, BookOpen } from 'lucide-react';
 
-const LEVEL_COLORS = { beginner: 'badge-muted', intermediate: 'badge-info', advanced: 'badge-primary', expert: 'badge-success' };
+const LEVEL_COLORS = { 
+  beginner: { bg: '#F3F4F6', color: '#4B5563', dot: '#9CA3AF' },
+  intermediate: { bg: '#EFF6FF', color: '#1D4ED8', dot: '#3B82F6' },
+  advanced: { bg: '#F5F3FF', color: '#6D28D9', dot: '#8B5CF6' },
+  expert: { bg: '#ECFDF5', color: '#047857', dot: '#10B981' }
+};
 
 export default function MyProfile() {
   const [data, setData] = useState(null);
@@ -10,101 +15,202 @@ export default function MyProfile() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([deployApi.myProfile(), forgeApi.transcript()])
+    Promise.all([
+      deployApi.myProfile().catch(() => ({ data: { data: null } })), 
+      forgeApi.transcript().catch(() => ({ data: { data: { certificates: [] } } }))
+    ])
       .then(([p, t]) => {
-        setData(p.data.data);
-        setCerts(t.data.data.certificates || []);
+        const pd = p.data?.data;
+        const td = t.data?.data;
+        setData(pd && typeof pd === 'object' ? pd : null);
+        setCerts(Array.isArray(td?.certificates) ? td.certificates : []);
       })
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}><div className="spinner spinner-lg" /></div>;
-  if (!data) return <div className="page-body"><p>Profile not found.</p></div>;
+  if (loading) return <div style={{ display: 'flex', justifyContent: 'center', padding: 80 }}><div className="spinner spinner-lg" /></div>;
+  if (!data) return (
+    <div className="page-body">
+      <div className="empty-state">
+        <div className="empty-icon">👤</div>
+        <p>No employee profile found. Contact HR to link your platform account to an employee record.</p>
+      </div>
+    </div>
+  );
+
+  const initials = (data.user?.full_name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+  const activeDeployments = Array.isArray(data.deployments) ? data.deployments.filter(d => d.status === 'active') : [];
+  const skillsList = Array.isArray(data.skills) ? data.skills : [];
 
   return (
     <div>
       <div className="page-header">
-        <h1>My Profile 👤</h1>
-        <p>Manage your professional identity, skills, and achievements</p>
+        <h1>My Profile</h1>
+        <p>Manage your professional identity, view skill ratings, and track deployments</p>
       </div>
       <div className="page-body">
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 24 }}>
-          {/* Left: Info card */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-            <div className="card animate-fade-in">
-              <div className="card-body" style={{ textAlign: 'center', padding: '32px 24px' }}>
-                <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg, var(--primary), var(--primary-light))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: '2rem', margin: '0 auto 16px', boxShadow: '0 8px 16px rgba(124,58,237,0.3)' }}>
-                  {data.user?.full_name?.[0] || '?'}
-                </div>
-                <h3 style={{ marginBottom: 4 }}>{data.user?.full_name}</h3>
-                <div className="badge badge-primary" style={{ marginBottom: 20 }}>{data.department || 'General'}</div>
-                
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, textAlign: 'left', borderTop: '1px solid var(--border)', paddingTop: 20 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.85rem' }}><Mail size={14} color="var(--text-muted)" /> {data.user?.email}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.85rem' }}><Briefcase size={14} color="var(--text-muted)" /> ID: {data.emp_id}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.85rem' }}><Activity size={14} color="var(--text-muted)" /> Status: <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>{data.status}</span></div>
-                </div>
-              </div>
-            </div>
-
-            <div className="card animate-fade-in stagger-2">
-              <div className="card-header"><h4>Performance Index</h4></div>
-              <div className="card-body" style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '3rem', fontWeight: 900, color: 'var(--primary)', lineHeight: 1 }}>{data.capability_index?.toFixed(0)}%</div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, marginTop: 8 }}>CAPABILITY SCORE</div>
-                <div className="progress-bar" style={{ marginTop: 20 }}><div className="progress-fill" style={{ width: `${data.capability_index}%` }} /></div>
-              </div>
-            </div>
+        
+        {/* Top Banner & Basic Info */}
+        <div className="card animate-fade-in" style={{ marginBottom: 24, overflow: 'visible', borderRadius: 'var(--radius-lg)' }}>
+          <div style={{
+            height: 120, borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0',
+            background: 'linear-gradient(135deg, var(--primary) 0%, #9333EA 50%, #EC4899 100%)',
+            position: 'relative'
+          }}>
+            <div style={{ position: 'absolute', inset: 0, opacity: 0.1, backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '32px 32px' }} />
           </div>
-
-          {/* Right: Skills & Certs */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-            <div className="card animate-fade-in stagger-2">
-              <div className="card-header"><h4>My Skills</h4></div>
-              <div className="card-body">
-                <div className="chip-list">
-                  {(data.skills || []).map((s, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, background: s.decayed ? '#FEE2E2' : 'var(--primary-lightest)', border: `1px solid ${s.decayed ? '#FECACA' : 'var(--primary-lighter)'}`, borderRadius: 'var(--radius-full)', padding: '6px 14px' }}>
-                      {s.decayed && <AlertTriangle size={12} color="var(--danger)" />}
-                      <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>{s.name}</span>
-                      <span className={`badge ${LEVEL_COLORS[s.level] || 'badge-muted'}`} style={{ padding: '2px 8px', fontSize: '0.7rem' }}>{s.level}</span>
-                    </div>
-                  ))}
-                  {(!data.skills || data.skills.length === 0) && <p style={{ color: 'var(--text-muted)' }}>No skills listed yet.</p>}
+          
+          <div className="card-body" style={{ paddingTop: 0, position: 'relative' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: -50, marginBottom: 24, flexWrap: 'wrap', gap: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 20 }}>
+                <div style={{ 
+                  width: 100, height: 100, borderRadius: '50%', background: 'var(--bg-card)', 
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                  border: '4px solid var(--bg-card)', boxShadow: 'var(--shadow)' 
+                }}>
+                  <div style={{ 
+                    width: '100%', height: '100%', borderRadius: '50%', background: 'linear-gradient(135deg, var(--primary), var(--primary-light))', 
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: '2rem' 
+                  }}>
+                    {initials}
+                  </div>
+                </div>
+                <div style={{ paddingBottom: 6 }}>
+                  <h2 style={{ margin: '0 0 6px 0', fontSize: '1.5rem' }}>{data.user?.full_name}</h2>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <span className="badge badge-primary">{data.department || 'General'}</span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.85rem', color: 'var(--text-secondary)' }}><Briefcase size={14}/> ID: {data.emp_id || 'N/A'}</span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.85rem', color: 'var(--text-secondary)' }}><Mail size={14}/> {data.user?.email}</span>
+                  </div>
                 </div>
               </div>
-            </div>
-
-            <div className="card animate-fade-in stagger-3">
-              <div className="card-header"><h4>Current Deployments</h4></div>
-              <div className="card-body">
-                {(data.deployments || []).filter(d => d.status === 'active').length === 0 ? <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No active deployments.</p> : (
-                  data.deployments.filter(d => d.status === 'active').map((d, i) => (
-                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: 'var(--bg-page)', borderRadius: 'var(--radius)', borderLeft: '3px solid var(--primary)' }}>
-                      <div><div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{d.project_name}</div><div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{d.client_name}</div></div>
-                      <div className="badge badge-info">{d.role}</div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="card animate-fade-in stagger-4">
-              <div className="card-header"><h4>Achievements 🏅</h4></div>
-              <div className="card-body">
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12 }}>
-                  {certs.map((c, i) => (
-                    <div key={i} style={{ textAlign: 'center', padding: 12, border: '1px dashed var(--primary-lighter)', borderRadius: 'var(--radius)' }}>
-                      <Star size={24} color="var(--primary)" style={{ margin: '0 auto 8px' }} />
-                      <div style={{ fontSize: '0.72rem', fontWeight: 700, lineHeight: 1.3 }}>{c.course_title}</div>
-                    </div>
-                  ))}
-                  {certs.length === 0 && <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No certificates earned yet.</p>}
+              
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, paddingBottom: 6 }}>
+                <div style={{ textAlign: 'center', background: 'var(--primary-lightest)', padding: '10px 20px', borderRadius: 12 }}>
+                  <div style={{ fontSize: '1.8rem', fontWeight: 900, color: 'var(--primary)', lineHeight: 1 }}>{data.capability_index?.toFixed(0) || 0}%</div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 4 }}>Capability</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: data.status === 'active' ? '#10B981' : data.status === 'deployed' ? '#3B82F6' : '#9CA3AF' }} />
+                  <span style={{ fontWeight: 600, fontSize: '0.85rem', textTransform: 'capitalize' }}>{data.status.replace('_', ' ')}</span>
                 </div>
               </div>
             </div>
           </div>
         </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: 24 }}>
+          {/* Left Column */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            
+            {/* Skills */}
+            <div className="card animate-fade-in stagger-2">
+              <div className="card-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><Star size={16}/> Professional Skills</h4></div>
+              <div className="card-body">
+                {skillsList.length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No skills profiled yet. Complete assessments or courses to build your profile.</p>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
+                    {skillsList.map((s, i) => {
+                      const lConf = LEVEL_COLORS[s.level] || LEVEL_COLORS.beginner;
+                      return (
+                        <div key={i} style={{ 
+                          padding: '12px 16px', borderRadius: 10, border: '1px solid var(--border)',
+                          background: s.decayed ? '#FEF2F2' : 'var(--bg-card)',
+                          display: 'flex', flexDirection: 'column', gap: 8 
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              {s.decayed && <AlertTriangle size={14} color="var(--danger)" />}
+                              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: s.decayed ? 'var(--danger)' : 'var(--text-primary)' }}>{s.name}</span>
+                            </div>
+                            <span style={{ 
+                              background: lConf.bg, color: lConf.color, padding: '2px 8px', 
+                              borderRadius: 999, fontSize: '0.7rem', fontWeight: 600, textTransform: 'capitalize' 
+                            }}>
+                              {s.level}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            <div style={{ width: 6, height: 6, borderRadius: '50%', background: lConf.dot }} />
+                            Verified via: {s.verified_by?.replace(/_/g, ' ')}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Certifications (Visual) */}
+            <div className="card animate-fade-in stagger-3">
+              <div className="card-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><Award size={16}/> Certificates</h4></div>
+              <div className="card-body">
+                {certs.length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>You haven't earned any certificates yet. Browse the Learning Hub!</p>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                    {certs.map((c, i) => (
+                      <div key={i} style={{ 
+                        border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden',
+                        background: 'linear-gradient(to bottom right, #ffffff, #f9fafb)'
+                      }}>
+                        <div style={{ height: 4, background: 'linear-gradient(90deg, #F59E0B, #FCD34D)' }} />
+                        <div style={{ padding: 16 }}>
+                          <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Certificate of Completion</div>
+                          <div style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--text-primary)', marginBottom: 8, lineHeight: 1.3 }}>{c.course_title}</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px dashed var(--border)', paddingTop: 12, marginTop: 12 }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>ID: {c.verification_code}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{new Date(c.issued_at).toLocaleDateString()}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+          </div>
+
+          {/* Right Column */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            
+            {/* Deployments */}
+            <div className="card animate-fade-in stagger-4">
+              <div className="card-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><Briefcase size={16}/> Active Deployments</h4></div>
+              <div className="card-body" style={{ padding: '16px 20px' }}>
+                {activeDeployments.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-muted)' }}>
+                    <Briefcase size={24} style={{ margin: '0 auto 8px', opacity: 0.5 }} />
+                    <p style={{ margin: 0, fontSize: '0.85rem' }}>No active projects.</p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {activeDeployments.map((d, i) => (
+                      <div key={i} style={{ 
+                        padding: 16, background: '#F0F9FF', border: '1px solid #BAE6FD', 
+                        borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 8 
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <div style={{ fontWeight: 700, color: '#0369A1' }}>{d.project_name}</div>
+                          <span className="badge" style={{ background: '#38BDF8', color: 'white', fontSize: '0.7rem' }}>Active</span>
+                        </div>
+                        {d.client_name && <div style={{ fontSize: '0.8rem', color: '#0284C7' }}>Client: {d.client_name}</div>}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', color: '#0284C7', marginTop: 4 }}>
+                          <Calendar size={12} /> Since {new Date(d.start_date || d.created_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+          </div>
+        </div>
+
       </div>
     </div>
   );
