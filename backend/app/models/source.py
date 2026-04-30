@@ -9,8 +9,17 @@ class CandidateStatus(str, enum.Enum):
     invited = "invited"
     active = "active"
     shortlisted = "shortlisted"
+    offered = "offered"
     archived = "archived"
     parse_failed = "parse_failed"
+
+class OfferStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    sent = "sent"
+    accepted = "accepted"
+    declined = "declined"
     
 class JobStatus(str, enum.Enum):
     pending = "pending"
@@ -151,3 +160,30 @@ class BulkUploadJob(Base):
 
     organisation = relationship("Organisation")
     creator = relationship("User")
+
+
+class OfferLetter(Base):
+    __tablename__ = "offer_letters"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
+    org_id = Column(Integer, ForeignKey("organisations.id"), nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    role_title = Column(String(255), nullable=False)
+    salary = Column(String(100), nullable=False)
+    department = Column(String(255), nullable=True)
+    location = Column(String(255), nullable=True)
+    start_date = Column(DateTime, nullable=True)
+
+    offer_content = Column(JSON, nullable=False)
+    status = Column(Enum(OfferStatus), default=OfferStatus.pending)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    candidate = relationship("Candidate")
+    organisation = relationship("Organisation")
+    creator = relationship("User", foreign_keys=[created_by])
+    approver = relationship("User", foreign_keys=[approved_by])

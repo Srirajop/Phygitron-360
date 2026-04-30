@@ -41,6 +41,7 @@ import ActiveCandidates from './pages/source/ActiveCandidates';
 import ResumeUpload from './pages/source/ResumeUpload';
 import CandidateProfile from './pages/source/CandidateProfile';
 import InviteStatus from './pages/source/InviteStatus';
+import OfferApprovals from './pages/source/OfferApprovals';
 
 // Verify
 import CandidateDashboard from './pages/verify/CandidateDashboard';
@@ -171,6 +172,7 @@ export default function App() {
             <Route path="/source/upload" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><ResumeUpload /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/candidates/:id" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><CandidateProfile /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/invite-status/:roleId" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><InviteStatus /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/source/offers" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><OfferApprovals /></AppLayout></PrivateRoute></ModuleGate>} />
 
             {/* Verify */}
             <Route path="/verify/dashboard" element={<ModuleGate module="verify"><PrivateRoute><AppLayout><CandidateDashboard /></AppLayout></PrivateRoute></ModuleGate>} />

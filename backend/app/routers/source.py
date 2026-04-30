@@ -11,7 +11,10 @@ from sqlalchemy import select, and_, func
 from pydantic import BaseModel, EmailStr
 from app.database import get_db
 from app.models.user import User, UserRole
-from app.models.source import Candidate, CandidateSkill, JobRole, CandidateInvite, CandidateStatus, InviteStatus
+from app.models.source import (
+    Candidate, CandidateSkill, JobRole, CandidateInvite, CandidateStatus, 
+    InviteStatus, OfferLetter, OfferStatus
+)
 from app.models.ai_score import AIScore, EntityType, ScoreType
 from app.models.skill_taxonomy import SkillTaxonomy
 from app.models.organisation import Organisation
@@ -919,89 +922,43 @@ async def convert_to_employee(
     if emp_res.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Candidate is already an employee")
 
-    # Update role and create Employee
-    user.role = UserRole.employee
-    candidate.status = CandidateStatus.archived
-
-    try:
-        sd = datetime.strptime(body.start_date, "%Y-%m-%d").date() if body.start_date else datetime.utcnow().date()
-    except Exception:
-        sd = datetime.utcnow().date()
-
-    emp = Employee(
-        user_id=user.id,
-        org_id=user.org_id,
+    # Create Offer Letter record (Pending Approval)
+    offer = OfferLetter(
+        candidate_id=candidate.id,
+        org_id=current_user.org_id,
+        created_by=current_user.id,
+        role_title=body.role_title,
+        salary=body.salary,
         department=body.department,
-        join_date=sd,
-        status=EmployeeStatus.active,
+        location=body.location,
+        start_date=datetime.strptime(body.start_date, "%Y-%m-%d") if body.start_date else None,
+        offer_content=body.offer_content or {},
+        status=OfferStatus.pending
     )
-    db.add(emp)
-
-    # Send AI-Powered Offer Letter
-    try:
+    
+    # If content was NOT provided, generate it now for review
+    if not body.offer_content:
         from app.agents.agents import run_generate_offer_letter_agent
-        from app.utils.pdf import generate_professional_pdf
-        from app.utils.email import send_offer_letter_email
-        import tempfile
-        import os
+        hiring_details = {
+            "role": body.role_title,
+            "salary": body.salary,
+            "location": body.location,
+            "start_date": body.start_date,
+            "department": body.department
+        }
+        offer.offer_content = run_generate_offer_letter_agent(user.full_name or user.email, hiring_details)
 
-        # 1. Get Content (AI or Provided)
-        if body.offer_content:
-            ai_content = body.offer_content
-            logger.info(f"Using provided offer content for candidate {candidate_id}")
-        else:
-            hiring_details = {
-                "role": body.role_title,
-                "salary": body.salary,
-                "location": body.location,
-                "start_date": body.start_date,
-                "department": body.department
-            }
-            ai_content = run_generate_offer_letter_agent(user.full_name or user.email, hiring_details)
-
-        # 2. Generate PDF
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            pdf_path = tmp.name
-        
-        generate_professional_pdf(ai_content, pdf_path)
-
-        # 3. Read PDF bytes
-        with open(pdf_path, "rb") as f:
-            attachment_bytes = f.read()
-        
-        # 4. Cleanup
-        os.remove(pdf_path)
-
-        # 5. Send Email
-        await send_offer_letter_email(
-            to_email=body.recipient_email if body.recipient_email else user.email,
-            candidate_name=user.full_name or user.email,
-            company_name=org.name if org else "eWandzDigital",
-            role_title=body.role_title,
-            department=body.department,
-            salary=body.salary,
-            location=body.location,
-            attachment_bytes=attachment_bytes
-        )
+    db.add(offer)
+    candidate.status = CandidateStatus.offered
+    
+    try:
+        await db.commit()
     except Exception as e:
-        logger.error(f"❌ AI Offer Letter Flow failed: {e}")
-        # Fallback to simple email if PDF fails
-        try:
-            from app.utils.email import send_offer_letter_email
-            await send_offer_letter_email(
-                to_email=body.recipient_email if body.recipient_email else user.email,
-                candidate_name=user.full_name or user.email,
-                company_name=org.name if org else "eWandzDigital",
-                role_title=body.role_title,
-                department=body.department,
-                salary=body.salary,
-                location=body.location
-            )
-        except Exception as e2:
-            logger.warning(f"Fallback email also failed: {e2}")
+        logger.error(f"❌ Failed to commit offer letter: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-    await db.commit()
-    return success({"employee_id": emp.id}, "Candidate successfully converted to Employee and Offer Letter sent")
+    return success({"offer_id": offer.id}, "Offer letter created and submitted for approval.")
 
 
 @router.post("/employees/{employee_id}/revert")
@@ -1104,4 +1061,184 @@ async def list_active_candidates(
         })
         
     return success(data=data)
+
+
+# ── Offer Approvals ──────────────────────────────────────────────────────────
+
+@router.get("/offers")
+async def list_offers(
+    status: Optional[str] = "pending",
+    current_user: User = Depends(require_role(["org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy.orm import selectinload
+    
+    query = select(OfferLetter).options(selectinload(OfferLetter.candidate)).where(OfferLetter.org_id == current_user.org_id)
+    if status:
+        query = query.where(OfferLetter.status == status)
+    
+    result = await db.execute(query)
+    offers = result.scalars().all()
+    
+    output = []
+    for o in offers:
+        cand_res = await db.execute(select(User).where(User.id == o.candidate.user_id))
+        user = cand_res.scalar_one_or_none()
+        
+        output.append({
+            "id": o.id,
+            "candidate_id": o.candidate_id,
+            "candidate_name": user.full_name if user else "Unknown",
+            "candidate_email": user.email if user else "Unknown",
+            "role_title": o.role_title,
+            "salary": o.salary,
+            "department": o.department,
+            "location": o.location,
+            "start_date": o.start_date.isoformat() if o.start_date else None,
+            "status": o.status.value,
+            "offer_content": o.offer_content,
+            "created_at": o.created_at.isoformat(),
+        })
+    
+    return success(output)
+
+
+@router.put("/offers/{offer_id}")
+async def update_offer(
+    offer_id: int,
+    body: dict = Body(...),
+    current_user: User = Depends(require_role(["org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(OfferLetter).where(OfferLetter.id == offer_id, OfferLetter.org_id == current_user.org_id))
+    offer = result.scalar_one_or_none()
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    if offer.status != OfferStatus.pending:
+        raise HTTPException(status_code=400, detail="Only pending offers can be edited")
+
+    if "role_title" in body: offer.role_title = body["role_title"]
+    if "salary" in body: offer.salary = body["salary"]
+    if "department" in body: offer.department = body["department"]
+    if "location" in body: offer.location = body["location"]
+    if "offer_content" in body: offer.offer_content = body["offer_content"]
+    
+    if "start_date" in body and body["start_date"]:
+        try:
+            offer.start_date = datetime.strptime(body["start_date"], "%Y-%m-%d")
+        except:
+            pass
+
+    await db.commit()
+    return success(message="Offer updated successfully")
+
+
+@router.post("/offers/{offer_id}/approve")
+async def approve_offer(
+    offer_id: int,
+    body: Optional[dict] = Body(None),
+    current_user: User = Depends(require_role(["org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.deploy import Employee, EmployeeStatus
+    from app.utils.pdf import generate_professional_pdf
+    from app.utils.email import send_offer_letter_email
+    import tempfile
+    import os
+
+    # 1. Get Offer
+    result = await db.execute(select(OfferLetter).where(OfferLetter.id == offer_id, OfferLetter.org_id == current_user.org_id))
+    offer = result.scalar_one_or_none()
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    
+    if offer.status != OfferStatus.pending:
+        raise HTTPException(status_code=400, detail=f"Offer is already {offer.status.value}")
+
+    # 2. Get Candidate/User/Org
+    cand_res = await db.execute(select(Candidate).where(Candidate.id == offer.candidate_id))
+    candidate = cand_res.scalar_one_or_none()
+    
+    user_res = await db.execute(select(User).where(User.id == candidate.user_id))
+    user = user_res.scalar_one_or_none()
+    
+    org_res = await db.execute(select(Organisation).where(Organisation.id == offer.org_id))
+    org = org_res.scalar_one_or_none()
+
+    # 3. Generate and Send Email with PDF
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            pdf_path = tmp.name
+        
+        generate_professional_pdf(offer.offer_content, pdf_path)
+
+        with open(pdf_path, "rb") as f:
+            attachment_bytes = f.read()
+        os.remove(pdf_path)
+
+        await send_offer_letter_email(
+            to_email=user.email,
+            candidate_name=user.full_name or user.email,
+            company_name=org.name if org else "Phygitron 360",
+            role_title=offer.role_title,
+            department=offer.department,
+            salary=offer.salary,
+            location=offer.location,
+            attachment_bytes=attachment_bytes
+        )
+    except Exception as e:
+        logger.error(f"❌ Failed to send approved offer email: {e}")
+        # Try fallback without PDF
+        await send_offer_letter_email(
+            to_email=user.email,
+            candidate_name=user.full_name or user.email,
+            company_name=org.name if org else "Phygitron 360",
+            role_title=offer.role_title,
+            department=offer.department,
+            salary=offer.salary,
+            location=offer.location
+        )
+
+    # 4. Finalize Hire
+    user.role = UserRole.employee
+    candidate.status = CandidateStatus.archived
+    
+    emp = Employee(
+        user_id=user.id,
+        org_id=user.org_id,
+        department=offer.department,
+        join_date=offer.start_date.date() if offer.start_date else datetime.utcnow().date(),
+        status=EmployeeStatus.active,
+    )
+    db.add(emp)
+    
+    offer.status = OfferStatus.approved
+    offer.approved_by = current_user.id
+    
+    await db.commit()
+    return success({"employee_id": emp.id}, "Offer approved and sent to candidate.")
+
+
+@router.post("/offers/{offer_id}/reject")
+async def reject_offer(
+    offer_id: int,
+    current_user: User = Depends(require_role(["org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(OfferLetter).where(OfferLetter.id == offer_id, OfferLetter.org_id == current_user.org_id))
+    offer = result.scalar_one_or_none()
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    offer.status = OfferStatus.rejected
+    
+    # Revert candidate status
+    cand_res = await db.execute(select(Candidate).where(Candidate.id == offer.candidate_id))
+    candidate = cand_res.scalar_one_or_none()
+    if candidate:
+        candidate.status = CandidateStatus.shortlisted
+
+    await db.commit()
+    return success(message="Offer rejected and candidate returned to shortlist.")
 

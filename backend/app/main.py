@@ -12,7 +12,7 @@ UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # await init_db()
+    await init_db()
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     yield
 

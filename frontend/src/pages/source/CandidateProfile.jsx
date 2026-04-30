@@ -169,7 +169,7 @@ export default function CandidateProfile() {
     setConverting(true);
     try {
       await sourceApi.convertToEmployee(id, { ...convertForm, offer_content: previewData });
-      toast.success('Hired! Employee created and Offer Letter sent! 🎊');
+      toast.success('Offer submitted for approval! 📝');
       setShowPreview(false);
       const r = await sourceApi.getCandidate(id);
       setData(r.data.data);

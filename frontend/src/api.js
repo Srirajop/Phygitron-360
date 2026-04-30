@@ -69,6 +69,10 @@ export const sourceApi = {
   getBulkUploads: () => api.get('/api/v1/source/bulk-uploads'),
   getBulkUploadStatus: (id) => api.get(`/api/v1/source/bulk-uploads/${id}`),
   cancelBulkUpload: (id) => api.post(`/api/v1/source/bulk-uploads/${id}/cancel`, {}),
+  listOffers: (status) => api.get('/api/v1/source/offers', { params: { status } }),
+  updateOffer: (id, data) => api.put(`/api/v1/source/offers/${id}`, data),
+  approveOffer: (id) => api.post(`/api/v1/source/offers/${id}/approve`),
+  rejectOffer: (id) => api.post(`/api/v1/source/offers/${id}/reject`),
 };
 
 // ── Verify ────────────────────────────────────────────────────────────────

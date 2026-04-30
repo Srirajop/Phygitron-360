@@ -21,6 +21,7 @@ const roleNavItems = {
       { to: '/source/upload', label: 'Upload Resumes', icon: Upload },
       { to: '/source', label: 'Talent Vault', icon: Users },
       { to: '/source/active', label: 'Active Candidates', icon: UserCheck },
+      { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
     ]},
     { section: 'Verify', module: 'verify', items: [
       { to: '/verify/manage', label: 'Assessments', icon: CheckSquare },
@@ -43,6 +44,7 @@ const roleNavItems = {
       { to: '/source/upload', label: 'Upload Resumes', icon: Upload },
       { to: '/source', label: 'Talent Vault', icon: Users },
       { to: '/source/active', label: 'Active Candidates', icon: UserCheck },
+      { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
     ]},
     { section: 'Verify', module: 'verify', items: [
       { to: '/verify/manage', label: 'Assessments', icon: CheckSquare },
@@ -86,6 +88,7 @@ const roleNavItems = {
   manager: [
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'My Team', icon: Users },
+      { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
       { to: '/deploy/attendance', label: 'Attendance', icon: Clock },
       { to: '/deploy/analytics', label: 'Analytics', icon: BarChart2 },
     ]},
