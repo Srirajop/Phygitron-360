@@ -3,8 +3,8 @@ import { adminApi } from '../../api';
 import { UserPlus, Shield, UserX, CheckCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-const ROLES = ['candidate', 'employee', 'hr', 'instructor', 'manager', 'admin'];
-const ROLE_BADGE = { admin: 'badge-danger', hr: 'badge-primary', manager: 'badge-info', instructor: 'badge-warning', employee: 'badge-success', candidate: 'badge-muted' };
+const ROLES = ['candidate', 'employee', 'hr', 'instructor', 'manager', 'org_admin'];
+const ROLE_BADGE = { org_admin: 'badge-danger', hr: 'badge-primary', manager: 'badge-info', instructor: 'badge-warning', employee: 'badge-success', candidate: 'badge-muted' };
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);

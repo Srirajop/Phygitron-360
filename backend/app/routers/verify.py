@@ -1,7 +1,10 @@
 import json
+import logging
+import traceback
 from datetime import datetime
+from decimal import Decimal
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, BackgroundTasks
 from app.utils.import_utils import extract_text_from_file, parse_questions_with_ai
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -12,13 +15,107 @@ from app.models.verify import (
     Assessment, AssessmentQuestion, AssessmentAssignment,
     AssessmentResult, ProctoringFlag, ProctoringFlagType, AssessmentStatus, AssignmentStatus
 )
-from app.utils.auth import get_current_user, require_role
+from app.utils.auth import get_current_user, require_role, require_module
+from app.utils.email import send_assignment_notification_email
+from app.utils.s3 import upload_bytes_to_s3
 
-router = APIRouter(prefix="/api/v1/verify", tags=["Verify"])
+router = APIRouter(prefix="/api/v1/verify", tags=["Verify"], dependencies=[Depends(require_module("verify"))])
+logger = logging.getLogger(__name__)
 
 
 def success(data=None, message=""):
     return {"success": True, "data": data if data is not None else {}, "message": message}
+
+
+def _extract_examples_from_text(text: str) -> list:
+    import re
+
+    if not text:
+        return []
+
+    def split_top_level_args(raw: str) -> list:
+        parts = []
+        current = []
+        depth = 0
+        in_string = False
+        string_char = ""
+
+        for ch in raw:
+            if in_string:
+                current.append(ch)
+                if ch == string_char:
+                    in_string = False
+                continue
+
+            if ch in {"'", '"'}:
+                in_string = True
+                string_char = ch
+                current.append(ch)
+                continue
+
+            if ch in {"[", "{", "("}:
+                depth += 1
+            elif ch in {"]", "}", ")"} and depth > 0:
+                depth -= 1
+
+            if ch == "," and depth == 0:
+                part = "".join(current).strip()
+                if part:
+                    parts.append(part)
+                current = []
+                continue
+
+            current.append(ch)
+
+        tail = "".join(current).strip()
+        if tail:
+            parts.append(tail)
+        return parts
+
+    cases = []
+    pattern = re.compile(r"Input:\s*(.*?)\s*Output:\s*(.*?)(?=(?:\n\s*Example|\Z))", re.IGNORECASE | re.DOTALL)
+    for match in pattern.finditer(text):
+        raw_input = re.sub(r"`", "", match.group(1)).strip()
+        raw_output = re.sub(r"`", "", match.group(2)).strip()
+        if not raw_input or not raw_output:
+            continue
+
+        # Strip trailing "Explanation:", "Constraints:", "Note:", "Follow-up:" etc.
+        # These appear after the actual answer and should not be part of expected_output.
+        raw_output = re.split(
+            r"\n\s*(?:Explanation|Constraints|Note|Follow.?up|Hint)\s*:",
+            raw_output,
+            maxsplit=1,
+            flags=re.IGNORECASE
+        )[0].strip()
+
+        normalized_parts = []
+        for part in split_top_level_args(raw_input):
+            normalized_parts.append(re.sub(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*", "", part).strip())
+
+        cases.append({
+            "input": "\n".join(part for part in normalized_parts if part),
+            "expected_output": raw_output,
+        })
+    return cases
+
+
+
+def _pick_python_starter_code(code_snippets: list, fallback_title: str = "solution") -> str:
+    for snippet in (code_snippets or []):
+        lang = (snippet.get("langSlug") or "").lower()
+        code = snippet.get("code") or ""
+        if lang in {"python", "python3"} and code.strip():
+            return code
+
+    safe_name = "".join(ch if ch.isalnum() else "_" for ch in (fallback_title or "solution").lower()).strip("_") or "solution"
+    return (
+        "def "
+        f"{safe_name}"
+        "(input_data):\n"
+        "    # Write your code here\n"
+        "    pass\n"
+    )
 
 
 # ── Assessment Builder ────────────────────────────────────────────────────────
@@ -36,6 +133,7 @@ class QuestionCreate(BaseModel):
     skill_id: Optional[int] = None
     marks: float = 1.0
     order_index: int = 0
+    images: Optional[List[str]] = []
 
 
 class AssessmentCreate(BaseModel):
@@ -52,7 +150,7 @@ class AssessmentCreate(BaseModel):
 @router.post("/assessments")
 async def create_assessment(
     body: AssessmentCreate,
-    current_user: User = Depends(require_role(["hr", "admin", "instructor"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
     db: AsyncSession = Depends(get_db),
 ):
     assessment = Assessment(
@@ -71,6 +169,25 @@ async def create_assessment(
     await db.flush()
 
     for q in body.questions:
+        normalized_test_cases = q.test_cases
+        normalized_language = q.programming_language
+        if q.question_type == "coding":
+            normalized_test_cases = _prepare_test_cases(q.test_cases or [])
+            if len(normalized_test_cases) < 3:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Each coding question must have at least 3 test cases before it can be saved.",
+                )
+            if any(not str(tc.get("expected_output", "")).strip() for tc in normalized_test_cases):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Every coding test case must include an expected output.",
+                )
+            try:
+                normalized_language = _normalize_language(q.programming_language or "python")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
         question = AssessmentQuestion(
             assessment_id=assessment.id,
             question_text=q.question_text,
@@ -79,12 +196,13 @@ async def create_assessment(
             correct_answer=q.correct_answer,
             model_answer=q.model_answer,
             starter_code=q.starter_code,
-            test_cases=q.test_cases,
-            programming_language=q.programming_language,
+            test_cases=normalized_test_cases,
+            programming_language=normalized_language,
             accepted_file_types=q.accepted_file_types,
             skill_id=q.skill_id,
             marks=q.marks,
             order_index=q.order_index,
+            images=q.images,
         )
         db.add(question)
 
@@ -95,7 +213,7 @@ async def create_assessment(
 @router.post("/import-questions")
 async def import_questions(
     file: UploadFile = File(...),
-    current_user: User = Depends(require_role(["hr", "admin", "instructor"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
 ):
     try:
         content = await file.read()
@@ -105,15 +223,203 @@ async def import_questions(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+class URLImportRequest(BaseModel):
+    url: str
+
+@router.post("/import-url")
+async def import_url(
+    body: URLImportRequest,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+):
+    try:
+        import httpx
+        from bs4 import BeautifulSoup
+        import re
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": "https://leetcode.com/",
+        }
+
+        # --- Specialized LeetCode Handler ---
+        if "leetcode.com" in body.url.lower():
+            match = re.search(r"leetcode\.com/problems/([^/]+)", body.url.lower())
+            if match:
+                title_slug = match.group(1)
+                async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                    graphql_url = "https://leetcode.com/graphql"
+                    query = """
+                    query questionData($titleSlug: String!) {
+                        question(titleSlug: $titleSlug) {
+                            title
+                            content
+                            stats
+                            topicTags { name }
+                            codeSnippets { langSlug code }
+                            exampleTestcases
+                            sampleTestCase
+                        }
+                    }
+                    """
+                    payload = {
+                        "operationName": "questionData",
+                        "variables": {"titleSlug": title_slug},
+                        "query": query
+                    }
+                    resp = await client.post(graphql_url, json=payload, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json().get("data", {}).get("question", {})
+                        if data and data.get("content"):
+                            # Use BeautifulSoup with newline separator to preserve formatting
+                            soup = BeautifulSoup(data["content"], 'html.parser')
+                            
+                            # Extract ALL image URLs and replace with Markdown
+                            all_imgs = []
+                            for img in soup.find_all('img'):
+                                src = img.get('src')
+                                if src:
+                                    all_imgs.append(src)
+                                    img.replace_with(f"![image]({src})")
+                            
+                            # Preserve block-level formatting
+                            for tag in soup.find_all(['p', 'div', 'ul', 'ol', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'blockquote']):
+                                tag.insert_before('\n\n')
+                                tag.insert_after('\n\n')
+                            for tag in soup.find_all('br'):
+                                tag.replace_with('\n')
+                            for tag in soup.find_all('li'):
+                                tag.insert_before('\n- ')
+                                
+                            content_text = soup.get_text()
+                            
+                            # Clean up whitespace while preserving paragraphs
+                            content_text = re.sub(r'[ \t]+', ' ', content_text)
+                            content_text = re.sub(r'\n[ \t]*\n+', '\n\n', content_text).strip()
+                            
+                            title = data.get("title") or title_slug.replace("-", " ").title()
+                            starter_code = _pick_python_starter_code(data.get("codeSnippets") or [], title)
+                            test_cases = _extract_examples_from_text(content_text)
+
+                            if not test_cases:
+                                sample_blob = (data.get("exampleTestcases") or data.get("sampleTestCase") or "").strip()
+                                if sample_blob:
+                                    test_cases = [{"input": sample_blob, "expected_output": ""}]
+
+                            question_text = f"# {title}\n\n{content_text}"
+                            if data.get("topicTags"):
+                                topic_names = [tag.get("name") for tag in data.get("topicTags", []) if tag.get("name")]
+                                if topic_names:
+                                    question_text += f"\n\nTopics: {', '.join(topic_names)}"
+
+                            question = {
+                                "question_text": question_text,
+                                "question_type": "coding",
+                                "options": [],
+                                "correct_answer": None,
+                                "model_answer": None,
+                                "starter_code": starter_code,
+                                "test_cases": test_cases,
+                                "programming_language": "python",
+                                "marks": 5,
+                                "order_index": 0,
+                                "images": all_imgs,
+                            }
+                            return success([question])
+
+        # --- General Scraper Fallback ---
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(body.url, headers=headers)
+            resp.raise_for_status()
+            
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        for element in soup(["script", "style", "nav", "footer", "header"]):
+            element.extract()
+            
+        # Extract ALL image URLs and replace with Markdown for general scraper
+        all_imgs = []
+        for img in soup.find_all('img'):
+            src = img.get('src')
+            if src:
+                if not src.startswith('http'):
+                    from urllib.parse import urljoin
+                    src = urljoin(body.url, src)
+                all_imgs.append(src)
+                img.replace_with(f"![image]({src})")
+
+        text = soup.get_text(separator=' ', strip=True)
+        if len(text) > 15000:
+            text = text[:15000]
+            
+        questions = await parse_questions_with_ai(text)
+        
+        if questions and all_imgs:
+            for q in questions:
+                existing = q.get('images', [])
+                if not isinstance(existing, list): existing = []
+                q['images'] = list(set(existing + all_imgs))
+
+        return success(questions)
+    except Exception as e:
+        logger.error(f"URL Import Error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch or parse URL: {str(e)}")
+
+
+@router.post("/questions/upload-image")
+async def upload_question_image(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+):
+    """Upload an image for a question and return the URL."""
+    try:
+        content = await file.read()
+        file_ext = file.filename.split('.')[-1].lower()
+        if file_ext not in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
+            raise HTTPException(status_code=400, detail="Invalid image format")
+        
+        import uuid
+        s3_key = f"questions/{uuid.uuid4()}.{file_ext}"
+        url = await upload_bytes_to_s3(content, s3_key, file.content_type)
+        return success({"image_url": url})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/submissions/upload-file")
+async def upload_submission_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role(["candidate", "hr", "org_admin"])),
+):
+    """Upload a submission file (ZIP, PDF, etc.) to S3."""
+    try:
+        content = await file.read()
+        file_ext = file.filename.split('.')[-1].lower()
+        
+        # Security: Prevent dangerous file types
+        if file_ext in ['exe', 'bat', 'sh', 'php', 'aspx', 'py', 'js']:
+            raise HTTPException(status_code=400, detail="Forbidden file type")
+            
+        import uuid
+        s3_key = f"submissions/user_{current_user.id}/{uuid.uuid4()}_{file.filename}"
+        url = await upload_bytes_to_s3(content, s3_key, file.content_type)
+        
+        return success({"file_url": url, "filename": file.filename})
+    except HTTPException: raise
+    except Exception as e:
+        logger.error(f"Submission Upload Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/assessments")
 async def list_assessments(
-    current_user: User = Depends(require_role(["hr", "admin", "instructor"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Assessment).where(Assessment.org_id == current_user.org_id).order_by(Assessment.created_at.desc())
-    )
+    query = select(Assessment).order_by(Assessment.created_at.desc())
+    if current_user.role.value != "super_admin":
+        query = query.where(Assessment.org_id == current_user.org_id)
+    result = await db.execute(query)
     assessments = result.scalars().all()
     return success([{
         "id": a.id, "title": a.title, "type": a.type.value, "status": a.status.value,
@@ -128,15 +434,29 @@ async def get_assessment(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Assessment).where(Assessment.id == assessment_id))
+    result = await db.execute(select(Assessment).where(Assessment.id == assessment_id, Assessment.org_id == current_user.org_id))
     a = result.scalar_one_or_none()
     if not a:
-        raise HTTPException(status_code=404, detail="Assessment not found")
+        raise HTTPException(status_code=404, detail="Assessment not found or access denied")
 
     q_result = await db.execute(
         select(AssessmentQuestion).where(AssessmentQuestion.assessment_id == assessment_id).order_by(AssessmentQuestion.order_index)
     )
     questions = q_result.scalars().all()
+    
+    formatted_questions = [{
+        "id": q.id, "question_text": q.question_text, "question_type": q.question_type.value if hasattr(q.question_type, 'value') else q.question_type,
+        "options": q.options, "marks": float(q.marks), "skill_id": q.skill_id,
+        "starter_code": q.starter_code, "test_cases": q.test_cases, "programming_language": q.programming_language,
+        "order_index": q.order_index,
+        "images": q.images or [],
+    } for q in questions]
+
+    if current_user.role.value == "candidate":
+        assgn_res = await db.execute(select(AssessmentAssignment).where(AssessmentAssignment.assessment_id == assessment_id, AssessmentAssignment.user_id == current_user.id))
+        assgn = assgn_res.scalar_one_or_none()
+        if assgn and assgn.custom_questions:
+            formatted_questions = assgn.custom_questions
 
     return success({
         "id": a.id, "title": a.title, "description": a.description,
@@ -144,19 +464,14 @@ async def get_assessment(
         "pass_score": float(a.pass_score), "shuffle_questions": a.shuffle_questions,
         "show_result_immediately": a.show_result_immediately,
         "status": a.status.value,
-        "questions": [{
-            "id": q.id, "question_text": q.question_text, "question_type": q.question_type.value,
-            "options": q.options, "marks": float(q.marks), "skill_id": q.skill_id,
-            "starter_code": q.starter_code, "test_cases": q.test_cases, "programming_language": q.programming_language,
-            "order_index": q.order_index,
-        } for q in questions],
+        "questions": formatted_questions,
     })
 
 
 @router.post("/assessments/{assessment_id}/publish")
 async def publish_assessment(
     assessment_id: int,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Assessment).where(Assessment.id == assessment_id))
@@ -174,36 +489,123 @@ class AssignRequest(BaseModel):
     user_ids: List[int]
     deadline: Optional[str] = None
 
+async def generate_variants_bg(assessment_id: int, user_ids: list):
+    from app.database import AsyncSessionLocal
+    from app.agents.agents import call_llm
+    
+    async with AsyncSessionLocal() as db:
+        q_res = await db.execute(select(AssessmentQuestion).where(AssessmentQuestion.assessment_id == assessment_id).order_by(AssessmentQuestion.order_index))
+        base_questions = q_res.scalars().all()
+        if not base_questions: return
+        
+        base_q_list = [{
+            "id": q.id, "question_text": q.question_text, "question_type": q.question_type.value if hasattr(q.question_type, 'value') else q.question_type,
+            "options": q.options, "marks": float(q.marks), "skill_id": q.skill_id,
+            "starter_code": q.starter_code, "test_cases": q.test_cases, "programming_language": q.programming_language,
+            "order_index": q.order_index,
+        } for q in base_questions]
+        
+        system_prompt = "You are an expert instructional designer and anti-cheating AI."
+        
+        for user_id in user_ids:
+            try:
+                user_prompt = f"Create a cheat-proof variant of this assessment. Rewrite the 'question_text' to use completely different scenarios or wording but test the exact same concept and difficulty. ALSO, randomly shuffle the 'options' and update the 'correct_answer' accordingly to match the new options list. Return ONLY a JSON array of the updated questions. Keep the exact same JSON schema.\nQuestions:\n{json.dumps(base_q_list)}"
+                ai_res = call_llm(system_prompt, user_prompt)
+                custom_q = ai_res.get("questions") if isinstance(ai_res, dict) and "questions" in ai_res else ai_res
+                
+                if custom_q and isinstance(custom_q, list):
+                    assgn_res = await db.execute(select(AssessmentAssignment).where(AssessmentAssignment.assessment_id == assessment_id, AssessmentAssignment.user_id == user_id))
+                    assgn = assgn_res.scalar_one_or_none()
+                    if assgn:
+                        assgn.custom_questions = custom_q
+                        await db.commit()
+            except Exception as e:
+                print(f"Failed to generate custom variant for user {user_id}: {e}")
+
+from fastapi import BackgroundTasks
 
 @router.post("/assessments/{assessment_id}/assign")
 async def assign_assessment(
     assessment_id: int,
     body: AssignRequest,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     from datetime import datetime
     deadline = datetime.fromisoformat(body.deadline) if body.deadline else None
     assigned = 0
+    
+    # Pre-fetch assessment metadata for email
+    asmt_res = await db.execute(select(Assessment).where(Assessment.id == assessment_id))
+    asmt_obj = asmt_res.scalar_one_or_none()
+    
+    q_count_res = await db.execute(select(func.count(AssessmentQuestion.id)).where(AssessmentQuestion.assessment_id == assessment_id))
+    q_count = q_count_res.scalar_one() or 0
+    
+    assessment_title = asmt_obj.title if asmt_obj else "New Assessment"
+    time_limit = asmt_obj.time_limit_minutes if asmt_obj else None
+    pass_score = asmt_obj.pass_score if asmt_obj else None
+
+    new_assignments = []
     for uid in body.user_ids:
-        existing = await db.execute(
+        existing_res = await db.execute(
             select(AssessmentAssignment).where(
                 AssessmentAssignment.assessment_id == assessment_id,
                 AssessmentAssignment.user_id == uid
             )
         )
-        if existing.scalar_one_or_none():
-            continue
-        assgn = AssessmentAssignment(
-            assessment_id=assessment_id,
-            user_id=uid,
-            assigned_by=current_user.id,
-            deadline=deadline,
-            status=AssignmentStatus.pending,
-        )
-        db.add(assgn)
-        assigned += 1
+        existing_assgn = existing_res.scalar_one_or_none()
+        
+        if existing_assgn:
+            # Re-assign: Reset status and metadata
+            existing_assgn.status = AssignmentStatus.pending
+            existing_assgn.started_at = None
+            existing_assgn.deadline = deadline
+            existing_assgn.assigned_by = current_user.id
+            new_assignments.append(uid)
+            assigned += 1
+        else:
+            # New assignment
+            assgn = AssessmentAssignment(
+                assessment_id=assessment_id,
+                user_id=uid,
+                assigned_by=current_user.id,
+                deadline=deadline,
+                status=AssignmentStatus.pending,
+            )
+            db.add(assgn)
+            new_assignments.append(uid)
+            assigned += 1
+    
     await db.commit()
+
+    # Send notifications in background (best effort)
+    if skipped := len(body.user_ids) - assigned:
+        print(f"Skipped {skipped} existing assignments.")
+
+    for uid in new_assignments:
+        user_res = await db.execute(select(User).where(User.id == uid))
+        user_obj = user_res.scalar_one_or_none()
+        if user_obj and user_obj.email:
+            try:
+                import asyncio
+                # Offload email to avoid blocking the main thread too much
+                asyncio.create_task(send_assignment_notification_email(
+                    to_email=user_obj.email,
+                    candidate_name=user_obj.full_name or user_obj.email.split('@')[0],
+                    assessment_title=assessment_title,
+                    deadline=body.deadline,
+                    duration_mins=time_limit,
+                    question_count=q_count,
+                    pass_score=pass_score
+                ))
+            except Exception as e:
+                print(f"Failed to trigger email for {user_obj.email}: {e}")
+
+    if new_assignments:
+        background_tasks.add_task(generate_variants_bg, assessment_id, new_assignments)
+
     return success({"assigned": assigned})
 
 
@@ -232,202 +634,938 @@ async def my_assessments(
 # ── Execution Sandbox ──────────────────────────────────────────────────────────
 
 class RunCodeRequest(BaseModel):
-    language: str
+    language: str = "python"
     code: str
-    stdin: str = ""
-    test_cases: list = []
+    stdin: Optional[str] = ""
+    test_cases: Optional[list] = None
 
-def wrap_code_for_execution(code: str, language: str, test_cases: list = []) -> str:
-    import re, json
-    if language == "python":
-        # Identify the main function name (last defined function)
-        func_match = list(re.finditer(r'def\s+([a-zA-Z0-9_]+)\s*\(', code))
-        if not func_match: return code
-        
-        func_name = func_match[-1].group(1)
-        is_class = "class " in code
-        
-        # Improved method detection
+SUPPORTED_CODE_LANGUAGES = {"python", "javascript", "java", "cpp"}
+
+
+def _normalize_language(language: str) -> str:
+    lang = (language or "python").lower().strip()
+    language_aliases = {
+        "c++": "cpp",
+        "cpp17": "cpp",
+        "python3": "python",
+        "py": "python",
+        "js": "javascript",
+        "node": "javascript",
+        "nodejs": "javascript",
+    }
+    normalized = language_aliases.get(lang, lang)
+    if normalized not in SUPPORTED_CODE_LANGUAGES:
+        raise ValueError(
+            f"Unsupported language '{language}'. Supported languages: Python 3, JavaScript, Java, and C++."
+        )
+    return normalized
+
+
+def _prepare_test_cases(test_cases: list) -> list:
+    prepared = []
+    for tc in test_cases or []:
+        if not isinstance(tc, dict):
+            continue
+        expected = tc.get("expected_output", tc.get("expected", ""))
+        prepared.append({
+            "input": "" if tc.get("input") is None else str(tc.get("input", "")),
+            "expected_output": "" if expected is None else str(expected),
+        })
+    return prepared
+
+
+def _compact_json(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _normalize_output_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return _compact_json(value)
+
+
+def _normalize_compare_value(value) -> str:
+    import ast
+
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return _compact_json(value)
+
+    text = value.strip()
+    if not text:
+        return ""
+
+    for parser in (json.loads, ast.literal_eval):
         try:
-            is_method = "self" in func_match[-1].group(0) or "self" in code.split('def '+func_name)[-1].split(')')[0]
-        except:
-            is_method = "self" in code
-        
-        class_name = "Solution"
-        if is_class:
-            class_match = re.search(r'class\s+([a-zA-Z0-9_]+)', code)
-            class_name = class_match.group(1) if class_match else "Solution"
+            parsed = parser(text)
+            return _compact_json(parsed) if not isinstance(parsed, str) else parsed.strip()
+        except Exception:
+            continue
+    return "".join(text.split())
 
-        if test_cases:
-            tc_json = json.dumps(test_cases)
-            wrapper = f"""
-import sys, json, ast, inspect
+
+def _split_inline_args(raw: str) -> list:
+    parts = []
+    current = []
+    depth = 0
+    in_string = False
+    string_char = ""
+
+    for ch in str(raw):
+        if in_string:
+            current.append(ch)
+            if ch == string_char:
+                in_string = False
+            continue
+
+        if ch in {"'", '"'}:
+            in_string = True
+            string_char = ch
+            current.append(ch)
+            continue
+
+        if ch in {"[", "{", "("}:
+            depth += 1
+        elif ch in {"]", "}", ")"} and depth > 0:
+            depth -= 1
+
+        if ch == "," and depth == 0:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+            continue
+
+        current.append(ch)
+
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _clean_inline_arg(raw: str) -> str:
+    import re
+
+    return re.sub(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*", "", str(raw)).strip()
+
+
+def _extract_python_entry(code: str):
+    import re
+
+    func_matches = list(re.finditer(r"^\s*def\s+([a-zA-Z0-9_]+)\s*\(", code, re.MULTILINE))
+    if not func_matches:
+        return None, None
+
+    class_matches = list(re.finditer(r"^\s*class\s+([a-zA-Z0-9_]+)\s*[\(:]", code, re.MULTILINE))
+    func_name = func_matches[-1].group(1)
+    class_name = class_matches[-1].group(1) if class_matches else None
+    return func_name, class_name
+
+
+def _extract_javascript_entry(code: str):
+    import re
+
+    patterns = [
+        r"function\s+([a-zA-Z0-9_]+)\s*\(",
+        r"const\s+([a-zA-Z0-9_]+)\s*=\s*\(",
+        r"const\s+([a-zA-Z0-9_]+)\s*=\s*function\s*\(",
+        r"var\s+([a-zA-Z0-9_]+)\s*=\s*function\s*\(",
+        r"let\s+([a-zA-Z0-9_]+)\s*=\s*function\s*\(",
+        r"var\s+([a-zA-Z0-9_]+)\s*=\s*\(",
+        r"let\s+([a-zA-Z0-9_]+)\s*=\s*\(",
+    ]
+    matches = []
+    for pattern in patterns:
+        matches.extend(re.finditer(pattern, code))
+    if not matches:
+        return None
+    return matches[-1].group(1)
+
+
+def _supports_batch_harness(code: str, language: str) -> bool:
+    if language == "python":
+        return _extract_python_entry(code)[0] is not None
+    if language == "javascript":
+        return _extract_javascript_entry(code) is not None
+    return False
+
+
+def _parse_batch_results(stdout: str):
+    start_marker = "---BATCH_RESULTS_START---"
+    end_marker = "---BATCH_RESULTS_END---"
+    if start_marker not in stdout or end_marker not in stdout:
+        return []
+    try:
+        payload = stdout.split(start_marker, 1)[1].split(end_marker, 1)[0].strip()
+        return json.loads(payload)
+    except Exception:
+        return []
+
+
+# ── LeetCode-style Solution class detection & wrapping ────────────────────────
+
+def _is_solution_class(code: str, language: str) -> bool:
+    import re
+    if language == "java":
+        return bool(re.search(r'\bclass\s+Solution\b', code)) and not bool(re.search(r'public\s+static\s+void\s+main\s*\(', code))
+    if language == "cpp":
+        return bool(re.search(r'\bclass\s+Solution\b', code)) and not bool(re.search(r'\bint\s+main\s*\(', code))
+    return False
+
+
+def _extract_java_solution_method(code: str):
+    import re
+    for m in re.finditer(r'public\s+([\w<>\[\],\s]+?)\s+(\w+)\s*\(([^)]*)\)', code):
+        name = m.group(2)
+        if name not in ("Solution", "main"):
+            return m.group(1).strip(), name, m.group(3).strip()
+    return None, None, None
+
+
+def _parse_type_params(params_str: str):
+    """Split 'int[] nums, int target' → [('int[]','nums'), ('int','target')]"""
+    if not params_str.strip():
+        return []
+    parts, depth, cur = [], 0, ""
+    for ch in params_str:
+        if ch in "<([": depth += 1
+        elif ch in ">)]": depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(cur.strip()); cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur.strip())
+    result = []
+    for p in parts:
+        seg = p.strip().rsplit(None, 1)
+        if len(seg) == 2:
+            result.append((seg[0].strip(), seg[1].strip()))
+    return result
+
+
+def _java_parse(t: str, var: str) -> str:
+    t = t.strip().replace("final ", "")
+    if t == "int":           return f"Integer.parseInt({var}.trim())"
+    if t == "long":          return f"Long.parseLong({var}.trim())"
+    if t in ("double","float"): return f"Double.parseDouble({var}.trim())"
+    if t == "boolean":       return f"Boolean.parseBoolean({var}.trim())"
+    if t == "char":          return f"{var}.trim().charAt(0)"
+    if t == "String":        return f"{var}.trim()"
+    if t == "int[]":         return f"__intArr({var})"
+    if t == "long[]":        return f"__longArr({var})"
+    if t == "double[]":      return f"__dblArr({var})"
+    if t == "String[]":      return f"__strArr({var})"
+    if t == "char[]":        return f"{var}.trim().replaceAll(\"[\\\\[\\\\]\\\"']\",\"\").toCharArray()"
+    if "List<Integer>" in t: return f"__intList({var})"
+    if "List<String>" in t:  return f"__strList({var})"
+    if "List<List<Integer>>" in t: return f"__intListList({var})"
+    return var
+
+
+def _java_print(t: str, var: str) -> str:
+    t = t.strip()
+    if t in ("int","long","double","float","boolean","String","char","void"): return f"System.out.println({var});"
+    if t == "int[]":   return f"System.out.println(java.util.Arrays.toString({var}).replace(\", \",\",\"));"
+    if t == "long[]":  return f"System.out.println(java.util.Arrays.toString({var}).replace(\", \",\",\"));"
+    if t == "char[]":  return f"System.out.println(new String({var}));"
+    if "List" in t:    return f"System.out.println({var}.toString().replace(\", \",\",\"));"
+    return f"System.out.println({var});"
+
+
+def _wrap_java_solution(code: str) -> str:
+    import re
+    # Remove 'public' from class Solution so file can have public class Main
+    code = re.sub(r'\bpublic\s+(class\s+Solution\b)', r'\1', code)
+    ret, name, params_str = _extract_java_solution_method(code)
+    if not name:
+        return code
+    params = _parse_type_params(params_str)
+
+    read_lines = []
+    call_args = []
+    for i, (ptype, pname) in enumerate(params):
+        vraw = f"__raw{i}"
+        read_lines.append(f"        String {vraw} = __sc.hasNextLine() ? __sc.nextLine().trim() : \"\";")
+        read_lines.append(f"        {ptype} {pname} = {_java_parse(ptype, vraw)};")
+        call_args.append(pname)
+
+    call = f"sol.{name}({', '.join(call_args)})"
+    if ret and ret != "void":
+        run_block = f"        {ret} __r = {call};\n        {_java_print(ret, '__r')}"
+    else:
+        run_block = f"        {call};"
+
+    body = "\n".join(read_lines) + "\n" + run_block
+
+    return f"""import java.util.*;
+import java.util.stream.*;
+
+{code}
+
+public class Main {{
+    static Scanner __sc = new Scanner(System.in);
+
+    static int[]    __intArr(String s) {{ s=s.trim().replaceAll("^\\\\[|\\\\]$",""); if(s.isEmpty()) return new int[0]; return Arrays.stream(s.split(",")).mapToInt(x->Integer.parseInt(x.trim())).toArray(); }}
+    static long[]   __longArr(String s) {{ s=s.trim().replaceAll("^\\\\[|\\\\]$",""); if(s.isEmpty()) return new long[0]; return Arrays.stream(s.split(",")).mapToLong(x->Long.parseLong(x.trim())).toArray(); }}
+    static double[] __dblArr(String s) {{ s=s.trim().replaceAll("^\\\\[|\\\\]$",""); if(s.isEmpty()) return new double[0]; return Arrays.stream(s.split(",")).mapToDouble(x->Double.parseDouble(x.trim())).toArray(); }}
+    static String[] __strArr(String s) {{ s=s.trim().replaceAll("^\\\\[|\\\\]$",""); if(s.isEmpty()) return new String[0]; return Arrays.stream(s.split(",")).map(x->x.trim().replaceAll("^\\"|\\"$","")).toArray(String[]::new); }}
+    static List<Integer> __intList(String s) {{ int[] a=__intArr(s); List<Integer> l=new ArrayList<>(); for(int x:a) l.add(x); return l; }}
+    static List<String>  __strList(String s) {{ return new ArrayList<>(Arrays.asList(__strArr(s))); }}
+    static List<List<Integer>> __intListList(String s) {{
+        s=s.trim(); List<List<Integer>> r=new ArrayList<>(); if(s.equals("[]")) return r;
+        s=s.substring(1,s.length()-1); int d=0; StringBuilder c=new StringBuilder();
+        for(char ch:s.toCharArray()) {{ if(ch=='[') d++; else if(ch==']') d--; if(ch==','&&d==0) {{ r.add(__intList(c.toString())); c=new StringBuilder(); }} else c.append(ch); }}
+        if(c.length()>0) r.add(__intList(c.toString())); return r;
+    }}
+
+    public static void main(String[] args) {{
+        try {{
+            Solution sol = new Solution();
+{body}
+        }} catch(Exception e) {{ System.err.println(e.toString()); }}
+    }}
+}}"""
+
+
+def _extract_cpp_solution_method(code: str):
+    import re
+    # Find methods inside class Solution: skip constructors/destructors
+    in_class = re.search(r'\bclass\s+Solution\b.*?\{(.*)\}[\s;]*$', code, re.DOTALL)
+    if not in_class:
+        return None, None, None
+    body = in_class.group(1)
+    for m in re.finditer(r'([\w:<>\*&\s]+?)\s+(\w+)\s*\(([^)]*)\)\s*(?:const\s*)?\{', body):
+        name = m.group(2)
+        if not name[0].isupper() and name != "main":
+            return m.group(1).strip(), name, m.group(3).strip()
+    return None, None, None
+
+
+def _cpp_parse(t: str, var: str) -> str:
+    t = t.strip().replace("&","").replace("const ","").strip()
+    if t == "int":          return f"stoi({var})"
+    if t in ("long","long long"): return f"stoll({var})"
+    if t in ("double","float"): return f"stod({var})"
+    if t == "bool":         return f"({var} == \"true\")"
+    if t == "char":         return f"{var}[0]"
+    if t == "string":       return var
+    if "vector<int>" in t or "vector<long" in t: return f"__parseVecInt({var})"
+    if "vector<string>" in t: return f"__parseVecStr({var})"
+    if "vector<vector<int>>" in t: return f"__parseVecVecInt({var})"
+    return var
+
+
+def _cpp_print(t: str, var: str) -> str:
+    t = t.strip()
+    if "vector<vector" in t: return f"cout << __fmtVVI({var}) << endl;"
+    if "vector" in t:        return f"cout << __fmtVI({var}) << endl;"
+    return f"cout << {var} << endl;"
+
+
+def _wrap_cpp_solution(code: str) -> str:
+    ret, name, params_str = _extract_cpp_solution_method(code)
+    if not name:
+        return code
+    params = _parse_type_params(params_str)
+
+    read_lines = []
+    call_args = []
+    for i, (ptype, pname) in enumerate(params):
+        clean_type = ptype.replace("&","").replace("const ","").strip()
+        read_lines.append(f"    string __raw{i}; getline(cin, __raw{i});")
+        read_lines.append(f"    {clean_type} {pname} = {_cpp_parse(ptype, f'__raw{i}')};")
+        call_args.append(pname)
+
+    call = f"sol.{name}({', '.join(call_args)})"
+    if ret and ret != "void":
+        run_block = f"    auto __r = {call};\n    {_cpp_print(ret, '__r')}"
+    else:
+        run_block = f"    {call};"
+
+    body = "\n".join(read_lines) + "\n" + run_block
+
+    return f"""#include <bits/stdc++.h>
+using namespace std;
+
+{code}
+
+vector<int> __parseVecInt(string s) {{
+    s.erase(remove(s.begin(),s.end(),'['),s.end());
+    s.erase(remove(s.begin(),s.end(),']'),s.end());
+    vector<int> v; stringstream ss(s); string t;
+    while(getline(ss,t,',')) {{ t.erase(remove(t.begin(),t.end(),' '),t.end()); if(!t.empty()) v.push_back(stoi(t)); }}
+    return v;
+}}
+vector<string> __parseVecStr(string s) {{
+    s.erase(remove(s.begin(),s.end(),'['),s.end());
+    s.erase(remove(s.begin(),s.end(),']'),s.end());
+    s.erase(remove(s.begin(),s.end(),'"'),s.end());
+    vector<string> v; stringstream ss(s); string t;
+    while(getline(ss,t,',')) {{ t.erase(remove(t.begin(),t.end(),' '),t.end()); if(!t.empty()) v.push_back(t); }}
+    return v;
+}}
+vector<vector<int>> __parseVecVecInt(string s) {{
+    vector<vector<int>> r; int d=0; string cur="";
+    for(char c:s) {{ if(c=='['&&d++>0) cur+=c; else if(c==']'&&--d>0) cur+=c; else if(c==']'&&d==0) {{ r.push_back(__parseVecInt(cur)); cur=""; }} else if(c==','&&d==1) {{ }} else if(d>0) cur+=c; }}
+    return r;
+}}
+string __fmtVI(vector<int>& v) {{ string s="["; for(int i=0;i<(int)v.size();i++) {{ if(i) s+=","; s+=to_string(v[i]); }} return s+"]"; }}
+string __fmtVVI(vector<vector<int>>& v) {{ string s="["; for(int i=0;i<(int)v.size();i++) {{ if(i) s+=","; string t="["; for(int j=0;j<(int)v[i].size();j++) {{ if(j) t+=","; t+=to_string(v[i][j]); }} s+=t+"]"; }} return s+"]"; }}
+
+int main() {{
+    try {{
+        Solution sol;
+{body}
+    }} catch(exception& e) {{ cerr << e.what() << endl; }}
+    return 0;
+}}"""
+
+
+def wrap_code_for_execution(code: str, language: str, test_cases: list = None) -> str:
+    test_cases = test_cases or []
+
+    if language == "python":
+        func_name, class_name = _extract_python_entry(code)
+        if not func_name:
+            return code
+
+        tests_literal = _compact_json(test_cases)
+        wrapper = f"""
+import json, ast, traceback
+
+__TEST_CASES = json.loads(r'''{tests_literal}''')
+__ENTRY_FUNC = "{func_name}"
+__ENTRY_CLASS = {repr(class_name)}
+
+def _split_inline_args(raw):
+    parts = []
+    current = []
+    depth = 0
+    in_string = False
+    string_char = ""
+
+    for ch in str(raw):
+        if in_string:
+            current.append(ch)
+            if ch == string_char:
+                in_string = False
+            continue
+
+        if ch in {{"'", '"'}}:
+            in_string = True
+            string_char = ch
+            current.append(ch)
+            continue
+
+        if ch in {{"[", "{{", "("}}:
+            depth += 1
+        elif ch in {{"]", "}}", ")"}} and depth > 0:
+            depth -= 1
+
+        if ch == "," and depth == 0:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+            continue
+
+        current.append(ch)
+
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+def _clean_inline_arg(raw):
+    import re
+    return re.sub(r"^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*", "", str(raw)).strip()
+
+def __parse_value(raw):
+    if not isinstance(raw, str):
+        return raw
+    text = raw.strip()
+    if not text:
+        return None
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            return parser(text)
+        except Exception:
+            continue
+    return text
+
+def __parse_args(raw):
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        args = raw.get("args")
+        if isinstance(args, list):
+            return args
+        return [raw]
+    if raw is None:
+        return []
+    text = str(raw).strip()
+    if not text:
+        return []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) > 1:
+        return [__parse_value(line) for line in lines]
+    inline_parts = [_clean_inline_arg(part) for part in _split_inline_args(lines[0])]
+    if len(inline_parts) > 1:
+        return [__parse_value(part) for part in inline_parts]
+    value = __parse_value(lines[0])
+    if isinstance(value, dict) and isinstance(value.get("args"), list):
+        return value["args"]
+    if value is None:
+        return []
+    return [value]
+
+def __normalize_output(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+def __resolve_target():
+    target = None
+    if __ENTRY_CLASS:
+        cls = globals().get(__ENTRY_CLASS)
+        if cls:
+            try:
+                target = getattr(cls(), __ENTRY_FUNC, None)
+            except Exception:
+                target = None
+    if target is None:
+        target = globals().get(__ENTRY_FUNC)
+    return target
 
 def __run_batch_harness():
-    try:
-        test_cases = json.loads('''{tc_json}''')
-        results = []
-        
-        target_fn = None
-        if {is_class}:
-            try: 
-                class_inst = {class_name}()
-                target_fn = getattr(class_inst, "{func_name}", None)
-            except: pass
-        
-        if not target_fn:
-            target_fn = globals().get("{func_name}")
-            
-        if not target_fn:
-            print(json.dumps([{{ "error": "Function '{func_name}' not found" }}]))
-            return
-
-        sig = inspect.signature(target_fn)
-        params = list(sig.parameters.values())
-
-        for tc in test_cases:
-            try:
-                input_raw = tc.get("input", "").strip()
-                args = []
-                if input_raw:
-                    for line in input_raw.splitlines():
-                        line = line.strip()
-                        if not line: continue
-                        try: args.append(json.loads(line))
-                        except:
-                            try: args.append(ast.literal_eval(line))
-                            except: args.append(line)
-                
-                final_args = args
-                if len(params) > 0 and params[0].name == "self" and len(args) < len(params):
-                    final_args = [None] + args
-                
-                res = target_fn(*final_args)
-                if isinstance(res, (list, dict)): res_out = json.dumps(res).replace(" ", "")
-                else: res_out = str(res)
-                results.append({{ "stdout": res_out, "stderr": "" }})
-            except Exception as e:
-                results.append({{ "stdout": "", "stderr": str(e) }})
-        
+    results = []
+    target = __resolve_target()
+    if not callable(target):
+        for _tc in __TEST_CASES:
+            results.append({{"stdout": "", "stderr": f"Entrypoint '{{__ENTRY_FUNC}}' not found"}})
         print("---BATCH_RESULTS_START---")
         print(json.dumps(results))
         print("---BATCH_RESULTS_END---")
-    except Exception as e:
-        print(f"Harness Error: {{e}}", file=sys.stderr)
+        return
+
+    for tc in __TEST_CASES:
+        try:
+            args = __parse_args(tc.get("input"))
+            res = target(*args)
+            results.append({{"stdout": __normalize_output(res), "stderr": ""}})
+        except Exception:
+            results.append({{"stdout": "", "stderr": traceback.format_exc()}})
+
+    print("---BATCH_RESULTS_START---")
+    print(json.dumps(results))
+    print("---BATCH_RESULTS_END---")
 
 __run_batch_harness()
 """
-            return code + "\n" + wrapper
+        return "from typing import *\n" + code + "\n" + wrapper
 
-        # Single-run Stdin Fallback
+    if language == "javascript":
+        func_name = _extract_javascript_entry(code)
+        if not func_name:
+            return code
+        tests_literal = _compact_json(test_cases)
         wrapper = f"""
-import sys, json, ast, inspect
-def __run_test_harness():
-    try:
-        lines = sys.stdin.readlines()
-        if not lines: return
-        args = []
-        for line in lines:
-            line = line.strip()
-            if not line: continue
-            try: args.append(json.loads(line))
-            except:
-                try: args.append(ast.literal_eval(line))
-                except: args.append(line)
-        target_fn = None
-        if {is_class}:
-            try: 
-                class_inst = {class_name}()
-                target_fn = getattr(class_inst, "{func_name}", None)
-            except: pass
-        if not target_fn: target_fn = globals().get("{func_name}")
-        if not target_fn: return
-        sig = inspect.signature(target_fn)
-        params = list(sig.parameters.values())
-        final_args = args
-        if len(params) > 0 and params[0].name == "self" and len(args) < len(params):
-            final_args = [None] + args
-        res = target_fn(*final_args)
-        if res is not None:
-            if isinstance(res, (list, dict)): print(json.dumps(res).replace(" ", ""))
-            else: print(res)
-    except Exception as e:
-        print(f"Runtime Error: {{e}}", file=sys.stderr)
-__run_test_harness()
+const __TEST_CASES = JSON.parse(String.raw`{tests_literal}`);
+const __ENTRY_FUNC = "{func_name}";
+
+function __parseValue(raw) {{
+  if (typeof raw !== "string") return raw;
+  const text = raw.trim();
+  if (!text) return null;
+  try {{ return JSON.parse(text); }} catch (e) {{}}
+  return text;
+}}
+
+function __splitInlineArgs(raw) {{
+  const parts = [];
+  let current = "";
+  let depth = 0;
+  let inString = false;
+  let stringChar = "";
+
+  for (const ch of String(raw)) {{
+    if (inString) {{
+      current += ch;
+      if (ch === stringChar) inString = false;
+      continue;
+    }}
+
+    if (ch === "'" || ch === '"') {{
+      inString = true;
+      stringChar = ch;
+      current += ch;
+      continue;
+    }}
+
+    if ("[{{(".includes(ch)) depth += 1;
+    else if ("]}})".includes(ch) && depth > 0) depth -= 1;
+
+    if (ch === "," && depth === 0) {{
+      const part = current.trim();
+      if (part) parts.push(part);
+      current = "";
+      continue;
+    }}
+
+    current += ch;
+  }}
+
+  const tail = current.trim();
+  if (tail) parts.push(tail);
+  return parts;
+}}
+
+function __parseArgs(raw) {{
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") {{
+    if (Array.isArray(raw.args)) return raw.args;
+    return [raw];
+  }}
+  if (raw == null) return [];
+  const text = String(raw).trim();
+  if (!text) return [];
+  const lines = text.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 1) return lines.map(__parseValue);
+  const inlineParts = __splitInlineArgs(lines[0])
+    .map((part) => part.trim().replace(/^[A-Za-z_][A-Za-z0-9_]*\\s*=\\s*/, ""))
+    .filter(Boolean);
+  if (inlineParts.length > 1) return inlineParts.map(__parseValue);
+  const value = __parseValue(lines[0]);
+  if (value && typeof value === "object" && Array.isArray(value.args)) return value.args;
+  return value == null ? [] : [value];
+}}
+
+function __normalizeOutput(value) {{
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  return JSON.stringify(value);
+}}
+
+function __runBatchHarness() {{
+  const results = [];
+  let target = globalThis[__ENTRY_FUNC];
+  if (typeof target !== "function") {{
+    try {{ target = eval(__ENTRY_FUNC); }} catch (e) {{}}
+  }}
+  if (typeof target !== "function") {{
+    for (const _tc of __TEST_CASES) {{
+      results.push({{ stdout: "", stderr: `Entrypoint '${{__ENTRY_FUNC}}' not found` }});
+    }}
+    console.log("---BATCH_RESULTS_START---");
+    console.log(JSON.stringify(results));
+    console.log("---BATCH_RESULTS_END---");
+    return;
+  }}
+
+  for (const tc of __TEST_CASES) {{
+    try {{
+      const args = __parseArgs(tc.input);
+      const res = target(...args);
+      results.push({{ stdout: __normalizeOutput(res), stderr: "" }});
+    }} catch (e) {{
+      results.push({{ stdout: "", stderr: String(e && e.stack ? e.stack : e) }});
+    }}
+  }}
+
+  console.log("---BATCH_RESULTS_START---");
+  console.log(JSON.stringify(results));
+  console.log("---BATCH_RESULTS_END---");
+}}
+
+__runBatchHarness();
 """
         return code + "\n" + wrapper
-    
 
-    
-    if language == "javascript" and "function" in code and "console.log" not in code:
-        match = list(re.finditer(r'function\s+([a-zA-Z0-9_]+)\s*\(', code))
-        if match:
-            func_name = match[-1].group(1)
-            js_wrapper = f"""
-
-const fs = require('fs');
-const __stdin = fs.readFileSync(0, 'utf-8').trim();
-if (__stdin) {{
-    const __args = __stdin.split('\\n').filter(l => l.trim() !== '').map(l => {{
-        try {{ return JSON.parse(l); }} catch(e) {{ return l; }}
-    }});
-    try {{
-        const __res = {func_name}(...__args);
-        if (__res !== undefined) console.log(JSON.stringify(__res).replace(/\\s+/g, ''));
-    }} catch(e) {{ console.error("Execution Error:", e); }}
-}}
-"""
-            return code + "\n" + js_wrapper
-    
     return code
+
+
+async def _execute_locally(language: str, wrapped_code: str, stdin: str = ""):
+    import asyncio
+    import os
+    import subprocess
+    import shutil
+    import sys
+    import uuid
+
+    file_map = {
+        "python": "main.py",
+        "javascript": "main.js",
+        "java": "Main.java",
+        "cpp": "main.cpp",
+    }
+    if language not in file_map:
+        raise RuntimeError(f"Local execution is not available for language '{language}'")
+
+    command_map = {
+        "python": [sys.executable, "main.py"],
+        "javascript": ["node", "main.js"],
+    }
+
+    compiler_map = {
+        "java": ["javac", "Main.java"],
+        "cpp": ["g++", "main.cpp", "-O2", "-std=c++17", "-o", "main.exe"],
+    }
+
+    required_binaries = {"python": sys.executable, "javascript": "node", "java": "javac", "cpp": "g++"}
+    binary_name = required_binaries.get(language)
+    if language == "python":
+        python_exists = os.path.exists(sys.executable) or shutil.which(sys.executable) is not None
+        if not python_exists:
+            raise RuntimeError("Required local runtime for Python is not available")
+    elif binary_name and shutil.which(binary_name) is None:
+        raise RuntimeError(f"Required local runtime '{binary_name}' is not installed")
+    if language == "java" and shutil.which("java") is None:
+        raise RuntimeError("Required local runtime 'java' is not installed")
+
+    base_exec_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".verify_exec"))
+    os.makedirs(base_exec_dir, exist_ok=True)
+    temp_dir = os.path.join(base_exec_dir, f"{language}_{uuid.uuid4().hex}")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    try:
+        source_path = os.path.join(temp_dir, file_map[language])
+        with open(source_path, "w", encoding="utf-8") as handle:
+            handle.write(wrapped_code)
+
+        compile_result = None
+        if language in compiler_map:
+            try:
+                compiler = await asyncio.to_thread(
+                    subprocess.run,
+                    compiler_map[language],
+                    cwd=temp_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("Local compilation timed out")
+
+            compile_result = {
+                "stdout": compiler.stdout,
+                "stderr": compiler.stderr,
+                "output": f"{compiler.stdout}{compiler.stderr}",
+                "code": compiler.returncode,
+                "signal": None,
+            }
+            if compiler.returncode != 0:
+                return {
+                    "language": language,
+                    "version": "local",
+                    "compile": compile_result,
+                    "run": {"stdout": "", "stderr": compile_result["stderr"], "output": compile_result["output"], "code": compiler.returncode, "signal": None},
+                }
+
+        if language == "java":
+            run_command = ["java", "Main"]
+        else:
+            run_command = command_map.get(language, [os.path.join(temp_dir, "main.exe")])
+        try:
+            runner = await asyncio.to_thread(
+                subprocess.run,
+                run_command,
+                cwd=temp_dir,
+                input=stdin or "",
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Local execution timed out")
+
+        return {
+            "language": language,
+            "version": "local",
+            **({"compile": compile_result} if compile_result else {}),
+            "run": {
+                "stdout": runner.stdout,
+                "stderr": runner.stderr,
+                "output": f"{runner.stdout}{runner.stderr}",
+                "code": runner.returncode,
+                "signal": None,
+            },
+        }
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+async def _execute_via_judge0(language: str, source_code: str, stdin: str = "") -> dict:
+    """
+    Execute code via Judge0 CE public API (no API key required).
+    Uses submit→poll to avoid wait=true timeout issues with compiled languages.
+    """
+    import asyncio
+    import httpx
+
+    language_ids = {
+        "python": 71,
+        "javascript": 63,
+        "java": 62,
+        "cpp": 54,
+    }
+    lang_id = language_ids.get(language)
+    if not lang_id:
+        raise RuntimeError(f"Language '{language}' is not supported by the remote execution engine.")
+
+    payload = {"language_id": lang_id, "source_code": source_code, "stdin": stdin or ""}
+    base = "https://ce.judge0.com"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # 1. Submit
+        resp = await client.post(f"{base}/submissions?base64_encoded=false", json=payload, headers={"Content-Type": "application/json"})
+        resp.raise_for_status()
+        token = resp.json().get("token")
+        if not token:
+            raise RuntimeError("Judge0 did not return a submission token")
+
+        # 2. Poll until done (max 30s)
+        for _ in range(30):
+            await asyncio.sleep(1)
+            r = await client.get(f"{base}/submissions/{token}?base64_encoded=false", timeout=15.0)
+            r.raise_for_status()
+            data = r.json()
+            status_id = (data.get("status") or {}).get("id", 0)
+            if status_id not in (1, 2):  # 1=In Queue, 2=Processing
+                break
+
+    stdout = data.get("stdout") or ""
+    stderr = data.get("stderr") or ""
+    compile_output = data.get("compile_output") or ""
+    if compile_output:
+        stderr = compile_output + ("\n" + stderr if stderr.strip() else "")
+
+    return {
+        "language": language,
+        "version": "*",
+        "run": {
+            "stdout": stdout,
+            "stderr": stderr,
+            "output": stdout + stderr,
+            "code": 0 if status_id == 3 else 1,
+            "signal": None,
+        },
+    }
+
+
+async def _execute_code(language: str, wrapped_code: str, stdin: str = "") -> dict:
+    """
+    Smart execution router:
+      - Python  → local subprocess (fast, always available)
+      - JS      → try local node first, fall back to Judge0
+      - Java/C++→ Judge0 CE (no local compilers required)
+    """
+    if language == "python":
+        try:
+            return await _execute_locally(language, wrapped_code, stdin)
+        except Exception as local_exc:
+            logger.warning("Local Python execution failed (%s). Trying Judge0...", local_exc)
+            return await _execute_via_judge0(language, wrapped_code, stdin)
+
+    if language == "javascript":
+        try:
+            return await _execute_locally(language, wrapped_code, stdin)
+        except Exception as local_exc:
+            logger.warning("Local JS execution failed (%s). Trying Judge0...", local_exc)
+            return await _execute_via_judge0(language, wrapped_code, stdin)
+
+    # Java / C++ — go straight to Judge0 (no local compiler assumed)
+    try:
+        return await _execute_via_judge0(language, wrapped_code, stdin)
+    except Exception as judge0_exc:
+        logger.warning("Judge0 failed for %s (%s). Trying local...", language, judge0_exc)
+        try:
+            return await _execute_locally(language, wrapped_code, stdin)
+        except Exception as local_exc:
+            raise RuntimeError(
+                f"All execution engines failed for {language}. "
+                f"Remote: {judge0_exc}. Local: {local_exc}"
+            )
+
+
+async def _run_test_cases(language: str, code: str, test_cases: list):
+    test_cases = _prepare_test_cases(test_cases)
+    if not test_cases:
+        raise ValueError("No test cases are configured for this coding question.")
+
+    # Auto-wrap LeetCode-style Solution classes for Java/C++
+    execution_code = code
+    if language in ("java", "cpp") and _is_solution_class(code, language):
+        execution_code = _wrap_java_solution(code) if language == "java" else _wrap_cpp_solution(code)
+
+    if not _supports_batch_harness(code, language):
+        structured = []
+        last_data = {"run": {"stdout": "", "stderr": ""}}
+        for tc in test_cases:
+            data = await _execute_code(language, execution_code, str(tc.get("input", "")))
+            last_data = data
+            run = data.get("run", {}) or {}
+            actual = (run.get("stdout") or "").strip()
+            stderr = (run.get("stderr") or "").strip()
+            expected = str(tc.get("expected_output") or tc.get("expected") or "").strip()
+            structured.append({
+                "input": tc.get("input", ""),
+                "expected": expected,
+                "stdout": actual,
+                "stderr": stderr,
+                "passed": not stderr and _normalize_compare_value(actual) == _normalize_compare_value(expected),
+            })
+        return last_data, structured
+
+    wrapped_code = wrap_code_for_execution(code, language, test_cases)
+    data = await _execute_code(language, wrapped_code, "")
+    stdout = data.get("run", {}).get("stdout", "") or ""
+    stderr = data.get("run", {}).get("stderr", "") or ""
+    parsed_results = _parse_batch_results(stdout)
+    if not parsed_results and stderr.strip():
+        return data, []
+    structured = []
+    for idx, tc in enumerate(test_cases):
+        raw_result = parsed_results[idx] if idx < len(parsed_results) else {}
+        actual = (raw_result.get("stdout") or "").strip()
+        expected = str(tc.get("expected_output") or tc.get("expected") or "").strip()
+        structured.append({
+            "input": tc.get("input", ""),
+            "expected": expected,
+            "stdout": actual,
+            "stderr": (raw_result.get("stderr") or "").strip(),
+            "passed": _normalize_compare_value(actual) == _normalize_compare_value(expected),
+        })
+    return data, structured
+
+
 
 @router.post("/run-code")
 async def run_code_endpoint(
     body: RunCodeRequest,
     current_user: User = Depends(get_current_user)
 ):
-    import httpx
-    p_lang = "cpp" if body.language.lower() == "c++" else body.language.lower()
-    wrapped_code = wrap_code_for_execution(body.code, p_lang, body.test_cases)
-    payload = {
-        "language": p_lang,
-        "version": "3.10.0" if p_lang == "python" else "*",
-        "files": [{"content": wrapped_code}],
-        "stdin": body.stdin
-    }
-    import asyncio
-    max_retries = 2
-    for attempt in range(max_retries + 1):
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post("https://emkc.org/api/v2/piston/execute", json=payload, timeout=10.0)
-                data = resp.json()
-                if resp.status_code == 200 and "run" in data:
-                    return success(data)
-                elif resp.status_code == 429 and attempt < max_retries:
-                    await asyncio.sleep(2 ** attempt)
-                    continue
-                else:
-                    print(f"PISTON ERROR (Attempt {attempt}): {data}", flush=True)
-                    if attempt == max_retries:
-                        # Fallback to AI Execution / Simulation
-                        print("PISTON FAILED. Falling back to AI Simulation.", flush=True)
-                        from app.agents.agents import call_llm
-                        ai_system = "You are a code execution simulator. Given the code and stdin, provide the output."
-                        ai_prompt = f"Code:\n{wrapped_code}\n\nStdin:\n{body.stdin}\n\nRespond ONLY with JSON: {{'run': {{'stdout': '...', 'stderr': '...'}}}}"
-                        ai_res = call_llm(ai_system, ai_prompt)
-                        return success(ai_res)
-        except Exception as e:
-            if attempt < max_retries:
-                await asyncio.sleep(1)
-                continue
-            # AI Fallback on exception too
-            print(f"PISTON EXCEPTION. Falling back to AI Simulation: {e}", flush=True)
-            from app.agents.agents import call_llm
-            ai_system = "You are a code execution simulator."
-            ai_prompt = f"Code:\n{wrapped_code}\n\nStdin:\n{body.stdin}\n\nRespond ONLY with JSON: {{'run': {{'stdout': '...', 'stderr': '...'}}}}"
-            ai_res = call_llm(ai_system, ai_prompt)
-            return success(ai_res)
+    try:
+        p_lang = _normalize_language(body.language)
+        if body.test_cases is not None:
+            data, structured = await _run_test_cases(p_lang, body.code, body.test_cases)
+            return success({
+                "run": data.get("run", {}),
+                "test_results": structured,
+            })
+
+        data = await _execute_code(p_lang, body.code, body.stdin)
+        return success(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 class GenerateMetaRequest(BaseModel):
@@ -437,7 +1575,7 @@ class GenerateMetaRequest(BaseModel):
 @router.post("/generate-coding-meta")
 async def generate_coding_meta(
     body: GenerateMetaRequest,
-    current_user: User = Depends(require_role(["hr", "admin", "instructor"]))
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"]))
 ):
     from app.agents.agents import call_llm
     
@@ -446,15 +1584,38 @@ async def generate_coding_meta(
 Question: {body.question_text}
 
 Respond ONLY with a JSON object containing:
-- "starter_code": A basic Python function signature that solves the problem.
-- "test_cases": A list of 3-5 objects, each with "input" and "expected_output".
+- "starter_code": A basic Python function signature with an indented placeholder body like `# Write your code here` followed by `pass`.
+- "test_cases": Exactly 3 objects, each with "input" and "expected_output".
   CRITICAL: In "input", each argument for the function MUST be on its own line.
   - If an argument is a list/array, format it as a JSON array (e.g. [1, 2, 3]) on one line.
   - If an argument is a number or string, put it on its own line.
+  - Every "expected_output" must be the exact return value or stdout text.
 - "programming_language": Set to "python".
 """
     ai_res = call_llm(system_prompt, user_prompt)
+    test_cases = _prepare_test_cases(ai_res.get("test_cases", []) if isinstance(ai_res, dict) else [])
+    if isinstance(ai_res, dict):
+        ai_res["test_cases"] = test_cases[:3]
+        ai_res["programming_language"] = "python"
     return success(ai_res)
+
+
+class RandomizeRequest(BaseModel):
+    questions: list
+
+@router.post("/randomize-assessment")
+async def randomize_assessment_endpoint(
+    body: RandomizeRequest,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"]))
+):
+    from app.agents.agents import call_llm
+    system_prompt = "You are an expert instructional designer and anti-cheating AI."
+    user_prompt = f"""I need to create a cheat-proof variant of this assessment. For each question, rewrite the 'question_text' to use completely different scenarios or wording but test the exact same concept and difficulty. ALSO, randomly shuffle the 'options' and update the 'correct_answer' accordingly to match the new options list. Return ONLY a JSON array of the updated questions. Keep the exact same JSON schema.
+Questions:
+{json.dumps(body.questions)}
+"""
+    ai_res = call_llm(system_prompt, user_prompt)
+    return success(ai_res.get("questions") if isinstance(ai_res, dict) and "questions" in ai_res else ai_res)
 
 
 # ── Submit Assessment ─────────────────────────────────────────────────────────
@@ -464,145 +1625,65 @@ class SubmitRequest(BaseModel):
     answers: dict  # {question_id: answer}
     time_taken_seconds: Optional[int] = None
     proctoring_events: Optional[list] = None
+    is_malpractice: bool = False
 
-
-@router.post("/submit")
-async def submit_assessment(
-    body: SubmitRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
+async def perform_grading_task(result_id: int, answers_dict: dict, assessment_id: int, user_id: int):
+    """Background task to handle AI grading and feedback generation."""
+    from app.database import AsyncSessionLocal
+    import json
     import logging
     import traceback
     from decimal import Decimal
     logger = logging.getLogger(__name__)
 
-    try:
-        # Create result record
-        result_record = AssessmentResult(
-            assessment_id=body.assessment_id,
-            user_id=current_user.id,
-            answers=body.answers,
-            time_taken_seconds=body.time_taken_seconds,
-            submitted_at=datetime.utcnow(),
-        )
-        db.add(result_record)
-        await db.flush()
-
-        # Log proctoring events
-        valid_flag_types = [t.value for t in ProctoringFlagType]
-        for event in (body.proctoring_events or []):
-            etype = event.get("type")
-            if etype not in valid_flag_types:
-                logger.warning(f"Unknown proctoring event type: {etype}. Falling back to tab_switch.")
-                etype = ProctoringFlagType.tab_switch.value
-                
-            flag = ProctoringFlag(
-                assessment_result_id=result_record.id,
-                flag_type=etype,
-                details=str(event.get("details", "")),
-            )
-            db.add(flag)
-
-        # Update assignment status
-        assgn_res = await db.execute(
-            select(AssessmentAssignment).where(
-                AssessmentAssignment.assessment_id == body.assessment_id,
-                AssessmentAssignment.user_id == current_user.id,
-            )
-        )
-        assgn = assgn_res.scalar_one_or_none()
-        if assgn:
-            assgn.status = AssignmentStatus.submitted
-
-        # ── Inline grading (no Celery needed) ─────────────────────────────────
+    async with AsyncSessionLocal() as db:
         try:
-            assessment_res = await db.execute(select(Assessment).where(Assessment.id == body.assessment_id))
+            # Re-fetch records
+            result_res = await db.execute(select(AssessmentResult).where(AssessmentResult.id == result_id))
+            result_record = result_res.scalar_one_or_none()
+            if not result_record: return
+
+            assessment_res = await db.execute(select(Assessment).where(Assessment.id == assessment_id))
             assessment = assessment_res.scalar_one_or_none()
+            if not assessment: return
 
             questions_res = await db.execute(
-                select(AssessmentQuestion).where(AssessmentQuestion.assessment_id == body.assessment_id)
+                select(AssessmentQuestion).where(AssessmentQuestion.assessment_id == assessment_id)
             )
             questions = questions_res.scalars().all()
-            answers = body.answers or {}
+            
             scores_per_q = {}
             question_data_for_feedback = []
             total_marks = 0
             earned_marks = 0
 
-            async def grade_coding_question(q, candidate_answer, marks):
+            # --- Internal Grading Helpers ---
+            async def grade_coding_question_internal(q, candidate_answer, marks):
                 test_cases = q.test_cases or []
                 if isinstance(test_cases, str):
                     try: test_cases = json.loads(test_cases)
                     except: test_cases = []
-                
-                if not test_cases or not candidate_answer:
-                    return 0.0
-                
+                if not test_cases or not candidate_answer: return 0.0
                 try:
-                    if not isinstance(candidate_answer, str):
-                        logger.warning(f"Candidate answer for coding q {q.id} is not a string: {type(candidate_answer)}")
-                        return 0.0
-                    
-                    ans_dict = json.loads(candidate_answer)
-                    lang = ans_dict.get("language", "python").lower()
-                    code = ans_dict.get("code", "")
-                    
-                    passed = 0
-                    import httpx, re, asyncio
-                    p_lang = "cpp" if lang == "c++" else lang
-                    tests_to_run = test_cases[:10]
-                    wrapped_code = wrap_code_for_execution(code, p_lang, tests_to_run)
-                    
-                    payload = {
-                        "language": p_lang,
-                        "version": "3.10.0" if p_lang == "python" else "*",
-                        "files": [{"content": wrapped_code}]
-                    }
-                    
-                    max_retries = 2
-                    resp_data = None
-                    for attempt in range(max_retries + 1):
+                    lang = (q.programming_language or "python").lower()
+                    code = ""
+                    if isinstance(candidate_answer, str):
                         try:
-                            async with httpx.AsyncClient() as client:
-                                resp = await client.post("https://emkc.org/api/v2/piston/execute", json=payload, timeout=12.0)
-                                if resp.status_code == 200:
-                                    resp_data = resp.json()
-                                    break
-                                elif resp.status_code == 429 and attempt < max_retries:
-                                    await asyncio.sleep(1.5 ** attempt)
-                                    continue
+                            ans_dict = json.loads(candidate_answer)
+                            lang = ans_dict.get("language", lang).lower()
+                            code = ans_dict.get("code", "")
                         except Exception:
-                            if attempt < max_retries:
-                                await asyncio.sleep(1)
-                                continue
-                    
-                    if resp_data:
-                        stdout = resp_data.get("run", {}).get("stdout", "")
-                        marker_start = "---BATCH_RESULTS_START---"
-                        marker_end = "---BATCH_RESULTS_END---"
-                        if marker_start in stdout and marker_end in stdout:
-                            try:
-                                results_str = stdout.split(marker_start)[1].split(marker_end)[0].strip()
-                                batch_results = json.loads(results_str)
-                                for idx, r in enumerate(batch_results):
-                                    out = r.get("stdout", "").strip()
-                                    exp = str(tests_to_run[idx].get("expected_output", "")).strip()
-                                    if re.sub(r'\s+', '', out).strip() == re.sub(r'\s+', '', exp).strip():
-                                        passed += 1
-                            except: pass
-                        return (passed / len(tests_to_run)) * marks if tests_to_run else 0
-                    else:
-                        # Fallback to AI grading if Piston is blocked/failed
-                        logger.warning(f"Piston failed for q {q.id}, falling back to AI grading")
-                        from app.agents.agents import call_llm
-                        ai_prompt = f"""Grade this code based on test cases. 
-    Code: {code}
-    Test Cases: {json.dumps(tests_to_run)}
-    Max Marks: {marks}
-    Respond ONLY with JSON: {{"score": 0.0, "reason": ""}}"""
-                        ai_res = call_llm("You are a code grading AI.", ai_prompt)
-                        return min(float(ai_res.get("score", 0)), marks)
+                            code = candidate_answer
+                    elif isinstance(candidate_answer, dict):
+                        lang = candidate_answer.get("language", lang).lower()
+                        code = candidate_answer.get("code", "")
+                    if not code.strip():
+                        return 0.0
+                    p_lang = _normalize_language(lang)
+                    tests_to_run = test_cases[:10]
+                    _data, structured = await _run_test_cases(p_lang, code, tests_to_run)
+                    passed = sum(1 for item in structured if item["passed"])
+                    return (passed / len(tests_to_run)) * marks if tests_to_run else 0.0
                 except Exception as e:
                     logger.warning(f"Grading coding {q.id} failed: {e}")
                     return 0.0
@@ -612,114 +1693,81 @@ async def submit_assessment(
             
             for idx, q in enumerate(questions):
                 q_id = str(q.id)
-                candidate_answer = answers.get(q_id, "")
+                candidate_answer = answers_dict.get(q_id, "")
                 marks = float(q.marks)
                 total_marks += marks
-                
                 qt = q.question_type.value if hasattr(q.question_type, 'value') else q.question_type
 
                 if qt == "mcq":
                     q_score = marks if str(candidate_answer).strip().upper() == str(q.correct_answer or "").strip().upper() else 0
                     scores_per_q[q_id] = {"score": q_score, "max": marks}
                     earned_marks += q_score
-                    question_data_for_feedback.append({
-                        "id": q.id, "text": q.question_text, "type": qt,
-                        "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
-                        "marks": marks, "earned": q_score, "skill_id": q.skill_id,
-                    })
+                    question_data_for_feedback.append({"id": q.id, "text": q.question_text, "type": qt, "candidate_answer": candidate_answer, "correct_answer": q.correct_answer, "marks": marks, "earned": q_score, "skill_id": q.skill_id})
+                elif qt == "mcq_multi":
+                    try:
+                        cand_list = candidate_answer if isinstance(candidate_answer, list) else json.loads(candidate_answer or "[]")
+                        corr_list = q.correct_answer if isinstance(q.correct_answer, list) else json.loads(q.correct_answer or "[]")
+                        cand_set = set(str(x).strip().upper() for x in cand_list)
+                        corr_set = set(str(x).strip().upper() for x in corr_list)
+                        q_score = marks if cand_set == corr_set and len(cand_set) > 0 else 0
+                    except: q_score = 0
+                    scores_per_q[q_id] = {"score": q_score, "max": marks}
+                    earned_marks += q_score
+                    question_data_for_feedback.append({"id": q.id, "text": q.question_text, "type": qt, "candidate_answer": candidate_answer, "correct_answer": q.correct_answer, "marks": marks, "earned": q_score, "skill_id": q.skill_id})
                 elif qt == "coding":
                     coding_indices.append(len(question_data_for_feedback))
-                    grading_tasks.append(grade_coding_question(q, candidate_answer, marks))
-                    # Placeholder for feedback data (updated later)
-                    question_data_for_feedback.append({
-                        "id": q.id, "text": q.question_text, "type": qt,
-                        "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
-                        "marks": marks, "earned": 0, "skill_id": q.skill_id,
-                    })
+                    grading_tasks.append(grade_coding_question_internal(q, candidate_answer, marks))
+                    question_data_for_feedback.append({"id": q.id, "text": q.question_text, "type": qt, "candidate_answer": candidate_answer, "correct_answer": q.correct_answer, "marks": marks, "earned": 0, "skill_id": q.skill_id})
                 elif qt == "written":
-                    # Collected for batching later
-                    question_data_for_feedback.append({
-                        "id": q.id, "text": q.question_text, "type": qt,
-                        "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
-                        "marks": marks, "earned": 0, "skill_id": q.skill_id,
-                    })
+                    question_data_for_feedback.append({"id": q.id, "text": q.question_text, "type": qt, "candidate_answer": candidate_answer, "correct_answer": q.correct_answer, "marks": marks, "earned": 0, "skill_id": q.skill_id})
                 elif qt == "file_upload":
                     scores_per_q[q_id] = {"score": None, "status": "pending_review"}
-                    question_data_for_feedback.append({
-                        "id": q.id, "text": q.question_text, "type": qt,
-                        "candidate_answer": candidate_answer, "correct_answer": q.correct_answer,
-                        "marks": marks, "earned": None, "skill_id": q.skill_id,
-                    })
+                    question_data_for_feedback.append({"id": q.id, "text": q.question_text, "type": qt, "candidate_answer": candidate_answer, "correct_answer": q.correct_answer, "marks": marks, "earned": None, "skill_id": q.skill_id})
 
-            # ── Execute Coding Grading Concurrently ──
             if grading_tasks:
                 import asyncio
                 coding_scores = await asyncio.gather(*grading_tasks)
                 for i, score in enumerate(coding_scores):
                     q_idx = coding_indices[i]
-                    q_data = question_data_for_feedback[q_idx]
-                    q_id_str = str(q_data["id"])
-                    scores_per_q[q_id_str] = {"score": score, "max": q_data["marks"]}
+                    scores_per_q[str(question_data_for_feedback[q_idx]["id"])] = {"score": score, "max": question_data_for_feedback[q_idx]["marks"]}
                     earned_marks += score
                     question_data_for_feedback[q_idx]["earned"] = score
 
-            # ── Batch grading for written questions ──
             written_indices = [i for i, q in enumerate(question_data_for_feedback) if q["type"] == "written"]
             if written_indices:
                 try:
                     from app.agents.agents import call_llm
-                    grading_batch = []
+                    grading_batch = [{"id": q["id"], "question": q["text"], "model_answer": q["correct_answer"] or "General knowledge", "student_answer": q["candidate_answer"], "max_marks": q["marks"]} for i, q in enumerate(question_data_for_feedback) if i in written_indices]
+                    batch_res = call_llm("You are a written assessment grading AI.", f"Grade these {len(grading_batch)} answers. Return JSON: {{'grades': [{{'id', 'score', 'explanation'}}]}}\n\nBatch:\n{json.dumps(grading_batch)}")
+                    grades_map = {str(g["id"]): g for g in batch_res.get("grades", [])}
                     for idx in written_indices:
                         q_data = question_data_for_feedback[idx]
-                        grading_batch.append({
-                            "id": q_data["id"],
-                            "question": q_data["text"],
-                            "model_answer": q_data["correct_answer"] or "General knowledge",
-                            "student_answer": q_data["candidate_answer"],
-                            "max_marks": q_data["marks"]
-                        })
-                    
-                    batch_system = "You are a specialized written assessment grading AI. Grade the following student answers based on the provided questions and model answers."
-                    batch_prompt = f"Grade these {len(grading_batch)} answers. Return a JSON object with a 'grades' key containing a list of objects with 'id', 'score', and 'explanation'.\n\nBatch:\n{json.dumps(grading_batch)}"
-                    
-                    batch_res = call_llm(batch_system, batch_prompt)
-                    grades_list = batch_res.get("grades", [])
-                    grades_map = {str(g["id"]): g for g in grades_list}
-                    
-                    for idx in written_indices:
-                        q_data = question_data_for_feedback[idx]
-                        q_id_str = str(q_data["id"])
-                        grade = grades_map.get(q_id_str, {"score": q_data["marks"] * 0.5})
+                        grade = grades_map.get(str(q_data["id"]), {"score": q_data["marks"] * 0.5})
                         q_score = min(float(grade.get("score", 0)), q_data["marks"])
-                        
                         earned_marks += q_score
-                        scores_per_q[q_id_str] = {"score": q_score, "max": q_data["marks"]}
+                        scores_per_q[str(q_data["id"])] = {"score": q_score, "max": q_data["marks"]}
                         question_data_for_feedback[idx]["earned"] = q_score
                 except Exception as e:
-                    logger.warning(f"Batch written grading failed: {e}. Falling back to 50% score.")
+                    logger.warning(f"Batch grading failed: {e}")
                     for idx in written_indices:
-                        q_id_str = str(question_data_for_feedback[idx]["id"])
-                        if q_id_str not in scores_per_q:
-                            scores_per_q[q_id_str] = {"score": question_data_for_feedback[idx]["marks"] * 0.5, "max": question_data_for_feedback[idx]["marks"]}
-                            earned_marks += question_data_for_feedback[idx]["marks"] * 0.5
-                            question_data_for_feedback[idx]["earned"] = question_data_for_feedback[idx]["marks"] * 0.5
+                        q_data = question_data_for_feedback[idx]
+                        earned_marks += q_data["marks"] * 0.5
+                        scores_per_q[str(q_data["id"])] = {"score": q_data["marks"] * 0.5, "max": q_data["marks"]}
+                        question_data_for_feedback[idx]["earned"] = q_data["marks"] * 0.5
 
-            # Calculate final score
             pct_score = (earned_marks / total_marks * 100) if total_marks > 0 else 0
-            passed = pct_score >= float(assessment.pass_score) if assessment else False
-
-            # Generate AI feedback (best-effort)
-            weak_skill_ids = []
+            passed = pct_score >= float(assessment.pass_score)
+            
+            # Generate AI Feedback
             try:
                 from app.agents.agents import run_generate_feedback_agent
                 feedback_data = run_generate_feedback_agent(
                     questions=[{"text": q["text"], "type": q["type"]} for q in question_data_for_feedback],
                     answers={str(q["id"]): q["candidate_answer"] for q in question_data_for_feedback},
                     scores={str(q["id"]): q["earned"] for q in question_data_for_feedback},
-                    total_score=round(pct_score, 2),
-                    passed=passed,
+                    total_score=round(pct_score, 2), passed=passed,
                 )
-                is_released = assessment.show_result_immediately if hasattr(assessment, "show_result_immediately") else True
+                is_released = assessment.show_result_immediately
                 feedback_text = json.dumps({
                     "summary": feedback_data.get("summary", ""),
                     "strengths": feedback_data.get("strengths", []),
@@ -727,38 +1775,109 @@ async def submit_assessment(
                     "study_recommendations": feedback_data.get("study_recommendations", []),
                     "_is_released": is_released
                 })
-                weak_skill_ids = feedback_data.get("weak_skill_ids", [])
-            except Exception as e:
-                logger.warning(f"AI feedback generation failed: {e}")
-                feedback_text = json.dumps({
-                    "summary": f"Score: {round(pct_score, 1)}%. {'Passed' if passed else 'Did not pass'}.",
-                    "strengths": [], "improvement_areas": [], "study_recommendations": []
-                })
+                result_record.weak_skill_ids = feedback_data.get("weak_skill_ids", [])
+            except:
+                feedback_text = json.dumps({"summary": f"Score: {round(pct_score, 1)}%. {'Passed' if passed else 'Did not pass'}.", "strengths": [], "improvement_areas": [], "_is_released": True})
 
-            # Update result
             result_record.scores_per_question = scores_per_q
             result_record.score = Decimal(str(round(pct_score, 2)))
             result_record.pass_status = passed
             result_record.feedback = feedback_text
-            result_record.weak_skill_ids = weak_skill_ids
-
+            
+            # Update assignment
+            assgn_res = await db.execute(select(AssessmentAssignment).where(AssessmentAssignment.assessment_id == assessment_id, AssessmentAssignment.user_id == user_id))
+            assgn = assgn_res.scalar_one_or_none()
             if assgn:
-                assgn.status = "graded"
+                assgn.status = AssignmentStatus.graded
 
-            logger.info(f"Assessment graded inline: {round(pct_score, 2)}% - {'PASS' if passed else 'FAIL'}")
-
+            await db.commit()
+            logger.info(f"Background grading complete for result {result_id}: {pct_score}%")
         except Exception as e:
-            logger.error(f"Inline grading failed: {e}")
-            # Still save the submission even if grading fails
-            result_record.feedback = json.dumps({"summary": "Grading pending. Please check back later.", "strengths": [], "improvement_areas": [], "study_recommendations": [], "_is_released": False})
+            logger.error(f"Grading task failed: {e}\n{traceback.format_exc()}")
 
+@router.post("/submit")
+async def submit_assessment(
+    body: SubmitRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        # 1. Create result record
+        logger.info(f"Submitting assessment {body.assessment_id} for user {current_user.id} (Malpractice: {body.is_malpractice})")
+        feedback_val = json.dumps({"summary": "Grading in progress...", "_is_released": True})
+        if body.is_malpractice:
+            feedback_val = json.dumps({
+                "summary": "Our system has detected multiple proctoring violations. This assessment has been terminated for Malpractice.",
+                "_is_released": True,
+                "is_malpractice": True
+            })
+
+        result_record = AssessmentResult(
+            assessment_id=body.assessment_id,
+            user_id=current_user.id,
+            answers=body.answers,
+            time_taken_seconds=body.time_taken_seconds,
+            submitted_at=datetime.utcnow(),
+            score=0.0 if body.is_malpractice else None, 
+            pass_status=False,
+            is_malpractice=body.is_malpractice,
+            feedback=feedback_val
+        )
+        db.add(result_record)
+        await db.flush()
+        logger.info(f"Result record created with ID: {result_record.id}")
+
+        # 2. Log proctoring events
+        valid_flag_types = [t.value for t in ProctoringFlagType]
+        for event in (body.proctoring_events or []):
+            etype = event.get("type")
+            if etype not in valid_flag_types:
+                etype = ProctoringFlagType.tab_switch.value
+            
+            flag = ProctoringFlag(
+                assessment_result_id=result_record.id,
+                flag_type=etype,
+                details=str(event.get("details", "")),
+            )
+            db.add(flag)
+        
+        logger.info(f"Logged {len(body.proctoring_events or [])} proctoring events")
+
+        # 3. Update assignment status
+        assgn_res = await db.execute(
+            select(AssessmentAssignment).where(
+                AssessmentAssignment.assessment_id == body.assessment_id,
+                AssessmentAssignment.user_id == current_user.id,
+            )
+        )
+        assgn = assgn_res.scalar_one_or_none()
+        if assgn:
+            assgn.status = AssignmentStatus.graded if body.is_malpractice else AssignmentStatus.submitted
+            logger.info(f"Assignment status updated to: {assgn.status}")
+        
         await db.commit()
-        return success({"result_id": result_record.id, "score": float(result_record.score) if result_record.score else None, "passed": result_record.pass_status}, "Assessment submitted and graded.")
+        await db.refresh(result_record)
+        logger.info("Submission transaction committed successfully")
+
+        # 4. Queue background grading task (only if not malpractice)
+        if not body.is_malpractice:
+            background_tasks.add_task(
+                perform_grading_task, 
+                result_record.id, 
+                body.answers, 
+                body.assessment_id, 
+                current_user.id
+            )
+
+        return success({"result_id": result_record.id}, "Assessment submitted. Grading is in progress.")
 
     except Exception as e:
-        err_msg = f"Submission error: {str(e)}\n{traceback.format_exc()}"
-        logger.error(err_msg)
-        raise HTTPException(status_code=500, detail=err_msg)
+        logger.error(f"Submission error: {str(e)}")
+        raise HTTPException(status_code=500, detail="An error occurred during submission.")
 
 # ── Results ───────────────────────────────────────────────────────────────────
 
@@ -788,6 +1907,7 @@ async def my_results(
             "time_taken_seconds": res.time_taken_seconds,
             "submitted_at": res.submitted_at.isoformat() if res.submitted_at else None,
             "is_released": is_released,
+            "is_malpractice": res.is_malpractice,
         })
     return success(out)
 
@@ -800,21 +1920,21 @@ async def get_result(
 ):
     result = await db.execute(
         select(AssessmentResult, Assessment).join(Assessment)
-        .where(AssessmentResult.id == result_id)
+        .where(AssessmentResult.id == result_id, Assessment.org_id == current_user.org_id)
     )
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Result not found")
     res, asmt = row
-    if res.user_id != current_user.id and current_user.role.value not in ["hr", "admin", "manager"]:
+    if res.user_id != current_user.id and current_user.role.value not in ["hr", "org_admin", "manager"]:
         raise HTTPException(status_code=403, detail="Access denied")
 
     flags_res = await db.execute(
         select(ProctoringFlag).where(ProctoringFlag.assessment_result_id == result_id)
     )
-    flags = [{"type": f.flag_type.value, "details": f.details, "flagged_at": f.flagged_at.isoformat()} for f in flags_res.scalars()]
+    flags = [{"type": f.flag_type, "details": f.details, "flagged_at": f.flagged_at.isoformat()} for f in flags_res.scalars()]
 
-    is_hr = current_user.role.value in ["hr", "admin", "manager"]
+    is_hr = current_user.role.value in ["hr", "org_admin", "manager"]
     fb = json.loads(res.feedback) if res.feedback and res.feedback.startswith("{") else {}
     is_released = fb.get("_is_released", True) if isinstance(fb, dict) else True
 
@@ -845,20 +1965,27 @@ async def get_result(
         "proctoring_flags": flags,
         "weak_skill_ids": res.weak_skill_ids,
         "is_released": is_released,
+        "is_malpractice": res.is_malpractice,
     })
 
 
 @router.get("/leaderboard/{assessment_id}")
 async def get_leaderboard(
     assessment_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(AssessmentResult, User).join(User, User.id == AssessmentResult.user_id)
-        .where(AssessmentResult.assessment_id == assessment_id, AssessmentResult.score != None)
-        .order_by(AssessmentResult.score.desc())
-    )
+    query = select(Assessment).where(Assessment.id == assessment_id)
+    if current_user.role.value != "super_admin":
+        query = query.where(Assessment.org_id == current_user.org_id)
+    asmt_check = await db.execute(query)
+    if not asmt_check.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Assessment not found")
+
+    query = select(AssessmentResult, User).join(User, User.id == AssessmentResult.user_id).where(AssessmentResult.assessment_id == assessment_id, AssessmentResult.score != None)
+    if current_user.role.value != "super_admin":
+        query = query.where(User.org_id == current_user.org_id)
+    result = await db.execute(query.order_by(AssessmentResult.score.desc()))
     rows = result.all()
     return success([{
         "rank": i + 1,
@@ -872,7 +1999,7 @@ async def get_leaderboard(
 @router.get("/analytics/{assessment_id}")
 async def get_analytics(
     assessment_id: int,
-    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     total_assigned = await db.execute(
@@ -903,10 +2030,35 @@ async def get_analytics(
     })
 
 
+@router.get("/users/{user_id}/results")
+async def get_user_results(
+    user_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(AssessmentResult, Assessment).join(Assessment)
+        .where(AssessmentResult.user_id == user_id)
+        .order_by(AssessmentResult.submitted_at.desc())
+    )
+    rows = result.all()
+    out = []
+    for res, asmt in rows:
+        out.append({
+            "result_id": res.id,
+            "title": asmt.title,
+            "score": float(res.score) if res.score is not None else None,
+            "pass_status": res.pass_status,
+            "submitted_at": res.submitted_at.isoformat() if res.submitted_at else None,
+            "is_malpractice": res.is_malpractice
+        })
+    return success(out)
+
+
 @router.post("/result/{result_id}/release")
 async def release_result(
     result_id: int,
-    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(AssessmentResult).where(AssessmentResult.id == result_id))
@@ -947,7 +2099,7 @@ async def release_result(
 @router.get("/assessments/{assessment_id}/submissions")
 async def get_assessment_submissions(
     assessment_id: int,
-    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -968,5 +2120,6 @@ async def get_assessment_submissions(
             "pass_status": res.pass_status,
             "submitted_at": res.submitted_at.isoformat() if res.submitted_at else None,
             "is_released": is_released,
+            "is_malpractice": res.is_malpractice,
         })
     return success(out)

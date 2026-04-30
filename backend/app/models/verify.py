@@ -20,6 +20,7 @@ class AssessmentStatus(str, enum.Enum):
 
 class QuestionType(str, enum.Enum):
     mcq = "mcq"
+    mcq_multi = "mcq_multi"
     written = "written"
     coding = "coding"
     file_upload = "file_upload"
@@ -38,6 +39,15 @@ class ProctoringFlagType(str, enum.Enum):
     timing_anomaly = "timing_anomaly"
     screenshot = "screenshot"
     camera_denied = "camera_denied"
+    proctoring_violation = "proctoring_violation"
+    audio_detected = "audio_detected"
+    audio_snippet = "audio_snippet"
+    camera_disabled = "camera_disabled"
+    camera_obstructed = "camera_obstructed"
+    person_not_visible = "person_not_visible"
+    background_movement = "background_movement"
+    significant_motion = "significant_motion"
+    hardware_denied = "hardware_denied"
 
 
 class Assessment(Base):
@@ -80,6 +90,7 @@ class AssessmentQuestion(Base):
     skill_id = Column(Integer, ForeignKey("skill_taxonomy.id"), nullable=True)
     marks = Column(DECIMAL(6, 2), default=1.0)
     order_index = Column(Integer, default=0)
+    images = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -96,6 +107,7 @@ class AssessmentAssignment(Base):
     assigned_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     deadline = Column(DateTime, nullable=True)
     status = Column(Enum(AssignmentStatus), default=AssignmentStatus.pending)
+    custom_questions = Column(JSON, nullable=True)
     started_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -118,6 +130,7 @@ class AssessmentResult(Base):
     feedback = Column(Text, nullable=True)
     weak_skill_ids = Column(JSON, nullable=True)
     time_taken_seconds = Column(Integer, nullable=True)
+    is_malpractice = Column(Boolean, default=False, nullable=False)
     submitted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -132,8 +145,8 @@ class ProctoringFlag(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     assessment_result_id = Column(Integer, ForeignKey("assessment_results.id"), nullable=False)
-    flag_type = Column(Enum(ProctoringFlagType), nullable=False)
-    details = Column(Text, nullable=True)
+    flag_type = Column(String(50), nullable=False)
+    details = Column(Text(length=16777215), nullable=True) # MEDIUMTEXT in MySQL
     flagged_at = Column(DateTime, server_default=func.now(), nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

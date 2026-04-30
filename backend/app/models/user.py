@@ -6,12 +6,13 @@ from app.database import Base
 
 
 class UserRole(str, enum.Enum):
+    super_admin = "super_admin"
     candidate = "candidate"
     employee = "employee"
     hr = "hr"
     instructor = "instructor"
     manager = "manager"
-    admin = "admin"
+    org_admin = "org_admin"
 
 
 class User(Base):

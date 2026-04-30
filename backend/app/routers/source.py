@@ -163,7 +163,7 @@ from fastapi import Form
 async def upload_resume(
     file: UploadFile = File(...),
     job_role_id: Optional[int] = Form(None),
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     # Validate MIME type server-side
@@ -232,73 +232,226 @@ class ScoreRequest(BaseModel):
 @router.post("/score-candidates")
 async def score_candidates(
     body: ScoreRequest,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.agents.agents import run_score_role_fit_agent
-    import asyncio
-
     # Get job role
     role_res = await db.execute(select(JobRole).where(JobRole.id == body.role_id))
     role = role_res.scalar_one_or_none()
     if not role or role.org_id != current_user.org_id:
         raise HTTPException(status_code=404, detail="Role not found")
 
-    required_skills = role.required_skills or [{"skill": "General experience", "level": "intermediate"}]
+    required_skills = normalise_required_skills(role)
 
     scored_count = 0
     for cid in body.candidate_ids:
-        # Check if already scored for this role recently (optional optimization, skipped for simplicity)
-        
-        # Get Candidate Skills
+        cand_res = await db.execute(select(Candidate).where(Candidate.id == cid, Candidate.org_id == current_user.org_id))
+        candidate = cand_res.scalar_one_or_none()
+        if not candidate:
+            continue
+
         skills_res = await db.execute(
             select(CandidateSkill, SkillTaxonomy).join(SkillTaxonomy).where(CandidateSkill.candidate_id == cid)
         )
         cand_skills_data = [{"name": st.name, "level": cs.level.value, "years_of_use": cs.years_of_use} for cs, st in skills_res]
-        
-        try:
-            # Run Agent
-            ai_res = run_score_role_fit_agent(cand_skills_data, required_skills)
-            
-            # Save Score
-            score = AIScore(
+
+        fit = calculate_role_fit(cand_skills_data, required_skills, candidate.exp_years or 0, role.min_experience or 0)
+        reasoning = {
+            **fit,
+            "role_id": role.id,
+            "role_title": role.title,
+            "required_skills": required_skills,
+            "summary": f"Deterministic match against {role.title} requirements.",
+        }
+
+        existing_res = await db.execute(
+            select(AIScore).where(
+                AIScore.entity_type == EntityType.candidate,
+                AIScore.entity_id == cid,
+                AIScore.score_type == ScoreType.role_fit,
+                AIScore.job_role_id == role.id,
+            ).order_by(AIScore.created_at.desc())
+        )
+        score = existing_res.scalars().first()
+        if score:
+            score.score = fit["score"]
+            score.reasoning = json.dumps(reasoning)
+        else:
+            db.add(AIScore(
                 entity_type=EntityType.candidate,
                 entity_id=cid,
+                job_role_id=role.id,
                 score_type=ScoreType.role_fit,
-                score=ai_res.get("score", 0),
-                reasoning=json.dumps(ai_res),
-            )
-            db.add(score)
-            scored_count += 1
-        except Exception as e:
-            logger.warning(f"Role fit scoring failed for candidate {cid}: {e}")
+                score=fit["score"],
+                reasoning=json.dumps(reasoning),
+            ))
+        scored_count += 1
 
     await db.commit()
-    return success({"scored_count": scored_count}, f"Successfully generated AI Fit Scores for {scored_count} candidates.")
+    return success({"scored_count": scored_count}, f"Generated role-fit scores for {scored_count} candidates.")
 
 
 # ── ATS Algorithmic Match Scoring ──────────────────────────────────────────────
 
-def compute_ats_score(cand_skills: list, req_skills: list) -> float:
-    if not req_skills: return 0.0
-    score = 0.0
-    max_score = 0.0
-    level_weights = {"beginner": 1, "intermediate": 2, "advanced": 3, "expert": 4}
+LEVEL_WEIGHTS = {"beginner": 1, "intermediate": 2, "advanced": 3, "expert": 4}
+NOISE_TOKENS = {"and", "or", "the", "of", "for", "with", "in", "at", "a", "an", "to", "on"}
+ROLE_SKILL_PRESETS = {
+    "cyber": ["Cyber Security", "Network Security", "SIEM", "Penetration Testing", "Linux", "Python"],
+    "security": ["Cyber Security", "Network Security", "SIEM", "Penetration Testing", "Linux", "Python"],
+    "ai": ["Python", "Machine Learning", "Deep Learning", "TensorFlow", "PyTorch", "NLP"],
+    "ml": ["Python", "Machine Learning", "TensorFlow", "PyTorch", "Scikit-learn", "SQL"],
+    "data": ["Python", "SQL", "Pandas", "NumPy", "Power BI", "Machine Learning"],
+    "frontend": ["JavaScript", "React", "HTML", "CSS", "TypeScript"],
+    "backend": ["Python", "FastAPI", "SQL", "API", "Docker"],
+}
 
-    cand_dict = {s["name"].lower(): level_weights.get(s["level"].lower(), 1) for s in cand_skills}
+
+def _clean_skill_name(value) -> str:
+    return str(value or "").strip()
+
+
+def _normalise_level(value, fallback="intermediate") -> str:
+    level = str(value or fallback).lower().strip()
+    return level if level in LEVEL_WEIGHTS else fallback
+
+
+def normalise_required_skills(role: Optional[JobRole]) -> list:
+    if not role:
+        return []
+
+    normalised = []
+    for item in role.required_skills or []:
+        if isinstance(item, str):
+            name = item
+            level = "intermediate"
+        elif isinstance(item, dict):
+            name = item.get("skill") or item.get("name") or item.get("title") or item.get("normalized_name")
+            level = item.get("level") or item.get("min_level") or item.get("required_level") or "intermediate"
+        else:
+            continue
+        name = _clean_skill_name(name)
+        if name:
+            normalised.append({"skill": name, "level": _normalise_level(level)})
+
+    if normalised:
+        return normalised
+
+    haystack = f"{role.title or ''} {role.description or ''}".lower()
+    inferred = []
+    for keyword, skills in ROLE_SKILL_PRESETS.items():
+        if keyword in haystack:
+            inferred.extend(skills)
+
+    if not inferred and role.title:
+        inferred = [part.strip() for part in role.title.replace("/", " ").replace("-", " ").split() if len(part.strip()) > 2]
+
+    seen = set()
+    fallback = []
+    for skill in inferred:
+        key = skill.lower()
+        if key not in seen:
+            fallback.append({"skill": skill, "level": "intermediate"})
+            seen.add(key)
+    return fallback
+
+
+def _skill_tokens(value: str) -> set:
+    cleaned = "".join(ch.lower() if ch.isalnum() else " " for ch in str(value or ""))
+    return {token for token in cleaned.split() if token and token not in NOISE_TOKENS}
+
+
+def _skill_similarity(required: str, candidate: str) -> float:
+    req = str(required or "").lower().strip()
+    cand = str(candidate or "").lower().strip()
+    if not req or not cand:
+        return 0.0
+    if req == cand:
+        return 1.0
+
+    req_tokens = _skill_tokens(req)
+    cand_tokens = _skill_tokens(cand)
+    if not req_tokens or not cand_tokens:
+        return 0.0
+
+    overlap = req_tokens & cand_tokens
+    if not overlap:
+        return 0.0
+
+    coverage = len(overlap) / len(req_tokens)
+    jaccard = len(overlap) / len(req_tokens | cand_tokens)
+    if coverage >= 0.75:
+        return 0.85
+    if jaccard >= 0.5:
+        return 0.65
+    return 0.45
+
+
+
+def calculate_role_fit(cand_skills: list, req_skills: list, exp_years: int = 0, min_exp: int = 0) -> dict:
+    if not req_skills:
+        return {"score": 0.0, "matched_skills": [], "missing_skills": [], "partial_skills": []}
+
+    total_weight = 0.0
+    earned = 0.0
+    matched = []
+    missing = []
+    partial = []
+    candidates = [
+        {"name": _clean_skill_name(s.get("name")), "level": _normalise_level(s.get("level"), "beginner")}
+        for s in cand_skills
+        if _clean_skill_name(s.get("name"))
+    ]
 
     for req in req_skills:
-        req_name = req.get("skill", "").lower()
-        req_weight = level_weights.get(str(req.get("level", "intermediate")).lower(), 2)
-        max_score += req_weight
+        req_name = _clean_skill_name(req.get("skill") or req.get("name"))
+        if not req_name:
+            continue
+        req_level = _normalise_level(req.get("level"))
+        req_weight = LEVEL_WEIGHTS[req_level]
+        total_weight += req_weight
 
-        mat_weight = 0
-        for cn, cw in cand_dict.items():
-            if req_name in cn or cn in req_name:
-                mat_weight = max(mat_weight, min(cw, req_weight))
-        score += mat_weight
+        best = None
+        best_points = 0.0
+        best_similarity = 0.0
+        for cand in candidates:
+            similarity = _skill_similarity(req_name, cand["name"])
+            if similarity <= 0:
+                continue
+            level_ratio = min(LEVEL_WEIGHTS[cand["level"]] / req_weight, 1.0)
+            points = req_weight * similarity * level_ratio
+            if points > best_points:
+                best = cand
+                best_points = points
+                best_similarity = similarity
 
-    return round((score / max_score) * 100.0, 1) if max_score > 0 else 0.0
+        earned += best_points
+        if not best:
+            missing.append(req_name)
+        elif best_similarity >= 0.8 and LEVEL_WEIGHTS[best["level"]] >= req_weight:
+            matched.append(req_name)
+        else:
+            partial.append({
+                "skill": req_name,
+                "candidate_skill": best["name"],
+                "candidate_level": best["level"],
+                "required_level": req_level,
+            })
+
+    score = (earned / total_weight * 100.0) if total_weight else 0.0
+    if min_exp and exp_years < min_exp:
+        exp_ratio = max(exp_years, 0) / max(min_exp, 1)
+        score *= 0.75 + (0.25 * exp_ratio)
+
+    return {
+        "score": round(min(score, 100.0), 1),
+        "matched_skills": matched,
+        "missing_skills": missing,
+        "partial_skills": partial,
+    }
+
+
+def compute_ats_score(cand_skills: list, req_skills: list, exp_years: int = 0, min_exp: int = 0) -> float:
+    return calculate_role_fit(cand_skills, req_skills, exp_years, min_exp)["score"]
 
 
 # ── Candidate Search ─────────────────────────────────────────────────────────
@@ -309,10 +462,12 @@ async def search_candidates(
     role_id: Optional[int] = None,
     skills: Optional[List[int]] = Query(None, alias="skills[]"),
     min_exp: Optional[int] = 0,
+    exp_range: Optional[str] = None,
+    search: Optional[str] = None,
     location: Optional[str] = None,
     sort_by: str = "newest",
     limit: int = 20,
-    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy import or_, and_
@@ -321,14 +476,30 @@ async def search_candidates(
     cand_query = select(Candidate, User).join(User, User.id == Candidate.user_id).where(Candidate.org_id == current_user.org_id)
     emp_query = select(Employee, User).join(User, User.id == Employee.user_id).where(Employee.org_id == current_user.org_id)
 
+    def exp_bounds():
+        if exp_range == "fresher":
+            return 0, 0
+        if exp_range == "1-2":
+            return 1, 2
+        if exp_range == "2-5":
+            return 2, 5
+        if exp_range == "5+":
+            return 5, None
+        return min_exp, None
+
+    min_years, max_years = exp_bounds()
+
     def apply_filters(q, model):
-        if min_exp and hasattr(model, 'exp_years'):
-            q = q.where(model.exp_years >= min_exp)
+        if min_years is not None and hasattr(model, 'exp_years'):
+            q = q.where(model.exp_years >= min_years)
+        if max_years is not None and hasattr(model, 'exp_years'):
+            q = q.where(model.exp_years <= max_years)
         if location:
             if hasattr(model, 'location'):
                 q = q.where(model.location.ilike(f"%{location}%"))
-        if role_id and hasattr(model, 'job_role_id'):
-            q = q.where(model.job_role_id == role_id)
+        if search:
+            term = f"%{search.strip()}%"
+            q = q.where(or_(User.full_name.ilike(term), User.email.ilike(term)))
         return q
 
     results = []
@@ -360,10 +531,17 @@ async def search_candidates(
                 "created_at": e.created_at, "is_employee": True
             })
 
-    if sort_by == "newest": results.sort(key=lambda x: x["created_at"] or datetime.min, reverse=True)
-    elif sort_by == "experience": results.sort(key=lambda x: x["exp_years"] or 0, reverse=True)
+    # Retrieve required skills if a role is selected
+    req_skills = []
+    role = None
+    if role_id:
+        role_res = await db.execute(select(JobRole).where(JobRole.id == role_id))
+        role = role_res.scalar_one_or_none()
+        if not role or role.org_id != current_user.org_id:
+            raise HTTPException(status_code=404, detail="Role not found")
+        req_skills = normalise_required_skills(role)
 
-    output = results[:limit]
+    output = results
     for item in output:
         if not item["is_employee"]:
             skills_res = await db.execute(select(CandidateSkill, SkillTaxonomy).join(SkillTaxonomy).where(CandidateSkill.candidate_id == item["id"]))
@@ -372,18 +550,55 @@ async def search_candidates(
             skills_res = await db.execute(select(EmployeeSkill, SkillTaxonomy).join(SkillTaxonomy).where(EmployeeSkill.employee_id == item["id"]))
             item["skills"] = [{"name": st.name, "level": es.level.value} for es, st in skills_res]
         
+        item["fit_reason"] = None
+        item["required_skills"] = req_skills
+
+        # Calculate role fit score for the selected role only. Stored AI rows are
+        # role-specific history; live search remains deterministic and filter-safe.
+        if role_id:
+            fit = calculate_role_fit(item["skills"], req_skills, item["exp_years"] or 0, role.min_experience if role else 0)
+            item["ats_score"] = fit["score"]
+            item["fit_reason"] = fit
+        else:
+            item["ats_score"] = None
+            
+        # Calculate Resume ATS Score
+        num_skills = len(item["skills"])
+        exp = item.get("exp_years") or 0
+        loc_points = 10 if item.get("location") else 0
+        resume_points = 10 if item.get("resume_url") else 0
+        
+        skill_points = min(num_skills * 5, 50)
+        exp_points = min(exp * 5, 30)
+        
+        item["resume_ats_score"] = skill_points + exp_points + loc_points + resume_points
+            
+        # Format date
         if isinstance(item["created_at"], datetime):
             item["created_at"] = item["created_at"].isoformat()
-            
+
+    # Apply sorting
+    sort_keys = [s.strip() for s in sort_by.split(",") if s.strip()]
+    if "fit_score" in sort_keys and role_id:
+        output.sort(key=lambda x: (x.get("ats_score") or 0, x.get("exp_years") or 0, x["created_at"] or ""), reverse=True)
+    elif "experience" in sort_keys:
+        output.sort(key=lambda x: (x["exp_years"] or 0, x["created_at"] or ""), reverse=True)
+    else:
+        output.sort(key=lambda x: x["created_at"] or "", reverse=True)
+
+    output = output[:limit]
+
     return success(output)
 
 
 @router.get("/candidates/{candidate_id}")
 async def get_candidate(
     candidate_id: int,
-    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    role_id: Optional[int] = None,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
+
     result = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
     candidate = result.scalar_one_or_none()
     if not candidate or candidate.org_id != current_user.org_id:
@@ -408,8 +623,40 @@ async def get_candidate(
     )
     scores = [{"type": s.score_type.value, "score": float(s.score) if s.score else None, "reasoning": s.reasoning} for s in scores_res.scalars()]
 
+    import json
+    if role_id:
+        role_res = await db.execute(select(JobRole).where(JobRole.id == role_id))
+        role = role_res.scalar_one_or_none()
+        if role:
+            req_skills = normalise_required_skills(role)
+            fit = calculate_role_fit(cand_skills, req_skills, candidate.exp_years or 0, role.min_experience or 0)
+            
+            fit_score_obj = {
+                "type": "role_fit",
+                "score": fit["score"],
+                "reasoning": json.dumps({
+                    "summary": f"Live fit analysis for {role.title}",
+                    "matched_skills": fit["matched_skills"],
+                    "missing_skills": fit["missing_skills"],
+                    "partial_skills": fit["partial_skills"],
+                })
+            }
+            scores = [s for s in scores if s["type"] != "role_fit"]
+            scores.append(fit_score_obj)
+
+    num_skills = len(cand_skills)
+    exp = candidate.exp_years or 0
+    loc_points = 10 if candidate.location else 0
+    resume_points = 10 if candidate.resume_url else 0
+    
+    skill_points = min(num_skills * 5, 50)
+    exp_points = min(exp * 5, 30)
+    
+    resume_ats_score = skill_points + exp_points + loc_points + resume_points
+
     return success({
         "id": candidate.id,
+        "resume_ats_score": resume_ats_score,
         "user": {"id": user.id, "email": user.email, "full_name": user.full_name} if user else {},
         "employee_id": emp.id if emp else None,
         "location": candidate.location,
@@ -434,18 +681,24 @@ class JobRoleCreate(BaseModel):
 
 @router.get("/job-roles")
 async def list_job_roles(
-    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(JobRole).where(JobRole.org_id == current_user.org_id))
     roles = result.scalars().all()
-    return success([{"id": r.id, "title": r.title, "description": r.description, "min_experience": r.min_experience} for r in roles])
+    return success([{
+        "id": r.id,
+        "title": r.title,
+        "description": r.description,
+        "min_experience": r.min_experience,
+        "required_skills": normalise_required_skills(r),
+    } for r in roles])
 
 
 @router.post("/job-roles")
 async def create_job_role(
     body: JobRoleCreate,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     role = JobRole(
@@ -457,7 +710,46 @@ async def create_job_role(
     )
     db.add(role)
     await db.commit()
-    return success({"id": role.id, "title": role.title})
+    return success({"id": role.id, "title": role.title, "required_skills": normalise_required_skills(role)})
+
+
+@router.delete("/job-roles")
+async def delete_all_job_roles(
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import delete
+
+    role_ids_res = await db.execute(select(JobRole.id).where(JobRole.org_id == current_user.org_id))
+    role_ids = [row[0] for row in role_ids_res.all()]
+    if not role_ids:
+        return success({"deleted": 0}, "No job roles to delete")
+
+    await db.execute(delete(CandidateInvite).where(CandidateInvite.job_role_id.in_(role_ids)))
+    await db.execute(delete(AIScore).where(AIScore.job_role_id.in_(role_ids)))
+    await db.execute(delete(JobRole).where(JobRole.org_id == current_user.org_id))
+    await db.commit()
+    return success({"deleted": len(role_ids)}, f"Deleted {len(role_ids)} job roles")
+
+
+@router.delete("/job-roles/{role_id}")
+async def delete_job_role(
+    role_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import delete
+
+    role_res = await db.execute(select(JobRole).where(JobRole.id == role_id, JobRole.org_id == current_user.org_id))
+    role = role_res.scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+
+    await db.execute(delete(CandidateInvite).where(CandidateInvite.job_role_id == role.id))
+    await db.execute(delete(AIScore).where(AIScore.job_role_id == role.id))
+    await db.delete(role)
+    await db.commit()
+    return success({"deleted": 1}, "Job role deleted")
 
 
 # ── Send Invite ───────────────────────────────────────────────────────────────
@@ -472,7 +764,7 @@ class InviteRequest(BaseModel):
 @router.post("/send-invite")
 async def send_invite(
     body: InviteRequest,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     from datetime import datetime
@@ -538,7 +830,7 @@ async def send_invite(
 @router.get("/invite-status/{job_role_id}")
 async def invite_status(
     job_role_id: int,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -574,7 +866,7 @@ class ConvertRequest(BaseModel):
 async def offer_preview(
     candidate_id: int,
     body: ConvertRequest,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     # Get candidate and user
@@ -604,7 +896,7 @@ async def offer_preview(
 async def convert_to_employee(
     candidate_id: int,
     body: ConvertRequest,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     from app.models.deploy import Employee, EmployeeStatus
@@ -715,7 +1007,7 @@ async def convert_to_employee(
 @router.post("/employees/{employee_id}/revert")
 async def revert_employee_to_candidate(
     employee_id: int,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Utility to revert an employee back to a candidate for testing."""
@@ -751,7 +1043,7 @@ async def revert_employee_to_candidate(
 @router.delete("/candidates/{candidate_id}")
 async def delete_candidate(
     candidate_id: int,
-    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy import delete
@@ -785,7 +1077,7 @@ async def delete_candidate(
 
 @router.get("/active-candidates")
 async def list_active_candidates(
-    current_user: User = Depends(require_role(["hr", "admin", "manager"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db)
 ):
     from sqlalchemy import or_, and_

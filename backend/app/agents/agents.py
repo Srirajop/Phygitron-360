@@ -12,6 +12,8 @@ import httpx
 def call_groq(system_prompt: str, user_prompt: str) -> dict:
     """Call Groq API via the groq library and return parsed JSON."""
     from groq import Groq
+    import re
+    
     client = Groq(api_key=settings.GROQ_API_KEY)
     response = client.chat.completions.create(
         model=settings.GROQ_MODEL,
@@ -23,42 +25,24 @@ def call_groq(system_prompt: str, user_prompt: str) -> dict:
         max_tokens=4096,
     )
     content = response.choices[0].message.content.strip()
-    if content.startswith("```"):
-        content = content.split("```")[1]
-        if content.startswith("json"):
-            content = content[4:]
-    return json.loads(content)
-
-
-def call_pico(system_prompt: str, user_prompt: str) -> dict:
-    """Call Pico Apps LLM API as a fallback to avoid Groq rate limits."""
-    url = "https://backend.buildpicoapps.com/aero/run/llm-api?pk=v1-Z0FBQUFBQnB3WHloNUFJSnNsc1BzWlZaYkYwcjNwSnZLSDJVSjl5ODdQZVZGZE1CS3JXWGNFM1dyNW9pQ3drZkcxalNGb1N5SDlKZ3FLbXVnWk5IaWprNzBxTDVUaTZJLWc9PQ=="
-    prompt = f"System Rules:\n{system_prompt}\n\nUser Input:\n{user_prompt}\n\nEnsure your response is ONLY raw JSON. No markdown."
     
-    with httpx.Client(timeout=60.0) as client:
-        response = client.post(url, json={"prompt": prompt})
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("status") == "success":
-            content = data.get("text", "").strip()
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-            try:
-                return json.loads(content)
-            except json.JSONDecodeError:
-                raise ValueError(f"Pico API did not return valid JSON: {content[:200]}")
-        else:
-            raise Exception(f"Pico API returned failure: {data}")
+    # Robustly extract JSON object or array from model responses.
+    match = re.search(r'(\{.*\}|\[.*\])', content, re.DOTALL)
+    if match:
+        content = match.group(1)
+    else:
+        # Fallback to previous stripping logic if regex fails
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+                
+    return json.loads(content.strip())
 
 
 def call_llm(system_prompt: str, user_prompt: str) -> dict:
-    """Load balancer / Fallback wrapper around Groq and Pico Apps APIs."""
-    engines = [call_groq, call_pico]
-    # Keep Groq first but fallback to Pico
-    # random.shuffle(engines) # Removed shuffle to prioritize Groq if it works, but allow fallback
+    """Call Groq API."""
+    engines = [call_groq]
     
     last_exception = None
     for engine in engines:
@@ -74,7 +58,10 @@ def call_llm(system_prompt: str, user_prompt: str) -> dict:
 
 PARSE_RESUME_SYSTEM = """You are a resume parsing AI. Extract structured data from the resume text.
 Respond ONLY with valid JSON. No markdown, no explanation text, no code blocks. Raw JSON only.
-CRITICAL: For `confidence_signals`, rigorously check if mentioned skills are ACTUALLY used in the project descriptions or work history. If a skill is listed but not backed by project history, flag it as potentially fake.
+CRITICAL: For `confidence_signals`, review ONLY skills that the resume explicitly claims. Do not create negative flags for skills that are merely common to the role, inferred from projects, or absent from the resume.
+Return at most 5 confidence signals. Prefer the highest-impact claims: senior-level skills, unusually broad stacks, claimed years, or tools listed without matching project/work-history evidence.
+For each signal, write a specific recruiter-facing reason. Avoid repeated boilerplate such as "No evidence of X usage in project descriptions or work history."
+Use `flag: true` only when a claimed skill has weak, vague, or missing work/project support. Use `flag: false` when the resume gives clear project, employer, metric, or deliverable evidence.
 Return this exact structure:
 {
   "name": "",
@@ -133,12 +120,14 @@ def run_parse_resume_agent(resume_text: str) -> dict:
     return call_llm(PARSE_RESUME_SYSTEM, f"Parse this resume:\n\n{resume_text[:8000]}")
 
 
-def run_score_role_fit_agent(candidate_skills: list, job_required_skills: list) -> dict:
+def run_score_role_fit_agent(candidate_skills: list, job_required_skills: list, role_title: str = "Unknown Role", role_min_exp: int = 0) -> dict:
     prompt = json.dumps({
+        "job_role": role_title,
+        "minimum_experience_required": role_min_exp,
         "candidate_skills": candidate_skills,
         "required_skills": job_required_skills
     })
-    return call_llm(ROLE_FIT_SYSTEM, f"Score this candidate's role fit:\n\n{prompt}")
+    return call_llm(ROLE_FIT_SYSTEM, f"Score this candidate's role fit for '{role_title}':\n\n{prompt}")
 
 
 def run_generate_feedback_agent(questions: list, answers: dict, scores: dict, total_score: float, passed: bool) -> dict:
@@ -196,3 +185,46 @@ def run_generate_offer_letter_agent(candidate_name: str, details: dict) -> dict:
         "details": details
     })
     return call_llm(GENERATE_OFFER_LETTER_SYSTEM, f"Generate a personalized internship offer letter for:\n\n{prompt}")
+
+COURSE_ARCHITECT_SYSTEM = """You are a Course Architect AI. Convert raw document text and file lists into a structured learning course.
+Respond ONLY with valid JSON. No markdown, no explanation text, no code blocks. Raw JSON only.
+Structure the course into logical lessons. For each lesson, decide if it should be a 'video' (if a video file was provided), an 'article' (based on document text), or a 'quiz'.
+Generate 3-5 MCQ questions for each quiz based on the document content.
+
+CRITICAL OUTPUT SIZE LIMITS:
+- Do NOT generate more than 8 sections/lessons in total.
+- Limit to at most 2 quizzes across the entire course.
+If there are many files, select the top 8 most relevant ones.
+
+Return this exact structure:
+{
+  "title": "Course Title",
+  "description": "Course Summary",
+  "estimated_hours": 0.0,
+  "difficulty": "beginner|intermediate|advanced|expert",
+  "category": "Engineering|Design|Strategy|...",
+  "sections": [
+    {
+      "title": "Lesson Title",
+      "content_type": "video|article|quiz",
+      "content_markdown": "If article, extracted/summarized text. If video, mention the filename clearly.",
+      "duration_minutes": 20,
+      "quizzes": [
+        {
+          "question_text": "",
+          "options": ["opt1", "opt2", "opt3", "opt4"],
+          "correct_answer": "correct_opt",
+          "explanation": "",
+          "marks": 1.0
+        }
+      ]
+    }
+  ]
+}"""
+
+def run_course_architect_agent(context_text: str, file_list: list) -> dict:
+    prompt = json.dumps({
+        "files_provided": file_list[:8], # Cap files to stay well under 6000 TPM limits
+        "raw_text_context": context_text[:5000] # Cap context strictly for 6000 TPM limits
+    })
+    return call_llm(COURSE_ARCHITECT_SYSTEM, f"Architect a course from these materials:\n\n{prompt}")

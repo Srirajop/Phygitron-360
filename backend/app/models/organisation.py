@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, func
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, func
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -12,6 +12,18 @@ class Organisation(Base):
     domain = Column(String(255), nullable=True)
     logo_url = Column(String(512), nullable=True)
     primary_color = Column(String(20), default="#7C3AED")
+
+    # SaaS Module Access (toggled by Super Admin)
+    has_source = Column(Boolean, default=False)    # Talent Vault / Source
+    has_verify = Column(Boolean, default=False)    # Assessments
+    has_forge = Column(Boolean, default=False)     # LMS / Forge
+    has_deploy = Column(Boolean, default=False)    # Employee Database
+
+    # Tenant management
+    is_active = Column(Boolean, default=True)
+    max_users = Column(Integer, default=50)
+    plan = Column(String(50), default="free")      # free / pro / enterprise
+
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 

@@ -23,7 +23,7 @@ export default function CandidateDashboard() {
   }, []);
 
   const pending = assessments.filter(a => ['pending', 'started'].includes(a.status));
-  const done = results.filter(r => r.score != null);
+  const done = results.filter(r => r.score != null || r.is_malpractice);
 
   return (
     <div>
@@ -77,12 +77,16 @@ export default function CandidateDashboard() {
                   <Link key={r.result_id} to={`/verify/result/${r.result_id}`} style={{ textDecoration: 'none' }}>
                     <div className={`card animate-fade-in stagger-${i+1}`} style={{ marginBottom: 12, cursor: 'pointer' }}>
                       <div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                        <div style={{ fontSize: '1.75rem', fontWeight: 900, color: r.pass_status ? 'var(--success)' : 'var(--danger)', minWidth: 60, textAlign: 'center' }}>{r.score?.toFixed(0)}%</div>
+                        <div style={{ fontSize: r.is_malpractice ? '0.75rem' : '1.75rem', fontWeight: 900, color: r.is_malpractice ? 'var(--danger)' : (r.pass_status ? 'var(--success)' : 'var(--danger)'), minWidth: 60, textAlign: 'center', lineHeight: 1.2 }}>
+                          {r.is_malpractice ? 'MALPRACTICE\nDETECTED ⚠️' : `${r.score?.toFixed(0)}%`}
+                        </div>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontWeight: 700, marginBottom: 4 }}>{r.title}</div>
                           <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : ''}</div>
                         </div>
-                        <span className={`badge ${r.pass_status ? 'badge-success' : 'badge-danger'}`}>{r.pass_status ? 'PASS ✅' : 'FAIL ❌'}</span>
+                        <span className={`badge ${r.is_malpractice ? 'badge-danger' : (r.pass_status ? 'badge-success' : 'badge-danger')}`}>
+                          {r.is_malpractice ? 'TERMINATED' : (r.pass_status ? 'PASS ✅' : 'FAIL ❌')}
+                        </span>
                       </div>
                     </div>
                   </Link>

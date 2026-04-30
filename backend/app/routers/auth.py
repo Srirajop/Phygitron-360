@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models.user import User
+from app.models.organisation import Organisation
 from app.utils.auth import (
     verify_password, create_access_token, create_refresh_token,
     decode_token, invalidate_refresh_token, get_current_user,
@@ -54,9 +55,28 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
         raise HTTPException(status_code=401, detail="Account is disabled")
 
     clear_failed_login(ip)
-    token_data = {"sub": str(user.id), "role": user.role.value, "org_id": user.org_id}
+
+    from app.utils.auth import get_role_level
+    role_level = get_role_level(user.role.value)
+
+    token_data = {"sub": str(user.id), "role": user.role.value, "org_id": user.org_id, "role_level": role_level}
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
+
+    # Get org modules for the response
+    modules = []
+    org_name = ""
+    if user.org_id:
+        org_res = await db.execute(select(Organisation).where(Organisation.id == user.org_id))
+        org = org_res.scalar_one_or_none()
+        if org:
+            org_name = org.name
+            if org.has_source: modules.append("source")
+            if org.has_verify: modules.append("verify")
+            if org.has_forge: modules.append("forge")
+            if org.has_deploy: modules.append("deploy")
+    if role_level == 1:
+        modules = ["source", "verify", "forge", "deploy", "platform"]
 
     return success({
         "access_token": access_token,
@@ -70,6 +90,9 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
             "full_name": user.full_name,
             "role": user.role.value,
             "org_id": user.org_id,
+            "org_name": org_name,
+            "role_level": role_level,
+            "modules": modules,
         }
     }, "Login successful")
 
@@ -115,12 +138,32 @@ async def change_password(
 
 
 @router.get("/me")
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.utils.auth import get_role_level
+    role_level = get_role_level(current_user.role.value)
+
+    modules = []
+    org_name = ""
+    if current_user.org_id:
+        org_res = await db.execute(select(Organisation).where(Organisation.id == current_user.org_id))
+        org = org_res.scalar_one_or_none()
+        if org:
+            org_name = org.name
+            if org.has_source: modules.append("source")
+            if org.has_verify: modules.append("verify")
+            if org.has_forge: modules.append("forge")
+            if org.has_deploy: modules.append("deploy")
+    if role_level == 1:
+        modules = ["source", "verify", "forge", "deploy", "platform"]
+
     return success({
         "id": current_user.id,
         "email": current_user.email,
         "full_name": current_user.full_name,
         "role": current_user.role.value,
         "org_id": current_user.org_id,
+        "org_name": org_name,
         "first_login": current_user.first_login,
+        "role_level": role_level,
+        "modules": modules,
     })

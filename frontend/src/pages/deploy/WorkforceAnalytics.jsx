@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { deployApi } from '../../api';
-import { Users, Briefcase, Brain, BarChart2, TrendingUp, Award, BookOpen, Shield } from 'lucide-react';
+import { Users, Briefcase, Brain, TrendingUp, Award, BookOpen, Shield } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 function HorizontalBar({ label, value, max, color = 'var(--primary)' }) {
@@ -68,10 +68,8 @@ export default function WorkforceAnalytics() {
   useEffect(() => {
     Promise.all([deployApi.analytics(), deployApi.analyticsDetailed()])
       .then(([s, d]) => {
-        const sd = s.data.data;
-        const dd = d.data.data;
-        setSummary(sd && typeof sd === 'object' && !Array.isArray(sd) ? sd : {});
-        setDetailed(dd && typeof dd === 'object' && !Array.isArray(dd) ? dd : {});
+        setSummary(s.data.data || {});
+        setDetailed(d.data.data || {});
       })
       .catch(() => toast.error('Failed to load analytics'))
       .finally(() => setLoading(false));
@@ -84,7 +82,14 @@ export default function WorkforceAnalytics() {
     </div>
   );
 
-  const statusColors = { active: '#10B981', on_leave: '#F59E0B', deployed: '#3B82F6', offboarded: '#9CA3AF' };
+  const statusColors = { 
+    active: '#10B981', 
+    on_leave: '#F59E0B', 
+    deployed: '#3B82F6', 
+    notice_period: '#FCD34D',
+    exited: '#F43F5E',
+    offboarded: '#9CA3AF' 
+  };
   const statusData = Object.entries(detailed?.status_distribution || {}).map(([k, v]) => ({
     label: k.replace(/_/g, ' '), value: v, color: statusColors[k] || '#9CA3AF',
   }));
@@ -98,11 +103,12 @@ export default function WorkforceAnalytics() {
   const learning = detailed?.learning || {};
 
   return (
-    <div>
+    <div className="animate-fade-in">
       <div className="page-header">
         <h1>Workforce Analytics</h1>
         <p>Real-time insights into your organisation's talent, skills, and learning performance</p>
       </div>
+
       <div className="page-body">
         {/* Top Stats */}
         <div className="stats-grid animate-fade-in" style={{ marginBottom: 32 }}>
@@ -205,6 +211,50 @@ export default function WorkforceAnalytics() {
                   color={['#7C3AED','#EC4899','#0891B2','#10B981','#F59E0B','#EF4444','#9333EA'][i % 7]}
                 />
               ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginTop: 24 }}>
+          {/* Attendance Alert */}
+          <div className="card animate-fade-in stagger-5">
+            <div className="card-header"><h4 style={{ margin: 0 }}>Attendance Compliance</h4></div>
+            <div className="card-body">
+               <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+                  <div style={{ textAlign: 'center' }}>
+                     <div style={{ fontSize: '2rem', fontWeight: 900, color: 'var(--success)' }}>{summary?.attendance_today?.present || 0}</div>
+                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700 }}>PRESENT</div>
+                  </div>
+                  <div style={{ height: 40, width: 1, background: 'var(--border)' }} />
+                  <div style={{ textAlign: 'center' }}>
+                     <div style={{ fontSize: '2rem', fontWeight: 900, color: 'var(--danger)' }}>{summary?.attendance_today?.absent || 0}</div>
+                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700 }}>ABSENT</div>
+                  </div>
+                  <div style={{ flex: 1, textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Organization compliance today</div>
+                    <button className="btn btn-ghost btn-sm" style={{ color: 'var(--primary)', marginTop: 8 }}>View Daily Ledger</button>
+                  </div>
+               </div>
+            </div>
+          </div>
+
+          {/* Performance Summary */}
+          <div className="card animate-fade-in stagger-6">
+            <div className="card-header"><h4 style={{ margin: 0 }}>Performance (KRA) Overview</h4></div>
+            <div className="card-body">
+               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Average KRA Score</div>
+                    <div style={{ fontSize: '1.75rem', fontWeight: 900 }}>{summary?.avg_kra_score?.toFixed(1) || '0.0'} / 10</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Reviews Finalized</div>
+                    <div style={{ fontSize: '1.75rem', fontWeight: 900 }}>{summary?.finalized_assessments || 0}</div>
+                  </div>
+               </div>
+               <div className="progress-bar" style={{ height: 10 }}>
+                  <div className="progress-fill" style={{ width: `${(summary?.avg_kra_score || 0) * 10}%` }} />
+               </div>
             </div>
           </div>
         </div>

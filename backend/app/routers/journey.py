@@ -37,6 +37,12 @@ class AssignJourneyRequest(BaseModel):
     deadline: Optional[datetime] = None
 
 
+class JourneyUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    steps: Optional[List[JourneyStepCreate]] = None
+
+
 # ── Journey Management ────────────────────────────────────────────────────────
 
 @router.post("/journeys")
@@ -72,9 +78,10 @@ async def list_journeys(
     current_user: User = Depends(require_role(["hr", "admin"])),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Journey).where(Journey.org_id == current_user.org_id).order_by(Journey.created_at.desc())
-    )
+    query = select(Journey).order_by(Journey.created_at.desc())
+    if current_user.role.value != "super_admin":
+        query = query.where(Journey.org_id == current_user.org_id)
+    result = await db.execute(query)
     journeys = result.scalars().all()
     
     out = []
@@ -131,6 +138,43 @@ async def get_journey(
         "description": journey.description,
         "steps": steps_out
     })
+
+
+@router.patch("/journeys/{journey_id}")
+async def update_journey(
+    journey_id: int,
+    body: JourneyUpdate,
+    current_user: User = Depends(require_role(["hr", "admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Journey).where(Journey.id == journey_id))
+    journey = result.scalar_one_or_none()
+    if not journey:
+        raise HTTPException(status_code=404, detail="Journey not found")
+
+    if body.title is not None:
+        journey.title = body.title
+    if body.description is not None:
+        journey.description = body.description
+
+    if body.steps is not None:
+        # Delete old steps
+        from app.models.journey import JourneyStep
+        from sqlalchemy import delete
+        await db.execute(delete(JourneyStep).where(JourneyStep.journey_id == journey_id))
+        
+        # Add new steps
+        for step_data in body.steps:
+            step = JourneyStep(
+                journey_id=journey_id,
+                type=step_data.type,
+                reference_id=step_data.reference_id,
+                order_index=step_data.order_index
+            )
+            db.add(step)
+
+    await db.commit()
+    return success({"id": journey.id}, "Journey updated successfully")
 
 
 # ── Assignment ────────────────────────────────────────────────────────────────

@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { verifyApi, adminApi } from '../../api';
-import { BarChart2, PlusCircle, Send, Eye } from 'lucide-react';
+import { BarChart2, PlusCircle, Send, Eye, Calendar } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
 
 const STATUS_BADGE = { draft: 'badge-muted', active: 'badge-success', archived: 'badge-info' };
 
 export default function ManageAssessments() {
+  const { user } = useAuth();
   const [assessments, setAssessments] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -25,8 +27,10 @@ export default function ManageAssessments() {
     setSelectedCandidates([]);
     setSearch('');
     if (candidates.length === 0) {
-      adminApi.listUsers({ role: 'candidate' }).then(r => {
-        const actualCandidates = (r.data.data || []).filter(c => !c.email.includes('.local'));
+      adminApi.listUsers().then(r => {
+        const actualCandidates = (r.data.data || []).filter(c => 
+          !c.email.includes('.local') && ['candidate', 'employee'].includes(c.role)
+        );
         setCandidates(actualCandidates);
       }).catch(console.error);
     }
@@ -82,7 +86,9 @@ export default function ManageAssessments() {
                         <div style={{ display: 'flex', gap: 8 }}>
                           {a.status === 'draft' && <button className="btn btn-secondary btn-sm" onClick={() => publish(a.id)}>Publish</button>}
                           {a.status === 'active' && <button className="btn btn-shimmer btn-sm" onClick={() => openAssignModal(a.id)}><Send size={14} /> Assign</button>}
-                          <Link to={`/verify/analytics/${a.id}`} className="btn btn-ghost btn-sm"><BarChart2 size={14} /></Link>
+                          {['super_admin', 'org_admin', 'hr'].includes(user?.role) && (
+                            <Link to={`/verify/analytics/${a.id}`} className="btn btn-ghost btn-sm"><BarChart2 size={14} /></Link>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -103,8 +109,14 @@ export default function ManageAssessments() {
             <div className="card-body">
               <form onSubmit={handleAssign}>
                 <div className="form-group">
-                  <label className="form-label">Search Candidates</label>
+                  <label className="form-label">Search Users</label>
                   <input type="text" className="form-control" placeholder="Search by name or email..." value={search} onChange={e => setSearch(e.target.value)} />
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedCandidates(candidates.map(c => c.id))}>Select All</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedCandidates(candidates.filter(c => c.role === 'employee').map(c => c.id))}>All Employees</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedCandidates(candidates.filter(c => c.role === 'candidate').map(c => c.id))}>All Trainees</button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedCandidates([])}>Clear</button>
                 </div>
                 <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', marginBottom: 16 }}>
                   {candidates.filter(c => (c.full_name || '').toLowerCase().includes(search.toLowerCase()) || (c.email || '').toLowerCase().includes(search.toLowerCase())).map(c => (
@@ -112,18 +124,31 @@ export default function ManageAssessments() {
                       <input type="checkbox" checked={selectedCandidates.includes(c.id)} onChange={e => {
                         setSelectedCandidates(prev => e.target.checked ? [...prev, c.id] : prev.filter(id => id !== c.id));
                       }} style={{ width: 16, height: 16, accentColor: 'var(--primary)' }} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600 }}>{c.full_name || 'Candidate'}</div>
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{c.email}</div>
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ fontWeight: 600 }}>{c.full_name || 'User'}</div>
+                        <span className={`badge ${c.role === 'employee' ? 'badge-info' : 'badge-muted'}`} style={{ fontSize: '0.65rem', padding: '2px 6px' }}>
+                          {c.role === 'employee' ? 'Employee' : 'Trainee'}
+                        </span>
                       </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{c.email}</div>
                     </label>
                   ))}
-                  {candidates.length === 0 && <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)' }}>No candidates found.</div>}
+                  {candidates.length === 0 && <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)' }}>No users found.</div>}
                 </div>
                 
                 <div className="form-group">
                   <label className="form-label">Deadline (Optional)</label>
-                  <input type="date" className="form-control" value={assignModal.deadline} onChange={e => setAssignModal({ ...assignModal, deadline: e.target.value })} />
+                  <div className="form-date-group">
+                    <Calendar size={18} className="calendar-icon" />
+                    <input 
+                      type="date" 
+                      className="form-control" 
+                      value={assignModal.deadline} 
+                      onChange={e => setAssignModal({ ...assignModal, deadline: e.target.value })} 
+                      style={{ paddingRight: '40px' }}
+                    />
+                  </div>
+                  <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>Click the icon or field to open calendar.</p>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>

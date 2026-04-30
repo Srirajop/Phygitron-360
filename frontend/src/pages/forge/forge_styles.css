@@ -1,0 +1,356 @@
+/* 
+  Forge Premium Design System — Obsidian & Subtle Glow 
+  Aligned with Phygitron 360 High-End Branding
+*/
+
+:root {
+  --forge-bg: #0A0A0F;
+  --forge-card-bg: rgba(255, 255, 255, 0.03);
+  --forge-border: rgba(255, 255, 255, 0.08);
+  --forge-border-glow: rgba(124, 58, 237, 0.2);
+  --forge-text-main: #FFFFFF;
+  --forge-text-dim: rgba(255, 255, 255, 0.6);
+  --forge-accent: #7C3AED;
+  --forge-header-bg: #000000;
+  --forge-pre-bg: #050508;
+  --forge-preview-bg: #000000;
+}
+
+[data-theme='light'] {
+  --forge-bg: #F9FAFB;
+  --forge-card-bg: #FFFFFF;
+  --forge-border: rgba(0, 0, 0, 0.08);
+  --forge-border-glow: rgba(124, 58, 237, 0.15);
+  --forge-text-main: #1F2937;
+  --forge-text-dim: #6B7280;
+  --forge-accent: #7C3AED;
+  --forge-header-bg: #FFFFFF;
+  --forge-pre-bg: #F3F4F6;
+  --forge-hover: rgba(0, 0, 0, 0.03);
+  --forge-icon-bg: rgba(0, 0, 0, 0.05);
+  --forge-preview-bg: #FFFFFF;
+}
+
+:root {
+  --forge-hover: rgba(255, 255, 255, 0.03);
+  --forge-icon-bg: rgba(255, 255, 255, 0.05);
+}
+
+/* ── Grain Texture Overlay ───────────────────────────────────── */
+.forge-grain {
+  position: relative;
+}
+.forge-grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.02;
+  pointer-events: none;
+  z-index: 1;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3col%3e%3cfilter id='noiseFilter'%3e%3cfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3e%3c/filter%3e%3crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3e%3c/svg%3e");
+}
+
+[data-theme='light'] .forge-grain::before {
+  opacity: 0.015;
+  filter: invert(1);
+}
+
+.forge-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  color: var(--forge-text-main);
+  background: var(--forge-bg);
+}
+
+/* ── Premium Obsidian Cards ──────────────────────────────────── */
+.forge-course-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--forge-card-bg);
+  border: 1px solid var(--forge-border);
+  border-radius: 20px;
+  overflow: hidden;
+  transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  backdrop-filter: blur(10px);
+}
+
+.forge-course-card:hover {
+  transform: translateY(-8px);
+  border-color: var(--forge-border-glow);
+  background: var(--forge-card-hover-bg, rgba(255, 255, 255, 0.05));
+}
+
+[data-theme='light'] .forge-course-card:hover {
+  --forge-card-hover-bg: rgba(0, 0, 0, 0.01);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.05);
+}
+
+.forge-card-badge {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--forge-accent);
+}
+
+.forge-thumbnail {
+  height: 180px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--forge-header-bg);
+}
+
+.forge-thumbnail-overlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.6) 100%);
+}
+
+.forge-card-body {
+  padding: 24px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.forge-card-category {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--forge-accent);
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.forge-card-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+  line-height: 1.3;
+}
+
+.forge-card-desc {
+  font-size: 0.9rem;
+  color: var(--forge-text-dim);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+/* ── Content Player - Cinema Layout ───────────────────────────── */
+.cinema-frame {
+  background: var(--forge-preview-bg);
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 40px 100px var(--forge-cinema-shadow, rgba(0,0,0,0.8));
+  position: relative;
+  border: 1px solid var(--forge-border);
+}
+
+[data-theme='light'] .cinema-frame {
+  --forge-cinema-shadow: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.1);
+}
+
+.toc-sidebar {
+  background: var(--forge-bg);
+  border-left: 1px solid var(--forge-border);
+}
+
+.toc-header {
+  padding: 32px 24px 16px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--forge-text-dim);
+}
+
+.toc-item {
+  position: relative;
+  padding: 14px 20px;
+  border-radius: 12px;
+  margin: 4px 16px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid transparent;
+}
+
+.toc-item:not(.locked):hover {
+  background: var(--forge-hover);
+  border-color: var(--forge-border);
+}
+
+.toc-item.active {
+  background: rgba(124, 58, 237, 0.1);
+  border-color: rgba(124, 58, 237, 0.3);
+}
+
+.toc-item.active .toc-status-icon {
+  background: var(--forge-accent);
+  color: white;
+}
+
+.toc-status-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--forge-icon-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--forge-text-dim);
+}
+
+/* ── Markdown Content Styling (High-End Dark) ────────────────── */
+.markdown-body {
+  color: var(--forge-text-main);
+  line-height: 1.8;
+  font-size: 1.05rem;
+}
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  color: var(--forge-text-main);
+  margin-top: 2em;
+  margin-bottom: 0.8em;
+  font-weight: 800;
+}
+
+.markdown-body h1 { font-size: 2.5rem; letter-spacing: -0.03em; }
+.markdown-body h2 { font-size: 1.8rem; letter-spacing: -0.02em; }
+
+.markdown-body p { 
+  margin-bottom: 1.5em; 
+  color: var(--forge-text-dim); 
+}
+
+.markdown-body code {
+  background: var(--forge-icon-bg);
+  padding: 0.2rem 0.4rem;
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  color: var(--forge-accent);
+}
+
+.markdown-body pre {
+  background: var(--forge-pre-bg);
+  border: 1px solid var(--forge-border);
+  padding: 24px;
+  border-radius: 16px;
+  overflow-x: auto;
+  margin: 32px 0;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  color: var(--forge-text-main);
+}
+
+.markdown-body blockquote {
+  border-left: 2px solid var(--forge-accent);
+  padding: 16px 32px;
+  background: rgba(124, 58, 237, 0.03);
+  margin: 32px 0;
+  color: var(--forge-text-main);
+  font-style: italic;
+}
+
+/* ── Quiz Interactive UI ─────────────────────────────────────── */
+.quiz-choice {
+  border: 1px solid var(--forge-border);
+  padding: 20px 24px;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--forge-card-bg);
+  margin-bottom: 12px;
+}
+
+.quiz-choice:hover:not(.submitted) {
+  border-color: var(--forge-accent);
+  background: rgba(124, 58, 237, 0.05);
+  transform: translateX(4px);
+}
+
+.quiz-choice.selected {
+  border-color: var(--forge-accent);
+  background: rgba(124, 58, 237, 0.1);
+  box-shadow: 0 0 20px rgba(124, 58, 237, 0.1);
+}
+
+.quiz-radio {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1.5px solid var(--forge-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.quiz-choice.selected .quiz-radio {
+  border-color: var(--forge-accent);
+  background: var(--forge-accent);
+}
+
+.quiz-radio-inner {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: white;
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+
+.quiz-choice.selected .quiz-radio-inner {
+  opacity: 1;
+}
+
+/* ── Focused Player Header ────────────────────────────────────── */
+.player-header {
+  height: 72px;
+  background: var(--forge-header-bg);
+  border-bottom: 1px solid var(--forge-border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  justify-content: space-between;
+}
+
+.player-title {
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.player-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

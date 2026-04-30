@@ -22,6 +22,7 @@ class ContentType(str, enum.Enum):
     pdf = "pdf"
     quiz = "quiz"
     lab = "lab"
+    article = "article"
 
 
 class EnrollmentTrigger(str, enum.Enum):
@@ -43,13 +44,15 @@ class Course(Base):
     thumbnail_url = Column(String(512), nullable=True)
     status = Column(Enum(CourseStatus), default=CourseStatus.draft)
     instructor_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    category = Column(String(255), default="General")
+    is_featured = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     instructor = relationship("User", foreign_keys=[instructor_id])
     sections = relationship("CourseSection", back_populates="course", cascade="all, delete-orphan", order_by="CourseSection.order_index")
-    enrollments = relationship("Enrollment", back_populates="course")
-    certificates = relationship("Certificate", back_populates="course")
+    enrollments = relationship("Enrollment", back_populates="course", cascade="all, delete-orphan")
+    certificates = relationship("Certificate", back_populates="course", cascade="all, delete-orphan")
 
 
 class CourseSection(Base):
@@ -61,6 +64,7 @@ class CourseSection(Base):
     order_index = Column(Integer, default=0)
     content_type = Column(Enum(ContentType), nullable=False)
     content_url = Column(String(512), nullable=True)
+    content_markdown = Column(Text, nullable=True)
     duration_minutes = Column(Integer, nullable=True)
     pass_score = Column(DECIMAL(5, 2), default=50.0)  # For quizzes
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
@@ -68,7 +72,7 @@ class CourseSection(Base):
 
     course = relationship("Course", back_populates="sections")
     quizzes = relationship("SectionQuiz", back_populates="section", cascade="all, delete-orphan")
-    progress = relationship("LearningProgress", back_populates="section")
+    progress = relationship("LearningProgress", back_populates="section", cascade="all, delete-orphan")
 
 
 class SectionQuiz(Base):

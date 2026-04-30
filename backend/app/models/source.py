@@ -11,6 +11,13 @@ class CandidateStatus(str, enum.Enum):
     shortlisted = "shortlisted"
     archived = "archived"
     parse_failed = "parse_failed"
+    
+class JobStatus(str, enum.Enum):
+    pending = "pending"
+    processing = "processing"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
 
 
 class SkillLevel(str, enum.Enum):
@@ -126,3 +133,21 @@ class CandidateInvite(Base):
     candidate = relationship("Candidate", back_populates="invites")
     job_role = relationship("JobRole", back_populates="invites")
     hr_user = relationship("User", foreign_keys=[hr_user_id])
+
+class BulkUploadJob(Base):
+    __tablename__ = "bulk_upload_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organisations.id"), nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    filename = Column(String(255), nullable=True)
+    total_files = Column(Integer, default=0)
+    processed_files = Column(Integer, default=0)
+    processed_details = Column(JSON, nullable=True)  # List of {"filename": str, "status": str, "error": str}
+    status = Column(Enum(JobStatus), default=JobStatus.pending)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    organisation = relationship("Organisation")
+    creator = relationship("User")

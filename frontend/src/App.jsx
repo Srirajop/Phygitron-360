@@ -68,29 +68,47 @@ import SkillMap from './pages/deploy/SkillMap';
 import ProjectMatching from './pages/deploy/ProjectMatching';
 import WorkforceAnalytics from './pages/deploy/WorkforceAnalytics';
 import MyProfile from './pages/deploy/MyProfile';
+import Attendance from './pages/deploy/Attendance';
+import SelfOnboarding from './pages/deploy/SelfOnboarding';
 
 // Admin
 import UserManagement from './pages/admin/UserManagement';
 import OrgSettings from './pages/admin/OrgSettings';
+import SuperAdminDashboard from './pages/admin/SuperAdminDashboard';
+import OrgManagement from './pages/admin/OrgManagement';
 
 // Journey
 import AdminJourneys from './pages/journey/AdminJourneys';
 import UserJourney from './pages/journey/UserJourney';
 
 const ROLE_HOME = {
+  super_admin: '/platform/dashboard',
   candidate: '/verify/dashboard',
   employee: '/forge',
   hr: '/source',
   instructor: '/forge/my-courses',
   manager: '/deploy',
-  admin: '/admin/users',
+  org_admin: '/admin/users',
 };
 
 function PrivateRoute({ children, roles }) {
   const { user, loading } = useAuth();
   if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}><div className="spinner spinner-lg" /></div>;
   if (!user) return <Navigate to="/login" replace />;
+  // Super admin bypasses all role checks
+  if (user.role === 'super_admin') return children;
   if (roles && !roles.includes(user.role)) return <Navigate to={ROLE_HOME[user.role] || '/login'} replace />;
+  return children;
+}
+
+function ModuleGate({ children, module }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="page-loader"><div className="spinner" /></div>;
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role === 'super_admin') return children;
+  if (!user.modules?.includes(module)) {
+    return <Navigate to={ROLE_HOME[user.role] || '/'} replace />;
+  }
   return children;
 }
 
@@ -139,48 +157,55 @@ export default function App() {
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/onboarding/setup" element={<SelfOnboarding />} />
             <Route path="/change-password" element={<PrivateRoute><AppLayout><ChangePassword /></AppLayout></PrivateRoute>} />
 
+            {/* Platform / Super Admin */}
+            <Route path="/platform/dashboard" element={<PrivateRoute roles={['super_admin']}><AppLayout><SuperAdminDashboard /></AppLayout></PrivateRoute>} />
+            <Route path="/platform/orgs" element={<PrivateRoute roles={['super_admin']}><AppLayout><OrgManagement /></AppLayout></PrivateRoute>} />
+            <Route path="/platform/settings" element={<PrivateRoute roles={['super_admin']}><AppLayout><div className="page-content center">Global Settings UI (Coming Soon)</div></AppLayout></PrivateRoute>} />
+
             {/* Source */}
-            <Route path="/source" element={<PrivateRoute roles={['hr','admin']}><AppLayout><SourceDashboard /></AppLayout></PrivateRoute>} />
-            <Route path="/source/active" element={<PrivateRoute roles={['hr','admin']}><AppLayout><ActiveCandidates /></AppLayout></PrivateRoute>} />
-            <Route path="/source/upload" element={<PrivateRoute roles={['hr','admin']}><AppLayout><ResumeUpload /></AppLayout></PrivateRoute>} />
-            <Route path="/source/candidates/:id" element={<PrivateRoute roles={['hr','admin','manager']}><AppLayout><CandidateProfile /></AppLayout></PrivateRoute>} />
-            <Route path="/source/invite-status/:roleId" element={<PrivateRoute roles={['hr','admin']}><AppLayout><InviteStatus /></AppLayout></PrivateRoute>} />
+            <Route path="/source" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><SourceDashboard /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/source/active" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><ActiveCandidates /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/source/upload" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><ResumeUpload /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/source/candidates/:id" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><CandidateProfile /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/source/invite-status/:roleId" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><InviteStatus /></AppLayout></PrivateRoute></ModuleGate>} />
 
             {/* Verify */}
-            <Route path="/verify/dashboard" element={<PrivateRoute><AppLayout><CandidateDashboard /></AppLayout></PrivateRoute>} />
-            <Route path="/verify/assessment/:id" element={<PrivateRoute><AssessmentTaker /></PrivateRoute>} />
-            <Route path="/verify/result/:id" element={<PrivateRoute><AppLayout><ResultScreen /></AppLayout></PrivateRoute>} />
-            <Route path="/verify/leaderboard/:id" element={<PrivateRoute><AppLayout><Leaderboard /></AppLayout></PrivateRoute>} />
-            <Route path="/verify/build" element={<PrivateRoute roles={['hr','admin','instructor']}><AppLayout><AssessmentBuilder /></AppLayout></PrivateRoute>} />
-            <Route path="/verify/manage" element={<PrivateRoute roles={['hr','admin','instructor']}><AppLayout><ManageAssessments /></AppLayout></PrivateRoute>} />
-            <Route path="/verify/analytics/:id" element={<PrivateRoute roles={['hr','admin','manager']}><AppLayout><AssessmentAnalytics /></AppLayout></PrivateRoute>} />
+            <Route path="/verify/dashboard" element={<ModuleGate module="verify"><PrivateRoute><AppLayout><CandidateDashboard /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/verify/assessment/:id" element={<ModuleGate module="verify"><PrivateRoute><AssessmentTaker /></PrivateRoute></ModuleGate>} />
+            <Route path="/verify/result/:id" element={<ModuleGate module="verify"><PrivateRoute><AppLayout><ResultScreen /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/verify/leaderboard/:id" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><Leaderboard /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/verify/build" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','instructor']}><AppLayout><AssessmentBuilder /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/verify/manage" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','instructor']}><AppLayout><ManageAssessments /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/verify/analytics/:id" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><AssessmentAnalytics /></AppLayout></PrivateRoute></ModuleGate>} />
 
             {/* Forge */}
-            <Route path="/forge" element={<PrivateRoute><AppLayout><ForgeDashboard /></AppLayout></PrivateRoute>} />
-            <Route path="/forge/library" element={<PrivateRoute><AppLayout><CourseLibrary /></AppLayout></PrivateRoute>} />
-            <Route path="/forge/course/:id" element={<PrivateRoute><CoursePlayer /></PrivateRoute>} />
-            <Route path="/forge/build" element={<PrivateRoute roles={['instructor','admin','hr']}><AppLayout><CourseBuilder /></AppLayout></PrivateRoute>} />
-            <Route path="/forge/my-courses" element={<PrivateRoute roles={['instructor','admin','hr']}><AppLayout><MyCourses /></AppLayout></PrivateRoute>} />
-            <Route path="/forge/transcript" element={<PrivateRoute><AppLayout><Transcript /></AppLayout></PrivateRoute>} />
-            <Route path="/forge/team" element={<PrivateRoute roles={['manager','hr','admin']}><AppLayout><TeamAnalytics /></AppLayout></PrivateRoute>} />
+            <Route path="/forge" element={<ModuleGate module="forge"><PrivateRoute><AppLayout><ForgeDashboard /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/forge/library" element={<ModuleGate module="forge"><PrivateRoute><AppLayout><CourseLibrary /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/forge/course/:id" element={<ModuleGate module="forge"><PrivateRoute><CoursePlayer /></PrivateRoute></ModuleGate>} />
+            <Route path="/forge/build" element={<ModuleGate module="forge"><PrivateRoute roles={['instructor','org_admin','hr']}><AppLayout><CourseBuilder /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/forge/my-courses" element={<ModuleGate module="forge"><PrivateRoute roles={['instructor','org_admin','hr']}><AppLayout><MyCourses /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/forge/transcript" element={<ModuleGate module="forge"><PrivateRoute><AppLayout><Transcript /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/forge/team" element={<ModuleGate module="forge"><PrivateRoute roles={['manager','hr','org_admin']}><AppLayout><TeamAnalytics /></AppLayout></PrivateRoute></ModuleGate>} />
 
             {/* Deploy */}
-            <Route path="/deploy" element={<PrivateRoute roles={['hr','admin','manager']}><AppLayout><EmployeeList /></AppLayout></PrivateRoute>} />
-            <Route path="/deploy/add" element={<PrivateRoute roles={['hr','admin']}><AppLayout><AddEmployee /></AppLayout></PrivateRoute>} />
-            <Route path="/deploy/employee/:id" element={<PrivateRoute roles={['hr','admin','manager']}><AppLayout><EmployeeProfile /></AppLayout></PrivateRoute>} />
-            <Route path="/deploy/skill-map" element={<PrivateRoute roles={['hr','admin','manager']}><AppLayout><SkillMap /></AppLayout></PrivateRoute>} />
-            <Route path="/deploy/projects" element={<PrivateRoute roles={['hr','admin']}><AppLayout><ProjectMatching /></AppLayout></PrivateRoute>} />
-            <Route path="/deploy/analytics" element={<PrivateRoute roles={['hr','admin','manager']}><AppLayout><WorkforceAnalytics /></AppLayout></PrivateRoute>} />
-            <Route path="/deploy/my-profile" element={<PrivateRoute roles={['employee']}><AppLayout><MyProfile /></AppLayout></PrivateRoute>} />
+            <Route path="/deploy" element={<ModuleGate module="deploy"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><EmployeeList /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/deploy/add" element={<ModuleGate module="deploy"><PrivateRoute roles={['hr','org_admin']}><AppLayout><AddEmployee /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/deploy/employee/:id" element={<ModuleGate module="deploy"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><EmployeeProfile /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/deploy/skill-map" element={<ModuleGate module="deploy"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><SkillMap /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/deploy/projects" element={<ModuleGate module="deploy"><PrivateRoute roles={['hr','org_admin']}><AppLayout><ProjectMatching /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/deploy/analytics" element={<ModuleGate module="deploy"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><WorkforceAnalytics /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/deploy/my-profile" element={<ModuleGate module="deploy"><PrivateRoute roles={['employee']}><AppLayout><MyProfile /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/deploy/attendance" element={<ModuleGate module="deploy"><PrivateRoute><AppLayout><Attendance /></AppLayout></PrivateRoute></ModuleGate>} />
 
             {/* Admin */}
-            <Route path="/admin/users" element={<PrivateRoute roles={['admin']}><AppLayout><UserManagement /></AppLayout></PrivateRoute>} />
-            <Route path="/admin/org-settings" element={<PrivateRoute roles={['admin']}><AppLayout><OrgSettings /></AppLayout></PrivateRoute>} />
+            <Route path="/admin/users" element={<PrivateRoute roles={['org_admin']}><AppLayout><UserManagement /></AppLayout></PrivateRoute>} />
+            <Route path="/admin/org-settings" element={<PrivateRoute roles={['org_admin']}><AppLayout><OrgSettings /></AppLayout></PrivateRoute>} />
 
             {/* Journey */}
-            <Route path="/admin/journeys" element={<PrivateRoute roles={['hr','admin']}><AppLayout><AdminJourneys /></AppLayout></PrivateRoute>} />
+            <Route path="/admin/journeys" element={<PrivateRoute roles={['hr','org_admin']}><AppLayout><AdminJourneys /></AppLayout></PrivateRoute>} />
             <Route path="/journey/my-path" element={<PrivateRoute><AppLayout><UserJourney /></AppLayout></PrivateRoute>} />
             
             {/* Fallback */}

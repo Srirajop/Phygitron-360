@@ -86,10 +86,16 @@ export default function AssessmentAnalytics() {
                     <tr key={s.result_id}>
                       <td style={{ fontWeight: 600 }}>{s.candidate_name}</td>
                       <td>{s.submitted_at ? new Date(s.submitted_at).toLocaleDateString() : '—'}</td>
-                      <td>{s.score != null ? `${s.score.toFixed(1)}%` : '—'}</td>
                       <td>
-                        <span className={`badge ${s.pass_status ? 'badge-success' : 'badge-danger'}`} style={{ marginRight: 8 }}>
-                          {s.pass_status ? 'PASS' : 'FAIL'}
+                        {s.is_malpractice ? (
+                          <span style={{ color: 'var(--danger)', fontWeight: 800, animation: 'pulse 2s infinite' }}>0.0% ⚠️</span>
+                        ) : (
+                          s.score != null ? `${s.score.toFixed(1)}%` : '—'
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${s.is_malpractice ? 'badge-danger' : (s.pass_status ? 'badge-success' : 'badge-danger')}`} style={{ marginRight: 8 }}>
+                          {s.is_malpractice ? 'MALPRACTICE' : (s.pass_status ? 'PASS' : 'FAIL')}
                         </span>
                         {!s.is_released && <span className="badge badge-warning">Pending Release</span>}
                       </td>

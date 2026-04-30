@@ -4,96 +4,78 @@ import { forgeApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import {
   BookOpen, Award, PlayCircle, Clock, ChevronRight, Brain,
-  TrendingUp, Star, Zap, Target, Search, Filter, GraduationCap, CheckCircle
+  TrendingUp, Star, Zap, Target, Search, Filter, GraduationCap, CheckCircle,
+  ArrowUpRight, Sparkles, Activity, Layers
 } from 'lucide-react';
+import './forge_styles.css';
 
 const DIFF_CONFIG = {
-  beginner:     { badge: 'badge-success', emoji: '🌱', color: '#10B981' },
-  intermediate: { badge: 'badge-info',    emoji: '🌿', color: '#3B82F6' },
-  advanced:     { badge: 'badge-primary', emoji: '🔥', color: '#8B5CF6' },
-  expert:       { badge: 'badge-danger',  emoji: '⭐', color: '#EF4444' },
+  beginner:     { badge: 'badge-success', color: '#10B981', label: 'Beginner' },
+  intermediate: { badge: 'badge-info',    color: '#3B82F6', label: 'Intermediate' },
+  advanced:     { badge: 'badge-primary', color: '#8257e5', label: 'Advanced' },
+  expert:       { badge: 'badge-danger',  color: '#EF4444', label: 'Expert' },
 };
 
-function ProgressRing({ percent, size = 56, stroke = 5 }) {
-  const r = (size - stroke) / 2;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - (percent / 100) * circ;
-  return (
-    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)', flexShrink: 0 }}>
-      <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--primary-lighter)" strokeWidth={stroke} fill="none" />
-      <circle
-        cx={size / 2} cy={size / 2} r={r}
-        stroke="var(--primary)" strokeWidth={stroke} fill="none"
-        strokeDasharray={circ} strokeDashoffset={offset}
-        strokeLinecap="round"
-        style={{ transition: 'stroke-dashoffset 0.8s cubic-bezier(0.4,0,0.2,1)' }}
-      />
-    </svg>
-  );
-}
+const getGradient = (id) => {
+  const gradients = [
+    'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    'linear-gradient(135deg, #6a11cb 0%, #2575fc 100%)',
+    'linear-gradient(135deg, #ff0844 0%, #ffb199 100%)',
+    'linear-gradient(135deg, #09203f 0%, #537895 100%)',
+    'linear-gradient(135deg, #b721ff 0%, #21d4fd 100%)',
+    'linear-gradient(135deg, #30cfd0 0%, #330867 100%)',
+  ];
+  return gradients[id % gradients.length];
+};
 
-function CourseCard({ course, onNavigate, showProgress }) {
+function CompactCourseCard({ course, onNavigate, showProgress }) {
   const cfg = DIFF_CONFIG[course.difficulty] || DIFF_CONFIG.beginner;
   return (
-    <div
-      className="course-card animate-fade-in"
-      onClick={onNavigate}
-      style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
-    >
-      <div className="course-card-thumb" style={{ position: 'relative' }}>
-        <span style={{ position: 'relative', zIndex: 2, fontSize: '2.5rem' }}>{cfg.emoji}</span>
-        <span className={`badge ${cfg.badge}`} style={{
-          position: 'absolute', top: 12, right: 12, zIndex: 3
-        }}>{course.difficulty}</span>
-        {course.enrolled && (
-          <span style={{
-            position: 'absolute', top: 12, left: 12, zIndex: 3,
-            background: 'rgba(16,185,129,0.9)', color: 'white',
-            borderRadius: '999px', padding: '3px 10px', fontSize: '0.7rem', fontWeight: 700
-          }}>✓ Enrolled</span>
-        )}
+    <div className="forge-course-card" onClick={onNavigate}>
+      <div className="forge-thumbnail" style={{ background: getGradient(course.course_id || course.id), height: 120 }}>
+        <div className="forge-thumbnail-overlay" />
+        <BookOpen size={24} color="rgba(255,255,255,0.8)" style={{ position: 'relative', zIndex: 2 }} />
+        <span className={`forge-card-badge ${cfg.badge}`} style={{ color: 'white', background: cfg.color, transform: 'scale(0.8)', transformOrigin: 'top right' }}>
+          {cfg.label}
+        </span>
       </div>
-      <div className="course-card-body" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <h4 style={{ marginBottom: 6, fontSize: '0.95rem', lineHeight: 1.3 }}>{course.title}</h4>
-        <p style={{
-          flex: 1, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 12,
-          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden'
-        }}>{course.description}</p>
-
-        {showProgress && course.progress_percent !== undefined && (
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 4 }}>
-              <span>Progress</span><span style={{ fontWeight: 700, color: 'var(--primary)' }}>{course.progress_percent?.toFixed(0)}%</span>
+      <div className="card-body" style={{ padding: '16px', display: 'flex', flexDirection: 'column', flex: 1 }}>
+        <h4 style={{ margin: '0 0 6px 0', fontSize: '0.9rem', lineHeight: 1.3, fontWeight: 700 }}>{course.title}</h4>
+        
+        {showProgress && course.progress_percent !== undefined ? (
+          <div style={{ marginTop: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: 4 }}>
+              <span style={{ fontWeight: 700, color: 'var(--primary)' }}>{Math.round(course.progress_percent)}% Complete</span>
             </div>
-            <div className="progress-bar"><div className="progress-fill" style={{ width: `${course.progress_percent}%` }} /></div>
+            <div className="progress-bar" style={{ height: 4 }}>
+              <div className="progress-fill shimmer-progress" style={{ width: `${course.progress_percent}%` }} />
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 'auto', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Clock size={12} /> {course.estimated_hours}h</span>
+             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Layers size={12} /> {course.sections_count || 0} Modules</span>
           </div>
         )}
-
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto' }}>
-          {course.estimated_hours && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              <Clock size={12} /><span>{course.estimated_hours}h</span>
-            </div>
-          )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 600, marginLeft: 'auto' }}>
-            <span>View Course</span><ChevronRight size={12} />
-          </div>
-        </div>
       </div>
     </div>
   );
 }
 
-function SectionHeader({ icon, title, action }) {
+function SectionHeader({ icon, title, action, subtitle }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <div style={{
-          width: 36, height: 36, borderRadius: '10px',
-          background: 'linear-gradient(135deg, var(--primary), var(--primary-light))',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white'
+          width: 44, height: 44, borderRadius: '14px',
+          background: 'var(--primary-lightest)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)',
+          boxShadow: 'inset 0 0 0 1px var(--primary-lighter)'
         }}>{icon}</div>
-        <h3 style={{ margin: 0 }}>{title}</h3>
+        <div>
+          <h3 style={{ margin: 0, fontSize: '1.25rem' }}>{title}</h3>
+          {subtitle && <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>{subtitle}</p>}
+        </div>
       </div>
       {action && <div>{action}</div>}
     </div>
@@ -109,7 +91,7 @@ export default function ForgeDashboard() {
   const isInstructor = ['instructor', 'admin', 'hr'].includes(user?.role);
 
   useEffect(() => {
-    Promise.all([forgeApi.dashboard(), forgeApi.library({ limit: 9 })])
+    Promise.all([forgeApi.dashboard(), forgeApi.library({ limit: 10 })])
       .then(([d, lib]) => {
         const raw = d.data.data || {};
         setData({
@@ -127,96 +109,91 @@ export default function ForgeDashboard() {
   const totalInProgress = data.in_progress?.length || 0;
   const totalRecommended = data.recommended?.length || 0;
 
-  const stats = [
-    { label: 'In Progress', value: totalInProgress, icon: <PlayCircle size={18} />, color: '#8B5CF6' },
-    { label: 'Completed', value: totalCompleted, icon: <CheckCircle size={18} />, color: '#10B981' },
-    { label: 'AI Recommended', value: totalRecommended, icon: <Brain size={18} />, color: '#EC4899' },
-    { label: 'Available Courses', value: allCourses.length, icon: <BookOpen size={18} />, color: '#3B82F6' },
-  ];
-
   return (
-    <div>
-      {/* Hero Header */}
+    <div className="forge-container animate-fade-in" style={{ paddingBottom: 60 }}>
+      {/* Premium Multi-dimensional Header */}
       <div style={{
-        background: 'linear-gradient(135deg, var(--primary) 0%, #9333EA 50%, #EC4899 100%)',
-        padding: '40px 32px 48px',
-        position: 'relative', overflow: 'hidden',
+        margin: '24px 32px 48px',
+        padding: '60px 48px',
+        borderRadius: '32px',
+        position: 'relative',
+        overflow: 'hidden',
+        background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)',
+        boxShadow: '0 20px 50px rgba(0,0,0,0.2)'
       }}>
+        {/* Animated Background Element */}
         <div style={{
-          position: 'absolute', inset: 0, opacity: 0.07,
-          backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)',
-          backgroundSize: '32px 32px',
+          position: 'absolute', top: -100, right: -100, width: 400, height: 400,
+          background: 'radial-gradient(circle, rgba(124,58,237,0.2) 0%, transparent 70%)',
+          filter: 'blur(40px)', opacity: 0.6
         }} />
-        <div style={{ position: 'relative', zIndex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                <GraduationCap size={28} color="rgba(255,255,255,0.9)" />
-                <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>PHYGITRON 360 — FORGE LXP</span>
-              </div>
-              <h1 style={{ color: 'white', fontSize: '2rem', marginBottom: 8 }}>
-                Welcome back, {user?.full_name?.split(' ')[0] || 'Learner'}! 👋
-              </h1>
-              <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '1rem', margin: 0 }}>
-                {totalInProgress > 0
-                  ? `You have ${totalInProgress} course${totalInProgress > 1 ? 's' : ''} in progress. Keep the momentum going!`
-                  : 'Start your learning journey today — explore courses tailored for you.'}
-              </p>
+        
+        <div style={{ position: 'relative', zIndex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 40 }}>
+          <div style={{ maxWidth: 640 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+               <div style={{ background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(10px)', color: 'white', padding: '6px 16px', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', display: 'flex', alignItems: 'center', gap: 6, border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <Sparkles size={12} className="active-pulse" /> Learning Dashboard
+               </div>
             </div>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <Link to="/forge/library" className="btn" style={{
-                background: 'rgba(255,255,255,0.15)', color: 'white',
-                border: '1.5px solid rgba(255,255,255,0.3)', backdropFilter: 'blur(10px)',
-              }}>
-                <Search size={16} /> Browse Library
-              </Link>
-              {isInstructor && (
-                <Link to="/forge/build" className="btn" style={{
-                  background: 'white', color: 'var(--primary)', fontWeight: 700,
-                }}>
-                  <Zap size={16} /> Build Course
-                </Link>
-              )}
+            <h1 style={{ color: 'white', fontSize: '3rem', margin: '0 0 12px 0', letterSpacing: '-0.03em' }}>
+              Welcome, {user?.full_name?.split(' ')[0] || 'Explorer'}
+            </h1>
+            <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '1.15rem', lineHeight: 1.5, margin: 0 }}>
+              {totalInProgress > 0 
+                ? `You are currently enrolled in ${totalInProgress} learning paths. Keep up the great work!` 
+                : 'Your journey starts here. Explore our premium curriculum designed to accelerate your growth.'}
+            </p>
+            
+            <div style={{ display: 'flex', gap: 16, marginTop: 40 }}>
+               <button className="btn btn-primary" onClick={() => nav('/forge/library')} style={{ padding: '14px 32px', borderRadius: '16px' }}>
+                  <Search size={18} /> Course Builder
+               </button>
+               {isInstructor && (
+                 <button className="btn" onClick={() => nav('/forge/build')} style={{ padding: '14px 32px', borderRadius: '16px', background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)' }}>
+                    <Zap size={18} /> Studio
+                 </button>
+               )}
             </div>
           </div>
 
-          {/* Inline Stats Strip */}
-          <div style={{ display: 'flex', gap: 24, marginTop: 32, flexWrap: 'wrap' }}>
-            {stats.map((s, i) => (
-              <div key={i} style={{
-                display: 'flex', alignItems: 'center', gap: 10,
-                background: 'rgba(255,255,255,0.12)', backdropFilter: 'blur(10px)',
-                borderRadius: 12, padding: '10px 18px',
-                border: '1px solid rgba(255,255,255,0.2)',
-              }}>
-                <div style={{ color: 'rgba(255,255,255,0.8)' }}>{s.icon}</div>
-                <div>
-                  <div style={{ color: 'white', fontSize: '1.4rem', fontWeight: 900, lineHeight: 1 }}>{s.value}</div>
-                  <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.72rem', fontWeight: 600 }}>{s.label}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+             {[
+               { val: totalInProgress, label: 'Active', icon: <PlayCircle size={18} />, color: 'var(--primary)' },
+               { val: totalCompleted, label: 'Mastered', icon: <Award size={18} />, color: '#10B981' },
+               { val: totalRecommended, label: 'Goals', icon: <Target size={18} />, color: '#EC4899' },
+               { val: allCourses.length, label: 'Course Builder', icon: <Activity size={18} />, color: '#06B6D4' }
+             ].map((s, i) => (
+                <div key={i} style={{ 
+                  background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.08)',
+                  padding: '20px 24px', borderRadius: '24px', minWidth: 140, transition: 'var(--transition)'
+                }}>
+                   <div style={{ color: s.color, marginBottom: 8 }}>{s.icon}</div>
+                   <div style={{ color: 'white', fontSize: '1.75rem', fontWeight: 900, marginBottom: 4 }}>{s.val}</div>
+                   <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</div>
                 </div>
-              </div>
-            ))}
+             ))}
           </div>
         </div>
       </div>
 
-      <div className="page-body">
+      <div className="page-body" style={{ padding: '0 32px' }}>
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}><div className="spinner spinner-lg" /></div>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 80 }}><div className="spinner spinner-lg" /></div>
         ) : (
           <>
             {/* Continue Learning */}
             {data.in_progress?.length > 0 && (
-              <div style={{ marginBottom: 48 }}>
+              <div style={{ marginBottom: 60 }}>
                 <SectionHeader
-                  icon={<PlayCircle size={18} />}
+                  icon={<PlayCircle size={20} />}
                   title="Continue Learning"
-                  action={<Link to="/forge/library" className="btn btn-ghost btn-sm">View All <ChevronRight size={14} /></Link>}
+                  subtitle="Pick up right where you left off"
+                  action={<button onClick={() => nav('/forge/library')} className="btn btn-ghost">Full Library <ChevronRight size={14} /></button>}
                 />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px,1fr))', gap: 20 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 28 }}>
                   {data.in_progress.map((c, i) => (
                     <div key={c.course_id} className={`animate-fade-in stagger-${Math.min(i+1,5)}`}>
-                      <CourseCard
+                      <CompactCourseCard
                         course={{ ...c, id: c.course_id }}
                         onNavigate={() => nav(`/forge/course/${c.course_id}`)}
                         showProgress
@@ -227,131 +204,105 @@ export default function ForgeDashboard() {
               </div>
             )}
 
-            {/* AI Recommended */}
-            {data.recommended?.length > 0 && (
-              <div style={{ marginBottom: 48 }}>
-                <SectionHeader
-                  icon={<Brain size={18} />}
-                  title="AI Recommended For You"
-                  action={
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'linear-gradient(135deg, #EC4899, #8B5CF6)', borderRadius: 999, padding: '4px 14px' }}>
-                      <Zap size={12} color="white" />
-                      <span style={{ color: 'white', fontSize: '0.72rem', fontWeight: 700 }}>Skill Gap Detected</span>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 60 }}>
+               
+               <div>
+                  {/* Recommended */}
+                  <div style={{ marginBottom: 60 }}>
+                    <SectionHeader
+                      icon={<Brain size={20} />}
+                      title="Recommended Courses"
+                      subtitle="Courses tailored for you"
+                    />
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 24 }}>
+                      {data.recommended.length > 0 ? data.recommended.map((c, i) => (
+                        <div key={c.course_id} className={`animate-fade-in stagger-${Math.min(i+1,5)}`}>
+                          <CompactCourseCard
+                            course={{ ...c, id: c.course_id }}
+                            onNavigate={() => nav(`/forge/course/${c.course_id}`)}
+                            showProgress={false}
+                          />
+                        </div>
+                      )) : (
+                        <div className="card" style={{ gridColumn: '1/-1', padding: 40, textAlign: 'center', background: 'var(--bg-card-alt)' }}>
+                           <p style={{ color: 'var(--text-muted)' }}>Complete more courses to get tailored recommendations.</p>
+                        </div>
+                      )}
                     </div>
-                  }
-                />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px,1fr))', gap: 20 }}>
-                  {data.recommended.map((c, i) => (
-                    <div key={c.course_id} className={`animate-fade-in stagger-${Math.min(i+1,5)}`}>
-                      <CourseCard
-                        course={{ ...c, id: c.course_id }}
-                        onNavigate={() => nav(`/forge/course/${c.course_id}`)}
-                        showProgress={false}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+                  </div>
 
-            {/* Completed */}
-            {data.completed?.length > 0 && (
-              <div style={{ marginBottom: 48 }}>
-                <SectionHeader
-                  icon={<Award size={18} />}
-                  title="Completed Courses"
-                  action={<Link to="/forge/transcript" className="btn btn-secondary btn-sm"><Award size={14} /> My Transcript</Link>}
-                />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px,1fr))', gap: 20 }}>
-                  {data.completed.slice(0, 3).map((c, i) => (
-                    <div key={c.course_id} className={`animate-fade-in stagger-${Math.min(i+1,5)}`}
-                      style={{ position: 'relative' }}
-                    >
-                      <CourseCard
-                        course={{ ...c, id: c.course_id, progress_percent: 100 }}
-                        onNavigate={() => nav(`/forge/course/${c.course_id}`)}
-                        showProgress
-                      />
-                      <div style={{
-                        position: 'absolute', top: 12, left: 12, zIndex: 10,
-                        background: '#10B981', borderRadius: 999, padding: '4px 12px',
-                        color: 'white', fontSize: '0.72rem', fontWeight: 700,
-                        display: 'flex', alignItems: 'center', gap: 4,
-                      }}>
-                        <CheckCircle size={11} /> Completed
-                      </div>
+                  {/* Recently Published */}
+                  <div>
+                    <SectionHeader
+                      icon={<Activity size={20} />}
+                      title="Recently Published"
+                      subtitle="New skills available in your workspace"
+                    />
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 24 }}>
+                      {allCourses.slice(0, 4).map((c, i) => (
+                        <div key={c.id} className={`animate-fade-in stagger-${Math.min(i+1,5)}`}>
+                          <CompactCourseCard
+                            course={c}
+                            onNavigate={() => nav(`/forge/course/${c.id}`)}
+                            showProgress={false}
+                          />
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
+                  </div>
+               </div>
 
-            {/* Explore All Courses */}
-            {allCourses.length > 0 && (
-              <div>
-                <SectionHeader
-                  icon={<BookOpen size={18} />}
-                  title="Explore Courses"
-                  action={<Link to="/forge/library" className="btn btn-secondary btn-sm"><Search size={14} /> Full Library</Link>}
-                />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px,1fr))', gap: 20 }}>
-                  {allCourses.map((c, i) => (
-                    <div key={c.id} className={`animate-fade-in stagger-${Math.min(i+1,5)}`}>
-                      <CourseCard
-                        course={c}
-                        onNavigate={() => nav(`/forge/course/${c.id}`)}
-                        showProgress={false}
-                      />
+               {/* Right Sidebar: Quick Actions & Stats */}
+               <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+                  
+                  {/* Instructor Studio Card */}
+                  {isInstructor && (
+                    <div style={{ 
+                      padding: 32, borderRadius: 24, background: 'var(--primary)', color: 'white',
+                      boxShadow: '0 20px 40px rgba(124,58,237,0.25)', position: 'relative', overflow: 'hidden'
+                    }}>
+                       <div style={{ position: 'absolute', top: -20, right: -20, opacity: 0.2 }}>
+                          <GraduationCap size={120} />
+                       </div>
+                       <h4 style={{ color: 'white', marginBottom: 8, fontSize: '1.25rem' }}>Instructor Studio</h4>
+                       <p style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.8)', marginBottom: 24 }}>Design curricula, manage assessments, and track team capability growth.</p>
+                       <button className="btn" style={{ background: 'white', color: 'var(--primary)', width: '100%', borderRadius: 12, fontWeight: 700 }} onClick={() => nav('/forge/build')}>
+                          Go To Studio <ArrowUpRight size={16} />
+                       </button>
                     </div>
-                  ))}
-                </div>
-                <div style={{ textAlign: 'center', marginTop: 32 }}>
-                  <Link to="/forge/library" className="btn btn-primary">
-                    <BookOpen size={16} /> Browse Full Course Library
-                  </Link>
-                </div>
-              </div>
-            )}
+                  )}
 
-            {allCourses.length === 0 && data.in_progress?.length === 0 && (
-              <div className="empty-state" style={{ padding: '80px 32px' }}>
-                <div style={{ fontSize: '5rem', marginBottom: 16 }}>📚</div>
-                <h3 style={{ marginBottom: 8 }}>No courses available yet</h3>
-                <p style={{ marginBottom: 24 }}>Your learning journey starts when courses are published for your organisation.</p>
-                {isInstructor && (
-                  <Link to="/forge/build" className="btn btn-primary">
-                    <Zap size={16} /> Create Your First Course
-                  </Link>
-                )}
-              </div>
-            )}
+                  {/* Mastery Score Progress */}
+                  <div className="card" style={{ padding: 24 }}>
+                     <h4 style={{ marginBottom: 16, fontSize: '0.9rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Your Standing</h4>
+                     <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+                        <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--primary-lightest)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontSize: '1.5rem', fontWeight: 900 }}>
+                           A+
+                        </div>
+                        <div>
+                           <div style={{ fontWeight: 800, fontSize: '1rem' }}>Expert Level</div>
+                           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Top 5% of Organization</div>
+                        </div>
+                     </div>
+                  </div>
 
-            {/* Quick Links */}
-            {isInstructor && (
-              <div style={{ marginTop: 48, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px,1fr))', gap: 16 }}>
-                {[
-                  { to: '/forge/my-courses', icon: <BookOpen size={20} />, label: 'My Courses', sub: 'Manage your created courses' },
-                  { to: '/forge/build', icon: <Zap size={20} />, label: 'Build Course', sub: 'Create new content' },
-                  { to: '/forge/transcript', icon: <Award size={20} />, label: 'Transcript', sub: 'View your certificates' },
-                  { to: '/forge/team', icon: <TrendingUp size={20} />, label: 'Team Analytics', sub: 'Track team learning' },
-                ].map((item, i) => (
-                  <Link key={i} to={item.to} style={{ textDecoration: 'none' }}>
-                    <div className="card" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}>
-                      <div style={{
-                        width: 44, height: 44, borderRadius: 12,
-                        background: 'linear-gradient(135deg, var(--primary-lightest), rgba(168,85,247,0.15))',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)',
-                        flexShrink: 0,
-                      }}>{item.icon}</div>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>{item.label}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{item.sub}</div>
-                      </div>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
+                  {/* Certified Skills */}
+                  <div className="card" style={{ padding: 24 }}>
+                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                        <h4 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Certifications</h4>
+                        <Award size={16} color="var(--primary)" />
+                     </div>
+                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {['Python Pro', 'System Design', 'Agile Lead', 'UX Flow'].map(s => (
+                          <div key={s} className="badge badge-primary" style={{ fontSize: '0.7rem', padding: '6px 12px', border: 'none' }}>{s}</div>
+                        ))}
+                     </div>
+                     <Link to="/forge/transcript" style={{ display: 'block', marginTop: 16, fontSize: '0.75rem', fontWeight: 700, textAlign: 'center' }}>View Full Transcript</Link>
+                  </div>
+
+               </div>
+
+            </div>
           </>
         )}
       </div>

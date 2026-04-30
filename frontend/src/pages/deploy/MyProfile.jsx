@@ -91,8 +91,8 @@ export default function MyProfile() {
                   <div style={{ fontSize: '0.65rem', color: 'var(--primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 4 }}>Capability</div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: data.status === 'active' ? '#10B981' : data.status === 'deployed' ? '#3B82F6' : '#9CA3AF' }} />
-                  <span style={{ fontWeight: 600, fontSize: '0.85rem', textTransform: 'capitalize' }}>{data.status.replace('_', ' ')}</span>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: (data.status || 'active') === 'active' ? '#10B981' : data.status === 'deployed' ? '#3B82F6' : '#9CA3AF' }} />
+                  <span style={{ fontWeight: 600, fontSize: '0.85rem', textTransform: 'capitalize' }}>{(data.status || 'active').replace('_', ' ')}</span>
                 </div>
               </div>
             </div>
@@ -143,8 +143,43 @@ export default function MyProfile() {
               </div>
             </div>
 
-            {/* Certifications (Visual) */}
+            {/* Performance (KRA) */}
             <div className="card animate-fade-in stagger-3">
+              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><Activity size={16}/> Performance (KRA)</h4>
+                <button className="btn btn-ghost btn-sm" style={{ color: 'var(--primary)' }}>Past Reviews</button>
+              </div>
+              <div className="card-body">
+                {(data.kra_assessments || []).length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No active performance review period.</p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {data.kra_assessments.map((ka, i) => (
+                      <div key={i} style={{ padding: 20, borderRadius: 12, border: '1px solid var(--border)', background: ka.status === 'draft' ? '#FFFBEB' : 'var(--bg-card)' }}>
+                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                           <div>
+                             <h5 style={{ margin: 0 }}>{ka.period} {ka.year} Review</h5>
+                             <span className="badge badge-sm" style={{ marginTop: 4 }}>{ka.status}</span>
+                           </div>
+                           <div style={{ textAlign: 'right' }}>
+                             <div style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--primary)' }}>{ka.score?.toFixed(1) || '—'} / 10</div>
+                             <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>PERIOD SCORE</div>
+                           </div>
+                         </div>
+                         {ka.status === 'draft' ? (
+                           <button className="btn btn-primary btn-sm" style={{ width: '100%' }}>Fill Self-Assessment →</button>
+                         ) : (
+                           <button className="btn btn-ghost btn-sm" style={{ width: '100%', border: '1px solid var(--border)' }}>View Feedback</button>
+                         )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Certifications (Visual) */}
+            <div className="card animate-fade-in stagger-4">
               <div className="card-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><Award size={16}/> Certificates</h4></div>
               <div className="card-body">
                 {certs.length === 0 ? (
@@ -177,37 +212,63 @@ export default function MyProfile() {
           {/* Right Column */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
             
-            {/* Deployments */}
-            <div className="card animate-fade-in stagger-4">
-              <div className="card-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><Briefcase size={16}/> Active Deployments</h4></div>
-              <div className="card-body" style={{ padding: '16px 20px' }}>
-                {activeDeployments.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-muted)' }}>
-                    <Briefcase size={24} style={{ margin: '0 auto 8px', opacity: 0.5 }} />
-                    <p style={{ margin: 0, fontSize: '0.85rem' }}>No active projects.</p>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    {activeDeployments.map((d, i) => (
-                      <div key={i} style={{ 
-                        padding: 16, background: '#F0F9FF', border: '1px solid #BAE6FD', 
-                        borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 8 
-                      }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <div style={{ fontWeight: 700, color: '#0369A1' }}>{d.project_name}</div>
-                          <span className="badge" style={{ background: '#38BDF8', color: 'white', fontSize: '0.7rem' }}>Active</span>
-                        </div>
-                        {d.client_name && <div style={{ fontSize: '0.8rem', color: '#0284C7' }}>Client: {d.client_name}</div>}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', color: '#0284C7', marginTop: 4 }}>
-                          <Calendar size={12} /> Since {new Date(d.start_date || d.created_at).toLocaleDateString()}
-                        </div>
+            {/* Personal Dashboard Widgets */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+              
+              {/* Leave & Attendance Summary */}
+              <div className="card animate-fade-in stagger-5">
+                <div className="card-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><Calendar size={16}/> Leave Balance</h4></div>
+                <div className="card-body">
+                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 16 }}>
+                      <div style={{ padding: '12px 8px', background: 'var(--bg-card)', borderRadius: 8, border: '1px solid var(--border)', textAlign: 'center' }}>
+                         <div style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--primary)' }}>{data.leave_balance?.sick || 0}</div>
+                         <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 700 }}>SICK</div>
                       </div>
-                    ))}
-                  </div>
-                )}
+                      <div style={{ padding: '12px 8px', background: 'var(--bg-card)', borderRadius: 8, border: '1px solid var(--border)', textAlign: 'center' }}>
+                         <div style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--primary)' }}>{data.leave_balance?.casual || 0}</div>
+                         <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 700 }}>CASUAL</div>
+                      </div>
+                      <div style={{ padding: '12px 8px', background: 'var(--bg-card)', borderRadius: 8, border: '1px solid var(--border)', textAlign: 'center' }}>
+                         <div style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--primary)' }}>{data.leave_balance?.privilege || 0}</div>
+                         <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 700 }}>PRIVILEGE</div>
+                      </div>
+                   </div>
+                   <button className="btn btn-secondary btn-sm" style={{ width: '100%' }} onClick={() => window.location.href='/deploy/attendance'}>Apply for Leave</button>
+                </div>
               </div>
-            </div>
 
+              {/* Attendance This Month */}
+              <div className="card animate-fade-in stagger-6">
+                <div className="card-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><Calendar size={16}/> Attendance Summary</h4></div>
+                <div className="card-body">
+                   <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 12 }}>Current Month Performance</p>
+                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                         <span style={{ fontSize: '0.85rem' }}>Full Present</span>
+                         <span className="badge badge-success">{data.attendance_summary?.present || 0} Days</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                         <span style={{ fontSize: '0.85rem' }}>Half Days</span>
+                         <span className="badge badge-warning">{data.attendance_summary?.half_day || 0} Days</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                         <span style={{ fontSize: '0.85rem' }}>Absences</span>
+                         <span className="badge badge-danger">{data.attendance_summary?.absent || 0} Days</span>
+                      </div>
+                   </div>
+                </div>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="card animate-fade-in stagger-7" style={{ background: 'var(--primary)', color: 'white' }}>
+                 <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <h5 style={{ margin: 0, color: 'white' }}>Employee Hub</h5>
+                    <button className="btn btn-sm" style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', justifyContent: 'flex-start' }} onClick={() => window.location.href='/deploy/attendance'}><Activity size={14} style={{ marginRight: 8 }} /> Daily Clock In / Out</button>
+                    <button className="btn btn-sm" style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', justifyContent: 'flex-start' }} onClick={() => window.location.href='/deploy'}><Activity size={14} style={{ marginRight: 8 }} /> Team Directory</button>
+                 </div>
+              </div>
+
+            </div>
           </div>
         </div>
 

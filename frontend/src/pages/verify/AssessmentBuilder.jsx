@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { verifyApi } from '../../api';
-import { PlusCircle, Trash2, GripVertical, ChevronDown, Sparkles, Loader2, Upload, Download, FileText } from 'lucide-react';
+import { PlusCircle, Trash2, GripVertical, ChevronDown, Sparkles, Loader2, Upload, Download, FileText, Link as LinkIcon, Image as ImageIcon, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const QUESTION_TYPES = [
   { value: 'mcq', label: '🔘 Multiple Choice (MCQ)' },
+  { value: 'mcq_multi', label: '✅ Multiple Selection (MCQ-Multi)' },
   { value: 'written', label: '✍️ Written / Essay' },
   { value: 'coding', label: '💻 Coding Challenge' },
   { value: 'file_upload', label: '📎 File Upload' },
@@ -49,19 +50,128 @@ function QuestionForm({ q, index, onChange, onRemove, onAutoGenerate, generating
             }}
             placeholder={q.question_type === 'file_upload' ? 'Enter instructions for the candidate regarding the file upload…' : 'Enter your question…'} 
           />
+          
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 8 }}>
+              {(q.images || []).map((imgUrl, imgIndex) => (
+                <div key={imgIndex} style={{ position: 'relative', display: 'inline-block' }}>
+                  <img 
+                    src={imgUrl} 
+                    alt={`Question ${imgIndex + 1}`} 
+                    style={{ width: 100, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} 
+                  />
+                  <button 
+                    className="btn btn-danger btn-xs" 
+                    style={{ position: 'absolute', top: -6, right: -6, borderRadius: '50%', padding: 2, minWidth: 20, height: 20 }}
+                    onClick={() => {
+                      const next = q.images.filter((_, i) => i !== imgIndex);
+                      onChange('images', next);
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+              
+              <label className="btn btn-ghost" style={{ width: 100, height: 80, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, cursor: 'pointer', border: '2px dashed var(--border)', borderRadius: 8, fontSize: '0.7rem' }}>
+                <ImageIcon size={18} />
+                <span>Add Image</span>
+                <input 
+                  type="file" 
+                  accept="image/*" 
+                  style={{ display: 'none' }} 
+                  onChange={async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    try {
+                      toast.loading('Uploading...', { id: 'img-up' });
+                      const res = await verifyApi.uploadQuestionImage(file);
+                      const current = Array.isArray(q.images) ? q.images : [];
+                      onChange('images', [...current, res.data.data.image_url]);
+                      toast.success('Added!', { id: 'img-up' });
+                    } catch (err) {
+                      toast.error('Failed', { id: 'img-up' });
+                    }
+                  }} 
+                />
+              </label>
+            </div>
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Upload diagrams, examples or screenshots (Multiple supported)</p>
+          </div>
         </div>
-        {q.question_type === 'mcq' && (
+        {(q.question_type === 'mcq' || q.question_type === 'mcq_multi') && (
           <div className="form-group">
             <label className="form-label">Options (press Enter to add)</label>
-            {(q.options || []).map((opt, oi) => (
-              <div key={oi} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                <input type="radio" name={`correct-${index}`} checked={q.correct_answer === opt} onChange={() => onChange('correct_answer', opt)} style={{ accentColor: 'var(--primary)', marginTop: 8 }} title="Set as correct answer" />
-                <input className="form-control" value={opt} onChange={e => { const opts = [...q.options]; opts[oi] = e.target.value; onChange('options', opts); }} placeholder={`Option ${String.fromCharCode(65+oi)}`} />
-                <button className="btn btn-ghost btn-sm" onClick={() => { const opts = q.options.filter((_, i) => i !== oi); onChange('options', opts); onChange('correct_answer', q.correct_answer === opt ? '' : q.correct_answer); }}><Trash2 size={13} /></button>
-              </div>
-            ))}
+            {(q.options || []).map((opt, oi) => {
+              const isCorrect = q.question_type === 'mcq' 
+                ? q.correct_answer === opt
+                : (() => {
+                    try {
+                      const corrArr = JSON.parse(q.correct_answer || '[]');
+                      return Array.isArray(corrArr) && corrArr.includes(opt);
+                    } catch { return false; }
+                  })();
+
+              const handleCorrectToggle = () => {
+                if (q.question_type === 'mcq') {
+                  onChange('correct_answer', opt);
+                } else {
+                  try {
+                    let corrArr = JSON.parse(q.correct_answer || '[]');
+                    if (!Array.isArray(corrArr)) corrArr = [];
+                    if (corrArr.includes(opt)) {
+                      corrArr = corrArr.filter(x => x !== opt);
+                    } else {
+                      corrArr.push(opt);
+                    }
+                    onChange('correct_answer', JSON.stringify(corrArr));
+                  } catch {
+                    onChange('correct_answer', JSON.stringify([opt]));
+                  }
+                }
+              };
+
+              return (
+                <div key={oi} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                  <input 
+                    type={q.question_type === 'mcq' ? "radio" : "checkbox"}
+                    name={`correct-${index}`} 
+                    checked={isCorrect} 
+                    onChange={handleCorrectToggle} 
+                    style={{ accentColor: 'var(--primary)', marginTop: 8 }} 
+                    title="Set as correct answer" 
+                  />
+                  <input className="form-control" value={opt} onChange={e => { const opts = [...q.options]; opts[oi] = e.target.value; onChange('options', opts); }} placeholder={`Option ${String.fromCharCode(65+oi)}`} />
+                  <button className="btn btn-ghost btn-sm" onClick={() => { 
+                    const opts = q.options.filter((_, i) => i !== oi); 
+                    onChange('options', opts); 
+                    // Clean up correct answers if option removed
+                    if (q.question_type === 'mcq') {
+                      if (q.correct_answer === opt) onChange('correct_answer', '');
+                    } else {
+                      try {
+                        let corrArr = JSON.parse(q.correct_answer || '[]');
+                        if (Array.isArray(corrArr)) {
+                          corrArr = corrArr.filter(x => x !== opt);
+                          onChange('correct_answer', JSON.stringify(corrArr));
+                        }
+                      } catch {}
+                    }
+                  }}><Trash2 size={13} /></button>
+                </div>
+              );
+            })}
             <button className="btn btn-secondary btn-sm" onClick={() => onChange('options', [...(q.options || []), ''])}><PlusCircle size={13} /> Add Option</button>
-            {q.correct_answer && <p style={{ fontSize: '0.78rem', color: 'var(--success)', marginTop: 8 }}>✅ Correct: {q.correct_answer}</p>}
+            {q.correct_answer && (
+              <p style={{ fontSize: '0.78rem', color: 'var(--success)', marginTop: 8 }}>
+                ✅ Correct: {q.question_type === 'mcq' ? q.correct_answer : (() => {
+                  try {
+                    const arr = JSON.parse(q.correct_answer);
+                    return Array.isArray(arr) ? arr.join(', ') : q.correct_answer;
+                  } catch { return q.correct_answer; }
+                })()}
+              </p>
+            )}
           </div>
         )}
         {q.question_type === 'written' && (
@@ -77,22 +187,28 @@ function QuestionForm({ q, index, onChange, onRemove, onAutoGenerate, generating
             
             <label className="form-label" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Test Cases (for Auto-Grading & Execution)</label>
             {(q.test_cases || []).map((tc, tcIdx) => (
-              <div key={tcIdx} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, marginBottom: 8, alignItems: 'flex-start' }}>
-                <textarea className="form-control" placeholder="Input (stdin)" rows={2} value={tc.input || ''} onChange={e => {
-                  const newTc = [...(q.test_cases || [])];
-                  newTc[tcIdx] = { ...newTc[tcIdx], input: e.target.value };
-                  onChange('test_cases', newTc);
-                }} style={{ fontFamily: 'monospace', fontSize: '0.75rem' }} />
-                <textarea className="form-control" placeholder="Expected Output (stdout)" rows={2} value={tc.expected_output || ''} onChange={e => {
-                  const newTc = [...(q.test_cases || [])];
-                  newTc[tcIdx] = { ...newTc[tcIdx], expected_output: e.target.value };
-                  onChange('test_cases', newTc);
-                }} style={{ fontFamily: 'monospace', fontSize: '0.75rem' }} />
+              <div key={tcIdx} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12, marginBottom: 16, alignItems: 'start' }}>
+                <div>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase' }}>Input</div>
+                  <textarea className="form-control" placeholder="Input (stdin)" rows={4} value={tc.input || ''} onChange={e => {
+                    const newTc = [...(q.test_cases || [])];
+                    newTc[tcIdx] = { ...newTc[tcIdx], input: e.target.value };
+                    onChange('test_cases', newTc);
+                  }} style={{ fontFamily: 'monospace', fontSize: '0.75rem' }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase' }}>Expected Output</div>
+                  <textarea className="form-control" placeholder="Expected Output (stdout)" rows={4} value={tc.expected_output || ''} onChange={e => {
+                    const newTc = [...(q.test_cases || [])];
+                    newTc[tcIdx] = { ...newTc[tcIdx], expected_output: e.target.value };
+                    onChange('test_cases', newTc);
+                  }} style={{ fontFamily: 'monospace', fontSize: '0.75rem' }} />
+                </div>
                 <button className="btn btn-ghost btn-sm" onClick={() => {
                   const newTc = [...(q.test_cases || [])];
                   newTc.splice(tcIdx, 1);
                   onChange('test_cases', newTc);
-                }} style={{ color: 'var(--danger)', marginTop: 4 }}><Trash2 size={16} /></button>
+                }} style={{ color: 'var(--danger)', marginTop: 28 }}><Trash2 size={16} /></button>
               </div>
             ))}
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
@@ -117,7 +233,7 @@ function QuestionForm({ q, index, onChange, onRemove, onAutoGenerate, generating
   );
 }
 
-const blankQuestion = () => ({ question_text: '', question_type: 'mcq', options: ['', '', '', ''], correct_answer: '', model_answer: '', starter_code: '', test_cases: [], marks: 5, order_index: 0 });
+const blankQuestion = () => ({ question_text: '', question_type: 'mcq', options: ['', '', '', ''], correct_answer: '', model_answer: '', starter_code: '', test_cases: [], marks: 5, order_index: 0, images: [] });
 
 export default function AssessmentBuilder() {
   const [title, setTitle] = useState('');
@@ -137,6 +253,15 @@ export default function AssessmentBuilder() {
   const handleSave = async (publish = false) => {
     if (!title.trim()) { toast.error('Title is required'); return; }
     if (questions.some(q => !q.question_text.trim())) { toast.error('All questions need text'); return; }
+    const invalidCodingIndex = questions.findIndex(q => {
+      if (q.question_type !== 'coding') return false;
+      const testCases = Array.isArray(q.test_cases) ? q.test_cases : [];
+      return testCases.length < 3 || testCases.some(tc => !String(tc?.expected_output || tc?.expected || '').trim());
+    });
+    if (invalidCodingIndex !== -1) {
+      toast.error(`Q${invalidCodingIndex + 1}: Coding questions need at least 3 test cases with expected outputs.`);
+      return;
+    }
     setLoading(true);
     try {
       // Auto-detect assessment type
@@ -246,6 +371,33 @@ export default function AssessmentBuilder() {
   };
 
   const totalMarks = questions.reduce((s, q) => s + (q.marks || 0), 0);
+  const handleUrlImport = async () => {
+    const url = prompt("Enter a webpage URL to extract questions from:");
+    if (!url) return;
+    try {
+      new URL(url);
+    } catch {
+      toast.error('Please enter a valid URL including http:// or https://');
+      return;
+    }
+
+    setLoading(true);
+    toast.loading(`Scraping webpage and extracting questions with AI...`, { id: 'importing_url' });
+    try {
+      const res = await verifyApi.importFromUrl(url);
+      const newQs = res.data.data;
+      if (Array.isArray(newQs) && newQs.length > 0) {
+        setQuestions(prev => [...prev.filter(q => q.question_text), ...newQs]);
+        toast.success(`AI successfully extracted ${newQs.length} questions from the URL!`, { id: 'importing_url' });
+      } else {
+        toast.error("No questions could be extracted from that URL.", { id: 'importing_url' });
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to extract from URL.', { id: 'importing_url' });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div>
@@ -254,9 +406,13 @@ export default function AssessmentBuilder() {
         <div style={{ display: 'flex', gap: 8 }}>
           <label className={`btn btn-secondary ${loading ? 'disabled' : ''}`} style={{ cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
             {loading ? <Loader2 className="animate-spin" size={14} /> : <Upload size={14} />} 
-            {loading ? 'Processing...' : 'Import Questions'}
+            {loading ? 'Processing...' : 'Import'}
             <input type="file" accept=".csv,.json,.docx,.pdf,.xlsx,.xls" style={{ display: 'none' }} onChange={handleFileUpload} disabled={loading} />
           </label>
+          <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={handleUrlImport} disabled={loading}>
+            <LinkIcon size={14} /> From URL
+          </button>
+
           <button className="btn btn-secondary" onClick={() => handleSave(false)} disabled={loading}>Save Draft</button>
           <button className="btn btn-shimmer" onClick={() => handleSave(true)} disabled={loading}>🚀 Publish</button>
         </div>

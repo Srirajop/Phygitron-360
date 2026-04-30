@@ -14,13 +14,20 @@ import {
   BookOpen,
   LayoutDashboard,
   Sun,
-  Moon
+  Moon,
+  Mail,
+  Send,
+  MessageSquare,
+  Globe
 } from 'lucide-react';
 
 import Orb from '../components/Orb';
 import { useTheme } from '../context/ThemeContext';
 import MagicBento from '../components/MagicBento';
 import LogoWall from '../components/LogoWall';
+import { leadsApi } from '../api';
+import toast from 'react-hot-toast';
+import BorderGlow from '../components/BorderGlow';
 
 const Landing = () => {
   const { theme, toggleTheme } = useTheme();
@@ -84,6 +91,30 @@ const Landing = () => {
       color: 'var(--bg-card)'
     }
   ];
+
+  const [form, setForm] = useState({
+    company_name: '',
+    contact_name: '',
+    email: '',
+    inquiry_type: 'demo',
+    message: ''
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    try {
+      await leadsApi.submitLead(form);
+      setSubmitted(true);
+      toast.success('Inquiry submitted successfully!');
+    } catch (err) {
+      toast.error('Failed to submit inquiry. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div className={`landing-page ${theme}`}>
@@ -208,11 +239,22 @@ const Landing = () => {
             }}>
               Align your workforce with AI-driven precision. From discovery to deployment, Phygitron360 provides the intelligence to forge elite teams.
             </p>
-            <div style={{ display: 'flex', gap: '20px', justifyContent: 'center' }}>
+            <div style={{ display: 'flex', gap: '20px', justifyContent: 'center', flexWrap: 'wrap' }}>
               <Link to="/login" className="btn btn-primary btn-lg" style={{ padding: '18px 40px', borderRadius: '16px', fontSize: '1.1rem' }}>
                 Join the Future <ArrowRight size={20} />
               </Link>
-              <button className="btn btn-secondary btn-lg" style={{ padding: '18px 40px', borderRadius: '16px', background: 'var(--bg-card)', color: 'var(--text-primary)', borderColor: 'var(--border)', fontSize: '1.1rem' }}>
+              <button 
+                onClick={() => document.getElementById('contact').scrollIntoView({ behavior: 'smooth' })}
+                className="btn btn-shimmer btn-lg" 
+                style={{ padding: '18px 40px', borderRadius: '16px', fontSize: '1.1rem' }}
+              >
+                Reach Out & Scale
+              </button>
+              <button 
+                onClick={() => document.getElementById('pillars').scrollIntoView({ behavior: 'smooth' })}
+                className="btn btn-secondary btn-lg" 
+                style={{ padding: '18px 40px', borderRadius: '16px', background: 'var(--bg-card)', color: 'var(--text-primary)', borderColor: 'var(--border)', fontSize: '1.1rem' }}
+              >
                 Explore Platform
               </button>
             </div>
@@ -247,7 +289,7 @@ const Landing = () => {
       </section>
 
       {/* Feature Bento Grid with MagicBento */}
-      <section style={{ padding: '100px 40px', maxWidth: '1300px', margin: '0 auto', position: 'relative', zIndex: 2 }}>
+      <section id="pillars" style={{ padding: '100px 40px', maxWidth: '1300px', margin: '0 auto', position: 'relative', zIndex: 2 }}>
         <div style={{ textAlign: 'center', marginBottom: '80px' }}>
           <h2 style={{ fontSize: '3.5rem', fontWeight: 900, marginBottom: '20px', color: 'var(--text-primary)', letterSpacing: '-0.04em' }}>One Platform. Six Pillars.</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '1.2rem', maxWidth: '700px', margin: '0 auto' }}>
@@ -255,16 +297,16 @@ const Landing = () => {
           </p>
         </div>
 
-        <MagicBento 
-          cardData={pillarData}
-          textAutoHide={true}
-          enableStars={theme === 'dark'}
-          enableSpotlight={true}
-          enableBorderGlow={true}
-          glowColor={theme === 'dark' ? '124, 58, 237' : '124, 58, 237'}
-          particleCount={20}
-          clickEffect={true}
-        />
+          <MagicBento 
+            cardData={pillarData}
+            textAutoHide={true}
+            enableStars={theme === 'dark'}
+            enableSpotlight={true}
+            enableBorderGlow={true}
+            glowColor={theme === 'dark' ? '124, 58, 237' : '124, 58, 237'}
+            particleCount={30}
+            clickEffect={true}
+          />
       </section>
 
       {/* Professional Brand Wall */}
@@ -281,6 +323,179 @@ const Landing = () => {
               }}>{brand}</span>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* Reach Out Section */}
+      <section id="contact" style={{ padding: '140px 40px', background: 'var(--bg-page)', position: 'relative', overflow: 'hidden' }}>
+        <div className="floating-blob" style={{ top: '20%', right: '-10%', width: '600px', height: '600px', opacity: 0.05 }} />
+        
+        <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '80px', alignItems: 'center' }}>
+          <motion.div
+            initial={{ opacity: 0, x: -30 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true }}
+          >
+            <span className="badge" style={{ marginBottom: '24px', background: 'rgba(124, 58, 237, 0.1)', color: 'var(--primary)' }}>
+              Get Started with Phygitron360
+            </span>
+            <h2 style={{ fontSize: '3.5rem', fontWeight: 900, marginBottom: '24px', color: 'var(--text-primary)', letterSpacing: '-0.04em' }}>
+              Ready to scale <br/> your <span className="text-gradient-shiny">Talent Universe?</span>
+            </h2>
+            <p style={{ fontSize: '1.15rem', color: 'var(--text-secondary)', marginBottom: '40px', lineHeight: 1.6, maxWidth: '500px' }}>
+              Whether you're a manager at Wipro or a growing startup, our SaaS engine is built to isolate your data and accelerate your workforce.
+            </p>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <motion.a 
+                href="mailto:srirajpillai2104@gmail.com" 
+                whileHover={{ scale: 1.02, y: -5 }}
+                whileTap={{ scale: 0.98 }}
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '15px', 
+                  padding: '24px', 
+                  background: 'rgba(255, 255, 255, 0.03)', 
+                  backdropFilter: 'blur(20px)',
+                  borderRadius: '24px', 
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  textDecoration: 'none',
+                  transition: 'box-shadow 0.3s ease',
+                  boxShadow: '0 10px 30px -10px rgba(0,0,0,0.3)',
+                  cursor: 'pointer'
+                }}
+              >
+                <div style={{ background: 'linear-gradient(135deg, var(--primary) 0%, #6B21A8 100%)', color: '#fff', padding: '14px', borderRadius: '16px', boxShadow: '0 4px 12px rgba(124, 58, 237, 0.3)' }}>
+                  <Mail size={24} />
+                </div>
+                <div>
+                  <div style={{ fontWeight: 800, color: 'var(--text-primary)', fontSize: '1.1rem', marginBottom: '2px' }}>Mail Us Directly</div>
+                  <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', letterSpacing: '0.02em' }}>srirajpillai2104@gmail.com</div>
+                </div>
+              </motion.a>
+              
+              <motion.div 
+                whileHover={{ scale: 1.02, y: -5 }}
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '15px', 
+                  padding: '24px', 
+                  background: 'rgba(255, 255, 255, 0.03)', 
+                  backdropFilter: 'blur(20px)',
+                  borderRadius: '24px', 
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  transition: 'box-shadow 0.3s ease',
+                  boxShadow: '0 10px 30px -10px rgba(0,0,0,0.3)',
+                  cursor: 'default'
+                }}
+              >
+                <div style={{ background: 'linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%)', color: '#fff', padding: '14px', borderRadius: '16px', boxShadow: '0 4px 12px rgba(14, 165, 233, 0.3)' }}>
+                  <MessageSquare size={24} />
+                </div>
+                <div>
+                  <div style={{ fontWeight: 800, color: 'var(--text-primary)', fontSize: '1.1rem', marginBottom: '2px' }}>Instant Success Tracking</div>
+                  <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', letterSpacing: '0.02em' }}>24/7 Professional SaaS Support</div>
+                </div>
+              </motion.div>
+            </div>
+          </motion.div>
+
+          <BorderGlow
+            glowColor="40 80 80"
+            glowRadius={30}
+            glowIntensity={0.8}
+            edgeSensitivity={30}
+            borderRadius={32}
+            backgroundColor="rgba(255, 255, 255, 0.01)"
+            colors={['#c084fc', '#38bdf8', '#7C3AED']}
+            animated={true}
+            style={{ width: '100%' }}
+          >
+            <div
+              style={{ 
+                padding: '40px', 
+                borderRadius: 'inherit', 
+                backdropFilter: 'blur(30px)',
+                position: 'relative', 
+                zIndex: 10,
+                border: '1px solid rgba(255, 255, 255, 0.05)'
+              }}
+            >
+            {submitted ? (
+              <div style={{ textAlign: 'center', padding: '40px 0' }}>
+                <div style={{ 
+                  width: '80px', height: '80px', background: '#10b981', color: '#fff', 
+                  borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                  margin: '0 auto 24px', fontSize: '32px' 
+                }}>
+                  ✓
+                </div>
+                <h3 style={{ fontSize: '1.8rem', fontWeight: 800, marginBottom: '12px' }}>Request Received!</h3>
+                <p style={{ color: 'var(--text-secondary)' }}>
+                  Our team is reviewing your inquiry. We will reach out to you within 24 hours.
+                </p>
+                <button onClick={() => setSubmitted(false)} className="btn btn-ghost" style={{ marginTop: '30px' }}>
+                  Send another inquiry
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                  <div className="input-group">
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', display: 'block' }}>Company Name</label>
+                    <input 
+                      type="text" required className="search-input" placeholder="Wipro, eWandz, etc."
+                      value={form.company_name} onChange={e => setForm({...form, company_name: e.target.value})}
+                      style={{ width: '100%', background: 'var(--bg-page)' }}
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', display: 'block' }}>Your Name</label>
+                    <input 
+                      type="text" required className="search-input" placeholder="John Doe"
+                      value={form.contact_name} onChange={e => setForm({...form, contact_name: e.target.value})}
+                      style={{ width: '100%', background: 'var(--bg-page)' }}
+                    />
+                  </div>
+                </div>
+                <div className="input-group">
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', display: 'block' }}>Business Email</label>
+                  <input 
+                    type="email" required className="search-input" placeholder="john@company.com"
+                    value={form.email} onChange={e => setForm({...form, email: e.target.value})}
+                    style={{ width: '100%', background: 'var(--bg-page)' }}
+                  />
+                </div>
+                <div className="input-group">
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', display: 'block' }}>Inquiry Type</label>
+                  <select 
+                    className="search-input" value={form.inquiry_type} onChange={e => setForm({...form, inquiry_type: e.target.value})}
+                    style={{ width: '100%', background: 'var(--bg-page)', height: '48px' }}
+                  >
+                    <option value="demo">Request a Demo</option>
+                    <option value="pricing">Pricing Inquiry</option>
+                    <option value="saas_onboarding">SaaS Onboarding</option>
+                    <option value="general">General Support</option>
+                  </select>
+                </div>
+                <div className="input-group">
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', display: 'block' }}>How can we help?</label>
+                  <textarea 
+                    rows="4" className="search-input" placeholder="Tell us about your organization's needs..."
+                    value={form.message} onChange={e => setForm({...form, message: e.target.value})}
+                    style={{ width: '100%', background: 'var(--bg-page)', resize: 'none', padding: '12px' }}
+                  ></textarea>
+                </div>
+                
+                <button type="submit" disabled={isSubmitting} className="btn btn-shimmer" style={{ width: '100%', padding: '16px', borderRadius: '12px', fontSize: '1rem' }}>
+                  {isSubmitting ? 'Encrypting & Sending...' : <><Send size={18} /> Initialize Outreach</>}
+                </button>
+              </form>
+            )}
+          </div>
+        </BorderGlow>
         </div>
       </section>
 

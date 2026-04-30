@@ -141,7 +141,72 @@ body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
     </div>
     
     <p>We were incredibly impressed by your background and performance during the assessment phase. We believe you will be a fantastic addition to our team.</p>
-    <a href="{{ login_url }}" class="btn">Login to Employee Portal →</a>
+    <a href="{{ platform_url }}/onboarding/setup?token={{ token }}" class="btn">Start Your Onboarding →</a>
+  </div>
+  <div class="footer">© 2025 PHYGITRON 360 · Powered by EwandZDigital</div>
+</div>
+</body></html>
+"""
+
+ALERT_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body{font-family:Inter,Arial,sans-serif;background:#fff1f2;margin:0;padding:0}
+.container{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(225,29,72,0.1)}
+.header{background:#e11d48;padding:24px;text-align:center}
+.header h1{color:#fff;font-size:22px;margin:0}
+.body{padding:32px}
+.body h2{color:#1e1b4b;font-size:20px}
+.msg-box{background:#fff1f2;border-radius:12px;padding:20px;margin:24px 0;border-left:4px solid #e11d48}
+.footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:12px}
+</style></head>
+<body>
+<div class="container">
+  <div class="header"><h1>Platform Alert: {{ event_title }}</h1></div>
+  <div class="body">
+    <h2>Notice for Admin/Manager</h2>
+    <div class="msg-box">
+      <p>{{ message }}</p>
+    </div>
+    <p style="text-align:center;"><a href="{{ action_url }}" style="color:#e11d48;font-weight:700;">View in Dashboard →</a></p>
+  </div>
+  <div class="footer">Phygitron 360 Enterprise HRMS Alerting System</div>
+</div>
+</body></html>
+"""
+
+ASSIGN_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
+.container{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(124,58,237,0.1)}
+.header{background:linear-gradient(135deg,#7C3AED,#6B21A8);padding:40px 32px;text-align:center}
+.header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
+.body{padding:32px}
+.body h2{color:#1e1b4b;font-size:20px}
+.detail-box{background:#f8f5ff;border:1px solid #e9d5ff;border-radius:12px;padding:20px;margin:24px 0}
+.btn{display:inline-block;background:linear-gradient(135deg,#7C3AED,#6B21A8);color:#fff;text-decoration:none;padding:14px 32px;border-radius:10px;font-weight:600;font-size:16px;margin:24px 0}
+.footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
+</style></head>
+<body>
+<div class="container">
+  <div class="header"><h1>New Assessment Assigned! 🎯</h1></div>
+  <div class="body">
+    <h2>Hi {{ candidate_name }},</h2>
+    <p>A new professional assessment has been curated specifically for your profile. Please review the details below:</p>
+    <div class="detail-box">
+      <p style="margin: 8px 0;"><strong>Assessment:</strong> {{ assessment_title }}</p>
+      {% if question_count %}<p style="margin: 8px 0;"><strong>Total Questions:</strong> {{ question_count }}</p>{% endif %}
+      {% if duration_mins %}<p style="margin: 8px 0;"><strong>Time Limit:</strong> {{ duration_mins }} minutes</p>{% endif %}
+      {% if pass_score %}<p style="margin: 8px 0;"><strong>Passing Score:</strong> {{ pass_score }}%</p>{% endif %}
+      <p style="margin: 8px 0;"><strong>Closing Date:</strong> {{ deadline or 'No deadline' }}</p>
+    </div>
+    <p>Please ensure you are in a quiet environment with a stable internet connection before starting.</p>
+    <div style="text-align: center;">
+      <a href="{{ platform_url }}/verify/dashboard" class="btn" style="color: #ffffff !important; text-decoration: none;">Launch Assessment →</a>
+    </div>
   </div>
   <div class="footer">© 2025 PHYGITRON 360 · Powered by EwandZDigital</div>
 </div>
@@ -275,3 +340,38 @@ async def send_offer_letter_email(
     )
     subject = f"🎉 Job Offer: {role_title} at {company_name}"
     await send_email(to_email, subject, html, attachment_bytes=attachment_bytes, attachment_filename="Offer_Letter.pdf")
+
+
+async def send_assignment_notification_email(
+    to_email: str,
+    candidate_name: str,
+    assessment_title: str,
+    deadline: Optional[str] = None,
+    duration_mins: Optional[int] = None,
+    question_count: Optional[int] = None,
+    pass_score: Optional[float] = None,
+):
+    html = render_template(
+        ASSIGN_TEMPLATE,
+        candidate_name=candidate_name,
+        assessment_title=assessment_title,
+        deadline=deadline,
+        duration_mins=duration_mins,
+        question_count=question_count,
+        pass_score=pass_score,
+        platform_url=settings.FRONTEND_URL,
+    )
+    await send_email(to_email, f"New Assessment Assigned: {assessment_title}", html)
+async def send_hr_alert_email(
+    to_email: str,
+    event_title: str,
+    message: str,
+    action_url: Optional[str] = None
+):
+    html = render_template(
+        ALERT_TEMPLATE,
+        event_title=event_title,
+        message=message,
+        action_url=action_url or settings.FRONTEND_URL,
+    )
+    await send_email(to_email, f"ALERT: {event_title}", html)

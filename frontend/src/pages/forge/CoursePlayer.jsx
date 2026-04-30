@@ -1,18 +1,46 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { forgeApi } from '../../api';
-import { CheckCircle, PlayCircle, FileText, HelpCircle, ChevronLeft, Lock, Award, Clock } from 'lucide-react';
+import { 
+  CheckCircle, PlayCircle, FileText, HelpCircle, ChevronLeft, 
+  Lock, Award, Clock, ChevronRight, Maximize2, RefreshCw,
+  Sun, Moon, Sparkles, X
+} from 'lucide-react';
+import { useTheme } from '../../context/ThemeContext';
+import './forge_styles.css';
 import toast from 'react-hot-toast';
+import ReactMarkdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 
 const CONTENT_ICONS = { 
-  video: <PlayCircle size={15} />, 
-  article: <FileText size={15} />, 
-  quiz: <HelpCircle size={15} /> 
+  video: <PlayCircle size={16} />, 
+  article: <FileText size={16} />, 
+  quiz: <HelpCircle size={16} />,
+  pdf: <Award size={16} />,
+  lab: <Maximize2 size={16} />
+};
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+const resolveAssetUrl = (url) => {
+  if (!url) return '';
+  if (/^https?:\/\//i.test(url) || url.startsWith('data:')) return url;
+  if (url.startsWith('/uploads')) {
+    const encodedPath = url.split('/').map(part => encodeURIComponent(part)).join('/');
+    return `${API_BASE}${encodedPath}`;
+  }
+  return url;
+};
+
+const resolveVideoUrl = (url) => {
+  const resolved = resolveAssetUrl(url);
+  return resolved.includes('watch?v=') ? resolved.replace('watch?v=', 'embed/') : resolved;
 };
 
 export default function CoursePlayer() {
   const { id } = useParams();
   const nav = useNavigate();
+  const { theme, toggleTheme } = useTheme();
   const [course, setCourse] = useState(null);
   const [currentSection, setCurrentSection] = useState(0);
   const [progress, setProgress] = useState({});
@@ -46,19 +74,19 @@ export default function CoursePlayer() {
     try {
       await forgeApi.completeSection(sectionId, { enrollment_id: course.enrollment.id });
       setProgress(p => ({ ...p, [sectionId]: { completed: true } }));
-      toast.success('Section complete! 🎉');
+      toast.success('Module Mastered! 🎉');
       
       const next = currentSection + 1;
-      if (next < course.sections.length) setCurrentSection(next);
+      if (next < course.sections.length) {
+        setTimeout(() => setCurrentSection(next), 1000);
+      }
     } catch { toast.error('Failed to update progress'); }
   };
 
   const submitQuiz = async () => {
     const section = course.sections[currentSection];
     const quizzes = section.quizzes || [];
-    // Currently relying on backend or simple front-end validation (in actual LMS, grading is backend)
-    // For demo/UI purposes, mimicking frontend grading if correct_answer is provided, otherwise skipping
-    const score = quizzes.reduce((s, q) => s + (quizAnswers[q.id] === q.options?.[q.correct_index] ? 1 : 0), 0);
+    const score = quizzes.reduce((s, q) => s + (quizAnswers[q.id] === q.correct_answer ? 1 : 0), 0);
     const pct = quizzes.length > 0 ? Math.round((score / quizzes.length) * 100) : 100;
     
     try {
@@ -66,130 +94,126 @@ export default function CoursePlayer() {
       setProgress(p => ({ ...p, [section.id]: { completed: true, quiz_score: pct } }));
       setQuizSubmitted(true);
       if (pct >= (section.pass_score || 60)) {
-        toast.success(`Quiz passed! Score: ${pct}%`);
+        toast.success(`Skill Verified! Score: ${pct}%`);
       } else {
-        toast.error(`Quiz failed. Score: ${pct}%. Minimum required is ${section.pass_score || 60}%`);
+        toast.error(`Verification Failed. Score: ${pct}%. Minimum is ${section.pass_score || 60}%`);
       }
     } catch {
       toast.error('Failed to submit quiz');
     }
   };
 
-  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', flexDirection: 'column', gap: 16 }}><div className="spinner spinner-lg" /><p style={{ color: 'var(--text-muted)' }}>Loading learning environment...</p></div>;
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', flexDirection: 'column', gap: 20 }}>
+      <div className="spinner spinner-lg" />
+      <p style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Assembling your learning environment...</p>
+    </div>
+  );
   if (!course) return null;
 
   const sections = course.sections || [];
   const section = sections[currentSection];
   const sectionDone = progress[section?.id]?.completed;
-  
-  // Progress Ring Math
   const progressPct = course.enrollment?.progress_percent || 0;
-  const radius = 16;
-  const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference - (progressPct / 100) * circumference;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg-page)', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--forge-bg)', overflow: 'hidden' }} className="forge-grain">
       
-      {/* Top Navigation Bar */}
-      <div style={{ background: '#111827', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', height: 64, flexShrink: 0, borderBottom: '1px solid #1F2937' }}>
+      {/* Premium Obsidian Workspace Header */}
+      <div className="player-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          <button className="btn btn-ghost" style={{ color: '#9CA3AF', padding: '6px' }} onClick={() => nav(course.enrollment ? '/forge' : '/forge/library')}>
+          <button 
+            className="btn btn-ghost" 
+            style={{ color: 'var(--forge-text-dim)', padding: '6px', borderRadius: '8px', background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)' }} 
+            onClick={() => nav(course.enrollment ? '/forge' : '/forge/library')}
+          >
             <ChevronLeft size={18} />
           </button>
-          <div style={{ width: 1, height: 24, background: '#374151' }} />
-          <div>
-            <h1 style={{ fontSize: '1.05rem', margin: '0 0 2px 0', fontWeight: 600, color: '#F9FAFB' }}>{course.title}</h1>
-            <div style={{ display: 'flex', gap: 12, fontSize: '0.75rem', color: '#9CA3AF' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Clock size={12} /> {course.estimated_hours}h total</span>
-              <span className="badge" style={{ background: '#374151', color: '#D1D5DB', fontSize: '0.65rem', padding: '2px 6px' }}>{course.difficulty}</span>
+          
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 2 }}>
+              <h1 className="player-title">{course.title}</h1>
+              <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 8px', borderRadius: '4px', background: 'rgba(124, 58, 237, 0.15)', color: 'var(--forge-accent)', border: '1px solid rgba(124, 58, 237, 0.2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {course.difficulty}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 12, fontSize: '0.7rem', color: 'var(--forge-text-dim)', fontWeight: 600 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>Section {currentSection + 1} of {sections.length}</span>
+              <span>•</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Clock size={11} /> {course.estimated_hours}h path</span>
             </div>
           </div>
         </div>
 
         {course.enrollment && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: progressPct === 100 ? '#10B981' : '#F9FAFB' }}>
-              {progressPct === 100 ? 'Course Completed 🎉' : `${progressPct}% Complete`}
-            </span>
-            <svg width="40" height="40" viewBox="0 0 40 40">
-              <circle cx="20" cy="20" r={radius} fill="transparent" stroke="#374151" strokeWidth="4" />
-              <circle cx="20" cy="20" r={radius} fill="transparent" stroke={progressPct === 100 ? '#10B981' : 'var(--primary)'} strokeWidth="4" 
-                strokeDasharray={circumference} strokeDashoffset={strokeDashoffset} 
-                strokeLinecap="round" style={{ transition: 'stroke-dashoffset 0.5s ease', transform: 'rotate(-90deg)', transformOrigin: '50% 50%' }} 
-              />
-            </svg>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '0.65rem', color: 'var(--forge-text-dim)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 2 }}>Your Progress</div>
+              <div style={{ fontSize: '1rem', fontWeight: 900, color: progressPct === 100 ? '#10B981' : 'var(--forge-text-main)' }}>
+                {Math.round(progressPct)}%
+              </div>
+            </div>
+            <div style={{ position: 'relative', width: 40, height: 40 }}>
+               <svg width="40" height="40" viewBox="0 0 44 44">
+                  <circle cx="22" cy="22" r="20" fill="transparent" stroke="var(--forge-border)" strokeWidth="3" />
+                  <circle cx="22" cy="22" r="20" fill="transparent" stroke={progressPct === 100 ? '#10B981' : 'var(--forge-accent)'} strokeWidth="3" 
+                    strokeDasharray={126} strokeDashoffset={126 - (progressPct / 100) * 126} 
+                    strokeLinecap="round" style={{ transition: 'stroke-dashoffset 1s cubic-bezier(0.16, 1, 0.3, 1)', transform: 'rotate(-90deg)', transformOrigin: '50% 50%' }} 
+                  />
+               </svg>
+            </div>
             {progressPct === 100 && (
-              <button className="btn btn-sm" style={{ background: '#10B981', color: 'white' }} onClick={() => nav('/forge/transcript')}>
-                <Award size={14} /> My Certificate
+              <button className="btn btn-sm" onClick={() => nav('/forge/transcript')} style={{ borderRadius: '10px', background: 'var(--forge-accent)', border: 'none', color: 'white', fontWeight: 800, padding: '0 16px', height: 40 }}>
+                CERTIFICATE
               </button>
             )}
+
+            <button 
+              className="btn btn-ghost" 
+              onClick={toggleTheme} 
+              style={{ width: 40, height: 40, padding: 0, borderRadius: '50%', color: 'var(--forge-text-dim)', background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)' }}
+            >
+              {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+            </button>
           </div>
         )}
       </div>
 
-      {/* Main Layout Area */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         
-        {/* Left pane: TOC (Table of Contents) */}
-        <div style={{ width: 340, background: 'white', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', flexShrink: 0, zIndex: 10 }}>
-          <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)', background: 'var(--primary-lightest)' }}>
-            <h3 style={{ margin: 0, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-              Table of Contents <span className="badge badge-primary">{sections.length}</span>
-            </h3>
-          </div>
+        {/* Navigation Sidebar - Knowledge Tree */}
+        <div className="toc-sidebar" style={{ width: 340, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+          <div className="toc-header">Lessons</div>
           
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
             {sections.map((s, i) => {
               const isDone = progress[s.id]?.completed;
               const isActive = i === currentSection;
-              // Simple sequential locking logic: section is locked if previous is not done AND user is enrolled
               const isLocked = course.enrollment && i > 0 && !progress[sections[i-1].id]?.completed;
               
               return (
                 <div 
                   key={s.id} 
-                  style={{ 
-                    padding: '16px 24px', borderBottom: '1px solid var(--border)',
-                    cursor: isLocked ? 'not-allowed' : 'pointer',
-                    background: isActive ? 'var(--primary-lightest)' : isDone ? '#F9FAFB' : 'white',
-                    borderLeft: `4px solid ${isActive ? 'var(--primary)' : 'transparent'}`,
-                    transition: 'var(--transition)', opacity: isLocked ? 0.6 : 1
-                  }}
+                  className={`toc-item ${isActive ? 'active' : ''} ${isLocked ? 'locked' : ''}`}
                   onClick={() => { 
                     if (!isLocked) {
                       setCurrentSection(i); setQuizAnswers({}); setQuizSubmitted(false);
                     } else {
-                      toast.error('Complete previous sections first');
+                      toast.error('Please complete the previous lessons first');
                     }
                   }}
                 >
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                    <div style={{ 
-                      width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      background: isDone ? '#10B981' : isLocked ? '#F3F4F6' : 'white',
-                      border: `2px solid ${isDone ? '#10B981' : isLocked ? '#E5E7EB' : 'var(--text-muted)'}`,
-                      color: isDone ? 'white' : isLocked ? '#9CA3AF' : 'transparent',
-                      marginTop: 2
-                    }}>
-                      {isDone ? <CheckCircle size={14} /> : isLocked ? <Lock size={12} /> : null}
+                  <div className="toc-status-icon">
+                    {isDone ? <CheckCircle size={14} /> : isLocked ? <Lock size={12} /> : <span>{i + 1}</span>}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: isActive ? 700 : 500, color: isActive ? 'var(--forge-accent)' : 'var(--forge-text-main)', opacity: 1 }}>
+                      {s.title}
                     </div>
-                    <div>
-                      <div style={{ 
-                        fontSize: '0.9rem', fontWeight: isActive ? 700 : 500, 
-                        color: isActive ? 'var(--primary)' : 'var(--text-primary)',
-                        marginBottom: 4, lineHeight: 1.4
-                      }}>
-                        {i + 1}. {s.title}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          {CONTENT_ICONS[s.content_type]} <span style={{ textTransform: 'capitalize' }}>{s.content_type}</span>
-                        </span>
-                        <span>•</span>
-                        <span>{s.duration_minutes} min</span>
-                      </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.65rem', color: 'var(--forge-text-dim)', marginTop: 4, fontWeight: 600 }}>
+                       <span style={{ display: 'flex', alignItems: 'center', gap: 4, textTransform: 'uppercase' }}>{CONTENT_ICONS[s.content_type]} {s.content_type}</span>
+                       <span>•</span>
+                       <span>{s.duration_minutes} MIN</span>
                     </div>
                   </div>
                 </div>
@@ -197,170 +221,172 @@ export default function CoursePlayer() {
             })}
           </div>
         </div>
-
-        {/* Right pane: Content Area */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '32px 48px', position: 'relative' }}>
+        {/* Content Viewport */}
+        <div style={{ flex: 1, overflowY: 'auto', background: 'transparent', padding: '40px' }}>
           
           {!course.enrollment ? (
-            <div className="animate-fade-in" style={{ 
-              maxWidth: 600, margin: '80px auto', textAlign: 'center', padding: 48, 
-              background: 'white', borderRadius: 16, border: '1px solid var(--border)',
-              boxShadow: 'var(--shadow-lg)' 
-            }}>
-              <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'var(--primary-lightest)', margin: '0 auto 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)' }}>
-                <Lock size={32} />
-              </div>
-              <h2 style={{ marginBottom: 12 }}>Unlock This Course</h2>
-              <p style={{ color: 'var(--text-muted)', marginBottom: 32, fontSize: '1.05rem' }}>Enroll in <strong>{course.title}</strong> to access {sections.length} premium learning modules, interactive quizzes, and earn your certification.</p>
-              <button className="btn btn-shimmer" style={{ padding: '12px 32px', fontSize: '1.1rem' }} onClick={enrollAndStart}>
-                Enroll for Free →
-              </button>
-            </div>
-          ) : !section ? (
-            <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Section not found.</div>
+             <div className="forge-course-card" style={{ maxWidth: 540, margin: '60px auto', textAlign: 'center', padding: 48, borderRadius: 24, background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)' }}>
+                <div style={{ width: 64, height: 64, borderRadius: '18px', background: 'var(--forge-bg)', color: 'var(--forge-accent)', margin: '0 auto 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--forge-border)' }}>
+                  <Lock size={30} />
+                </div>
+                <h2 style={{ color: 'var(--forge-text-main)', letterSpacing: '-0.02em' }}>Enrollment Required</h2>
+                <p style={{ color: 'var(--forge-text-dim)', marginBottom: 32, lineHeight: 1.6 }}>Join this course to access all lessons, track your progress, and earn certificates.</p>
+                <button className="btn btn-shimmer" onClick={enrollAndStart} style={{ width: '100%', borderRadius: 12, height: 50, fontWeight: 800 }}>
+                  ACTIVATE PATH
+                </button>
+             </div>
           ) : (
             <div className="animate-fade-in" style={{ maxWidth: 900, margin: '0 auto' }}>
               
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ display: 'inline-flex', padding: '4px 12px', background: 'var(--primary-lightest)', color: 'var(--primary)', fontWeight: 700, borderRadius: 999, fontSize: '0.75rem', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  Module {currentSection + 1} of {sections.length}
+              <div style={{ marginBottom: 40, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                <div>
+                   <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--forge-accent)', letterSpacing: '0.1em', marginBottom: 6, textTransform: 'uppercase' }}>LESSON {currentSection + 1}</div>
+                   <h2 style={{ fontSize: '2.5rem', margin: 0, letterSpacing: '-0.04em', color: 'var(--forge-text-main)' }}>{section.title}</h2>
                 </div>
-                <h2 style={{ fontSize: '2rem', marginBottom: 8 }}>{section.title}</h2>
+                <div style={{ display: 'flex', gap: 12 }}>
+                   <button className="btn btn-ghost" style={{ padding: 8, color: 'var(--forge-text-dim)' }} title="Toggle Cinema Mode"><Maximize2 size={18} /></button>
+                </div>
               </div>
 
-              {/* Video Player Container */}
-              {section.content_type === 'video' && (
-                <div style={{ marginBottom: 32, background: 'black', borderRadius: 12, overflow: 'hidden', boxShadow: 'var(--shadow-lg)', position: 'relative', paddingTop: '56.25%' }}>
-                  {section.content_url ? (
+              {/* Main Content Render */}
+              <div className="cinema-frame" style={{ marginBottom: 48, background: section.content_type === 'video' ? '#000' : 'var(--forge-preview-bg)' }}>
+                {section.content_type === 'video' ? (
+                  <div style={{ position: 'relative', paddingTop: '56.25%', background: '#000' }}>
                     <iframe 
-                      src={section.content_url.includes('watch?v=') ? section.content_url.replace('watch?v=', 'embed/') : section.content_url} 
+                      src={resolveVideoUrl(section.content_url)}
                       style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }} 
-                      allowFullScreen title={section.title} 
+                      allowFullScreen 
                     />
-                  ) : (
-                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', flexDirection: 'column', gap: 16 }}>
-                      <PlayCircle size={48} opacity={0.5} />
-                      <p>Video content is currently unavailable.</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Quiz Container */}
-              {section.content_type === 'quiz' && (
-                <div style={{ background: 'white', borderRadius: 12, border: '1px solid var(--border)', padding: 32, marginBottom: 32 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 32, paddingBottom: 24, borderBottom: '1px solid var(--border)' }}>
-                    <div>
-                      <h3 style={{ margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: 8 }}><HelpCircle size={20} color="var(--primary)" /> Knowledge Check</h3>
-                      <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.9rem' }}>Answer all questions correctly to proceed. minimum passing score: {section.pass_score || 60}%</p>
-                    </div>
-                    <div className="badge badge-info">{section.quizzes?.length || 0} Questions</div>
                   </div>
-
-                  {(section.quizzes || []).length === 0 ? (
-                    <p style={{ color: 'var(--text-muted)', textAlign: 'center' }}>No questions configured for this quiz.</p>
+                ) : section.content_type === 'article' ? (
+                  <div className="markdown-body" style={{ background: 'transparent', padding: '60px 80px', minHeight: 400 }}>
+                    <ReactMarkdown remarkPlugins={[remarkBreaks]}>
+                      {section.content_markdown || '# Loading Lesson Data\nWe are getting the content ready for you. Please stand by.'}
+                    </ReactMarkdown>
+                  </div>
+                ) : section.content_type === 'pdf' ? (
+                  <div style={{ background: '#000', height: 700 }}>
+                    <iframe 
+                      src={resolveAssetUrl(section.content_url)}
+                      style={{ width: '100%', height: '100%', border: 'none' }} 
+                    />
+                  </div>
+                ) : section.content_type === 'lab' ? (
+                  section.content_url ? (
+                    <div style={{ background: '#000', height: 700 }}>
+                      <iframe
+                        src={resolveAssetUrl(section.content_url)}
+                        title={section.title}
+                        style={{ width: '100%', height: '100%', border: 'none' }}
+                        allowFullScreen
+                      />
+                    </div>
                   ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
-                      {section.quizzes.map((q, qi) => (
-                        <div key={q.id || qi}>
-                          <p style={{ fontWeight: 600, fontSize: '1.05rem', marginBottom: 16 }}>
-                            <span style={{ color: 'var(--primary)', marginRight: 8 }}>{qi + 1}.</span> 
-                            {q.question || q.question_text || 'Untitled Question'}
-                          </p>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                            {(q.options || ['True', 'False']).map((opt, oi) => {
-                              const isSelected = quizAnswers[q.id] === opt;
-                              // Simulate checking against a correct answer index if evaluating purely on frontend
-                              const isCorrectAnswer = opt === q.options?.[q.correct_index]; 
-                              
-                              let stateClass = '';
-                              if (quizSubmitted) {
-                                if (isSelected && isCorrectAnswer) stateClass = 'correct-choice';
-                                else if (isSelected && !isCorrectAnswer) stateClass = 'wrong-choice';
-                                else if (!isSelected && isCorrectAnswer) stateClass = 'missed-correct-choice'; // Optional: show what they missed
-                              }
+                    <div style={{ padding: 80, textAlign: 'center', background: 'rgba(0,0,0,0.3)' }}>
+                       <Sparkles size={48} color="var(--forge-accent)" style={{ marginBottom: 24, opacity: 0.5 }} />
+                       <h3 style={{ color: 'var(--forge-text-main)', marginBottom: 16 }}>Sandboxed Environment</h3>
+                       <p style={{ color: 'var(--forge-text-dim)', maxWidth: 400, margin: '0 auto 32px' }}>Execute code and test architectures in an isolated, high-performance workspace.</p>
+                       <button className="btn btn-primary" style={{ height: 48, padding: '0 32px', borderRadius: 12, background: 'var(--forge-accent)', border: 'none', fontWeight: 800 }}>LAUNCH INSTANCE</button>
+                    </div>
+                  )
+                ) : section.content_type === 'quiz' ? (
+                  <div style={{ background: 'transparent', padding: '60px 80px' }}>
+                    <div style={{ marginBottom: 48, borderBottom: '1px solid var(--forge-border)', paddingBottom: 32 }}>
+                       <h3 style={{ color: 'var(--forge-text-main)', marginBottom: 12, letterSpacing: '-0.02em' }}>Proficiency Verification</h3>
+                       <p style={{ color: 'var(--forge-text-dim)', margin: 0, fontSize: '0.95rem' }}>Threshold: <strong style={{ color: 'var(--forge-text-main)' }}>{section.pass_score || 60}%</strong>. Select the most valid conclusions.</p>
+                    </div>
 
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 48 }}>
+                      {(section.quizzes || []).map((q, qi) => (
+                        <div key={q.id}>
+                          <div style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: 24, display: 'flex', gap: 16, color: 'var(--forge-text-main)', lineHeight: 1.4 }}>
+                            <span style={{ color: 'var(--forge-accent)', opacity: 0.5 }}>{qi + 1}.</span>
+                            {q.question_text}
+                          </div>
+                          
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            {q.options.map((opt, oi) => {
+                              const isSelected = quizAnswers[q.id] === opt;
+                              const isCorrect = quizSubmitted && opt === q.correct_answer;
+                              const isWrongSelection = quizSubmitted && isSelected && opt !== q.correct_answer;
+                              
                               return (
                                 <div 
                                   key={oi} 
+                                  className={`quiz-choice ${isSelected ? 'selected' : ''} ${isCorrect ? 'correct' : ''} ${isWrongSelection ? 'incorrect' : ''} ${quizSubmitted ? 'submitted' : ''}`}
                                   onClick={() => !quizSubmitted && setQuizAnswers(a => ({ ...a, [q.id]: opt }))}
-                                  style={{ 
-                                    padding: '12px 16px', borderRadius: 8, border: `2px solid ${isSelected ? 'var(--primary)' : 'var(--border)'}`,
-                                    background: isSelected ? 'var(--primary-lightest)' : 'white',
-                                    cursor: quizSubmitted ? 'default' : 'pointer', transition: 'all 0.2s',
-                                    display: 'flex', alignItems: 'center', gap: 12,
-                                    // Apply validation coloring if submitted
-                                    ...(quizSubmitted && (isSelected && isCorrectAnswer) ? { borderColor: '#10B981', background: '#ECFDF5' } : {}),
-                                    ...(quizSubmitted && (isSelected && !isCorrectAnswer) ? { borderColor: '#EF4444', background: '#FEF2F2' } : {})
-                                  }}
+                                  style={{ padding: '22px 28px' }}
                                 >
-                                  <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${isSelected ? 'var(--primary)' : 'var(--text-muted)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                    {isSelected && <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--primary)' }} />}
+                                  <div className="quiz-radio">
+                                    <div className="quiz-radio-inner" />
                                   </div>
-                                  <span style={{ color: isSelected ? 'var(--primary-dark)' : 'var(--text-primary)' }}>{opt}</span>
+                                  <span style={{ fontWeight: 600, color: isSelected ? 'var(--forge-text-main)' : 'var(--forge-text-main)' }}>{opt}</span>
+                                  {isCorrect && <CheckCircle size={18} color="#10B981" style={{ marginLeft: 'auto' }} />}
+                                  {isWrongSelection && <X size={18} color="#EF4444" style={{ marginLeft: 'auto' }} />}
                                 </div>
                               );
                             })}
                           </div>
+                          
                           {quizSubmitted && q.explanation && (
-                            <div style={{ marginTop: 12, padding: 12, background: '#EFF6FF', borderRadius: 8, borderLeft: '4px solid #3B82F6', fontSize: '0.85rem', display: 'flex', gap: 8 }}>
-                              <span>💡</span>
-                              <div>
-                                <strong style={{ color: '#1E3A8A', display: 'block', marginBottom: 2 }}>Explanation</strong>
-                                <span style={{ color: '#1E40AF' }}>{q.explanation}</span>
-                              </div>
+                            <div style={{ marginTop: 20, padding: '20px 24px', background: 'var(--forge-card-bg)', borderRadius: 16, borderLeft: '2px solid var(--forge-accent)', fontSize: '0.9rem', color: 'var(--forge-text-dim)', lineHeight: 1.6 }}>
+                               <strong style={{ color: 'var(--forge-accent)', display: 'block', marginBottom: 6, fontSize: '0.7rem', letterSpacing: '0.1em' }}>RATIONALE</strong>
+                               {q.explanation}
                             </div>
                           )}
                         </div>
                       ))}
                     </div>
-                  )}
 
-                  {!quizSubmitted && section.quizzes?.length > 0 && (
-                    <div style={{ marginTop: 40, borderTop: '1px solid var(--border)', paddingTop: 24, display: 'flex', justifyContent: 'flex-end' }}>
-                      <button 
-                        className="btn btn-primary btn-lg" 
-                        onClick={submitQuiz} 
-                        disabled={Object.keys(quizAnswers).length < section.quizzes.length}
-                      >
-                        Submit Answers
-                      </button>
-                    </div>
-                  )}
-                  {quizSubmitted && (
-                    <div style={{ marginTop: 40, borderTop: '1px solid var(--border)', paddingTop: 24, display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
-                      {progress[section.id]?.quiz_score < (section.pass_score || 60) && (
-                        <button className="btn btn-secondary" onClick={() => { setQuizSubmitted(false); setQuizAnswers({}); }}>Retry Quiz</button>
-                      )}
-                      {(progress[section.id]?.quiz_score >= (section.pass_score || 60)) && currentSection < sections.length - 1 && (
-                        <button className="btn btn-primary" onClick={() => setCurrentSection(currentSection + 1)}>Continue to Next Module <ChevronLeft style={{ transform: 'rotate(180deg)' }} size={16} /></button>
+                    <div style={{ marginTop: 60, display: 'flex', justifyContent: 'flex-end', gap: 16 }}>
+                      {!quizSubmitted ? (
+                        <button 
+                          className="btn btn-primary" 
+                          style={{ borderRadius: 12, padding: '0 40px', height: 52, background: 'var(--forge-accent)', border: 'none', fontWeight: 800 }}
+                          onClick={submitQuiz}
+                          disabled={Object.keys(quizAnswers).length < (section.quizzes?.length || 0)}
+                        >
+                          SUBMIT VERIFICATION
+                        </button>
+                      ) : (
+                        <>
+                          <button className="btn btn-ghost" onClick={() => { setQuizSubmitted(false); setQuizAnswers({}); }} style={{ color: 'var(--forge-text-main)', background: 'var(--forge-card-bg)', borderRadius: 12 }}><RefreshCw size={16} /> RE-ATTEMPT</button>
+                          {progress[section.id]?.quiz_score >= (section.pass_score || 60) && currentSection < sections.length - 1 && (
+                            <button className="btn btn-primary" onClick={() => setCurrentSection(currentSection + 1)} style={{ background: 'var(--forge-accent)', border: 'none', borderRadius: 12, height: 52, padding: '0 32px', fontWeight: 800 }}>NEXT LESSON <ChevronRight size={16} /></button>
+                          )}
+                        </>
                       )}
                     </div>
-                  )}
-                </div>
-              )}
+                  </div>
+                ) : (
+                  <div style={{ padding: 100, background: 'transparent', textAlign: 'center' }}>
+                     <FileText size={48} color="var(--forge-text-dim)" style={{ marginBottom: 20 }} />
+                     <p style={{ color: 'var(--forge-text-dim)' }}>Loading lesson content.</p>
+                  </div>
+                )}
+              </div>
 
-              {/* Completion Action Bar */}
+              {/* Lesson Action Footer */}
               {section.content_type !== 'quiz' && (
-                <div style={{ background: 'white', padding: '24px 32px', borderRadius: 12, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ 
+                  background: 'var(--forge-card-bg)', padding: '32px 48px', borderRadius: 24, 
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  border: '1px solid var(--forge-border)', backdropFilter: 'blur(20px)'
+                }}>
                   <div>
-                    <h4 style={{ margin: '0 0 4px 0' }}>Finished this module?</h4>
-                    <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.9rem' }}>Mark it as complete to track your progress and unlock the next section.</p>
+                    <h4 style={{ margin: '0 0 4px 0', fontSize: '1.2rem', color: 'var(--forge-text-main)', letterSpacing: '-0.01em' }}>Module Execution Complete?</h4>
+                    <p style={{ margin: 0, color: 'var(--forge-text-dim)', fontSize: '0.9rem' }}>Finish this lesson to move to the next one.</p>
                   </div>
                   {!sectionDone ? (
-                    <button className="btn btn-success btn-lg" onClick={() => markComplete(section.id)} style={{ padding: '12px 24px' }}>
-                      <CheckCircle size={18} /> Mark as Complete
+                    <button className="btn btn-primary" onClick={() => markComplete(section.id)} style={{ borderRadius: 12, padding: '0 32px', height: 52, background: 'var(--forge-text-main)', color: 'var(--forge-bg)', border: 'none', fontWeight: 800 }}>
+                      DONE
                     </button>
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                      <div className="badge badge-success" style={{ fontSize: '0.9rem', padding: '10px 20px', display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <CheckCircle size={16} /> Completed
-                      </div>
-                      {currentSection < sections.length - 1 && (
-                        <button className="btn btn-primary" onClick={() => setCurrentSection(currentSection + 1)}>
-                          Next <ChevronLeft style={{ transform: 'rotate(180deg)' }} size={16} />
-                        </button>
-                      )}
+                    <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                       <div className="player-title" style={{ color: '#10B981' }}>MASTERED</div>
+                       {currentSection < sections.length - 1 && (
+                         <button className="btn btn-primary" onClick={() => setCurrentSection(currentSection + 1)} style={{ borderRadius: 12, height: 52, padding: '0 32px', background: 'var(--forge-accent)', border: 'none', fontWeight: 800 }}>NEXT LESSON <ChevronRight size={16} /></button>
+                       )}
                     </div>
                   )}
                 </div>

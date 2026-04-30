@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import { Eye, EyeOff, Zap, Shield, Brain, Star } from 'lucide-react';
+import { Eye, EyeOff, Zap, Shield, Brain, Star, ArrowLeft } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import BorderGlow from '../components/BorderGlow';
+import Orb from '../components/Orb';
+import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 
 const FEATURES = [
   { icon: <Brain size={20} />, text: 'AI-Powered Resume Analysis' },
@@ -13,6 +16,7 @@ const FEATURES = [
 
 export default function Login() {
   const { login } = useAuth();
+  const { theme } = useTheme();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -39,45 +43,84 @@ export default function Login() {
     }
   };
 
+  const isDark = theme === 'dark';
+  const glowHsl = isDark ? '280 80 80' : '260 60 50'; // Purple for dark, Deep Indigo for light
+  const accentColor = isDark ? '#7df9ff' : '#5227FF'; 
+  const orbBg = isDark ? '#080510' : '#F3F4F6';
+
   return (
-    <div style={{ minHeight: '100vh', display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+    <div style={{ minHeight: '100vh', display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', backgroundColor: 'var(--bg-page)', overflow: 'hidden' }}>
+      {/* Dynamic Background */}
       <div className="page-bg" />
 
-      {/* Left side — Branding */}
+      {/* Left side — Premium Branding */}
       <div style={{
-        background: 'linear-gradient(145deg, #5B21B6, #7C3AED, #4C1D95)',
-        padding: '48px',
+        background: isDark ? 'var(--bg-page)' : '#ffffff',
+        padding: '64px',
         display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
         position: 'relative', overflow: 'hidden',
+        borderRight: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`
       }}>
-        {/* Decorative orbs */}
-        <div style={{ position: 'absolute', top: '-80px', right: '-80px', width: '320px', height: '320px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', filter: 'blur(60px)' }} />
-        <div style={{ position: 'absolute', bottom: '10%', left: '-60px', width: '250px', height: '250px', borderRadius: '50%', background: 'rgba(236,72,153,0.12)', filter: 'blur(50px)' }} />
+        {/* Orb Background */}
+        <div style={{ position: 'absolute', inset: 0, opacity: isDark ? 0.5 : 0.3, pointerEvents: 'none', filter: 'blur(40px)' }}>
+           <Orb 
+              hue={isDark ? 280 : 250} 
+              hoverIntensity={0.2} 
+              backgroundColor={orbBg}
+              forceHoverState={true}
+           />
+        </div>
 
-        <div className="animate-fade-in">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '48px' }}>
-            <div style={{ width: 48, height: 48, background: 'rgba(255,255,255,0.15)', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.2)', fontWeight: 900, fontSize: '1.1rem', color: 'white' }}>P3</div>
-            <div>
-              <div style={{ color: 'white', fontWeight: 800, fontSize: '1rem' }}>PHYGITRON 360</div>
-              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.72rem' }}>EwandZDigital</div>
-            </div>
+        <div className="animate-fade-in" style={{ position: 'relative', zIndex: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '80px' }}>
+            <Link to="/" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <div style={{ 
+                width: 54, height: 54, 
+                background: isDark ? 'rgba(124,58,237,0.15)' : 'rgba(124,58,237,0.1)', 
+                borderRadius: 18, 
+                display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                backdropFilter: 'blur(10px)', 
+                border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(124,58,237,0.2)'}`, 
+                fontWeight: 900, fontSize: '1.25rem', color: isDark ? '#C4B5FD' : '#5B21B6' 
+              }}>P3</div>
+              <div>
+                <div style={{ color: 'var(--text-primary)', fontWeight: 900, fontSize: '1.2rem', letterSpacing: '-0.02em' }}>PHYGITRON 360</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em' }}>PREMIUM SAAS ENGINE</div>
+              </div>
+            </Link>
           </div>
 
-          <h1 style={{ color: 'white', fontSize: '2.8rem', lineHeight: 1.15, marginBottom: '20px' }}>
-            The Talent<br />
-            <span style={{ background: 'linear-gradient(90deg, #F9A8D4, #C4B5FD)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
-              Intelligence
-            </span><br />
-            Platform
+          <h1 style={{ color: 'var(--text-primary)', fontSize: '3.8rem', lineHeight: 1.05, fontWeight: 900, marginBottom: '28px', letterSpacing: '-0.04em' }}>
+            Shape the <br />
+            <span style={{ 
+              background: isDark 
+                ? 'linear-gradient(90deg, #7df9ff, #C4B5FD)' 
+                : 'linear-gradient(90deg, #5B21B6, #2563EB)', 
+              WebkitBackgroundClip: 'text', 
+              WebkitTextFillColor: 'transparent', 
+              backgroundClip: 'text' 
+            }}>
+              Future Workforce
+            </span>
           </h1>
-          <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '1rem', lineHeight: 1.7, marginBottom: '40px' }}>
-            One unified AI system covering the full talent lifecycle — from recruitment to deployment.
+          <p style={{ color: 'var(--text-secondary)', fontSize: '1.15rem', lineHeight: 1.6, marginBottom: '60px', maxWidth: '520px' }}>
+            A hyper-isolated SaaS ecosystem designed to verify, forge, and deploy elite organizational talent with AI-driven precision.
           </p>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', maxWidth: '600px' }}>
             {FEATURES.map((f, i) => (
-              <div key={i} className={`animate-fade-in stagger-${i + 1}`} style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'rgba(255,255,255,0.85)', fontSize: '0.9rem' }}>
-                <div style={{ width: 36, height: 36, background: 'rgba(255,255,255,0.1)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+              <div key={i} className={`animate-fade-in stagger-${i + 1}`} style={{ 
+                display: 'flex', alignItems: 'center', gap: '14px', 
+                color: 'var(--text-secondary)', fontSize: '0.95rem',
+                background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                padding: '16px', borderRadius: '16px',
+                border: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`,
+                backdropFilter: 'blur(4px)'
+              }}>
+                <div style={{ 
+                  color: isDark ? '#7df9ff' : '#5B21B6',
+                  opacity: 0.9
+                }}>
                   {f.icon}
                 </div>
                 {f.text}
@@ -86,48 +129,117 @@ export default function Login() {
           </div>
         </div>
 
-        <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.75rem' }}>
-          © 2025 PHYGITRON 360 · Powered by EwandZDigital · Built with AI 🤖
-        </p>
+        <div style={{ position: 'relative', zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 500 }}>
+            © 2025 PHYGITRON 360 · EwandZDigital
+          </p>
+          <Link to="/" style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '6px' }} className="hover-primary">
+            <ArrowLeft size={14} /> Back to Landing
+          </Link>
+        </div>
       </div>
 
-      {/* Right side — Login form */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px' }}>
-        <div className="animate-slide-up" style={{ width: '100%', maxWidth: 420 }}>
-          <h2 style={{ marginBottom: 8 }}>Welcome back 👋</h2>
-          <p style={{ color: 'var(--text-muted)', marginBottom: '36px', fontSize: '0.95rem' }}>
-            Sign in to your PHYGITRON 360 account
-          </p>
+      {/* Right side — Login form with BorderGlow */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px', position: 'relative' }}>
+        <div style={{ width: '100%', maxWidth: 460 }}>
+          <BorderGlow
+            glowColor={glowHsl}
+            glowRadius={40}
+            glowIntensity={1.0}
+            edgeSensitivity={30}
+            borderRadius={32}
+            backgroundColor={isDark ? 'rgba(15, 12, 25, 0.8)' : 'rgba(255, 255, 255, 0.9)'}
+            animated={true}
+            colors={isDark ? ['#c084fc', '#f472b6', '#38bdf8'] : ['#7C3AED', '#EC4899', '#2563EB']}
+          >
+            <div style={{ 
+              background: isDark ? 'rgba(15, 12, 25, 0.8)' : 'rgba(255, 255, 255, 0.9)', 
+              backdropFilter: 'blur(30px)', 
+              padding: '56px 48px', 
+              borderRadius: 'inherit',
+              border: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(91, 33, 182, 0.1)'}`,
+              boxShadow: isDark ? '0 25px 50px -12px rgba(0, 0, 0, 0.7)' : '0 20px 40px -10px rgba(91, 33, 182, 0.15)'
+            }}>
+              <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+                <h2 style={{ fontSize: '2.2rem', fontWeight: 900, marginBottom: '12px', color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>Welcome Back</h2>
+                <p style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>
+                  Securely access your organization's hub
+                </p>
+              </div>
 
-          <div style={{ background: 'rgba(124,58,237,0.04)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 16px', marginBottom: '24px', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-            <strong style={{ color: 'var(--primary)' }}>Demo Accounts</strong> (password: <code>Demo@1234</code>)<br />
-            admin@ewandz.com · hr@ewandz.com · candidate@ewandz.com
-          </div>
+              <div style={{ 
+                background: isDark ? 'rgba(125, 249, 255, 0.05)' : 'rgba(82, 39, 255, 0.05)', 
+                border: `1px solid ${isDark ? 'rgba(125, 249, 255, 0.1)' : 'rgba(82, 39, 255, 0.1)'}`, 
+                borderRadius: '16px', padding: '16px', marginBottom: '32px', fontSize: '0.85rem', color: isDark ? '#7df9ff' : '#5B21B6',
+                display: 'flex', flexDirection: 'column', gap: '4px'
+              }}>
+                <span style={{ fontWeight: 800, textTransform: 'uppercase', fontSize: '0.7rem', opacity: 0.8 }}>System Credentials (Demo)</span>
+                <code style={{ fontSize: '0.8rem', opacity: 0.9 }}>admin@ewandz.com / Demo@1234</code>
+              </div>
 
-          <form onSubmit={handleSubmit}>
-            <div className="form-group">
-              <label className="form-label">Email Address</label>
-              <input type="email" className="form-control" placeholder="you@example.com" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" />
-            </div>
+              <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>BUSINESS EMAIL</label>
+                  <input 
+                    type="email" 
+                    className="form-control" 
+                    placeholder="you@company.com" 
+                    value={email} 
+                    onChange={e => setEmail(e.target.value)} 
+                    style={{ 
+                      borderRadius: '14px', 
+                      height: '52px', 
+                      background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                      fontSize: '1rem'
+                    }} 
+                  />
+                </div>
 
-            <div className="form-group">
-              <label className="form-label">Password</label>
-              <div style={{ position: 'relative' }}>
-                <input type={showPwd ? 'text' : 'password'} className="form-control" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} style={{ paddingRight: 44 }} autoComplete="current-password" />
-                <button type="button" onClick={() => setShowPwd(s => !s)} style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex' }}>
-                  {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+                <div className="form-group">
+                  <label className="form-label" style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>PASSWORD</label>
+                  <div style={{ position: 'relative' }}>
+                    <input 
+                      type={showPwd ? 'text' : 'password'} 
+                      className="form-control" 
+                      placeholder="••••••••" 
+                      value={password} 
+                      onChange={e => setPassword(e.target.value)} 
+                      style={{ 
+                        borderRadius: '14px', 
+                        height: '52px', 
+                        paddingRight: 48,
+                        background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                        fontSize: '1rem'
+                      }} 
+                    />
+                    <button type="button" onClick={() => setShowPwd(s => !s)} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                      {showPwd ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={loading} style={{ 
+                  height: '56px', 
+                  borderRadius: '16px', 
+                  marginTop: '12px',
+                  background: isDark ? `linear-gradient(135deg, ${accentColor} 0%, #2563EB 100%)` : `linear-gradient(135deg, #5B21B6 0%, #7C3AED 100%)`,
+                  color: isDark ? '#000' : '#fff',
+                  fontWeight: 800,
+                  fontSize: '1.1rem',
+                  border: 'none',
+                  boxShadow: `0 8px 24px -6px ${isDark ? 'rgba(125, 249, 255, 0.4)' : 'rgba(91, 33, 182, 0.4)'}`
+                }}>
+                  {loading ? 'AUTHENTICATING...' : 'SIGN IN TO PORTAL'}
                 </button>
+              </form>
+
+              <div style={{ marginTop: '32px', textAlign: 'center' }}>
+                <Link to="/#contact" style={{ color: 'var(--text-muted)', textDecoration: 'none', fontSize: '0.9rem', fontWeight: 500 }} className="hover-primary">
+                  New organization? <span style={{ color: isDark ? '#7df9ff' : '#5B21B6' }}>Register interest →</span>
+                </Link>
               </div>
             </div>
-
-            <button type="submit" className="btn btn-shimmer btn-lg btn-block" disabled={loading} style={{ marginTop: '8px' }}>
-              {loading ? <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} /> Signing in…</> : '🚀 Sign In'}
-            </button>
-          </form>
-
-          <p style={{ textAlign: 'center', marginTop: '28px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Facing issues? Contact your administrator.
-          </p>
+          </BorderGlow>
         </div>
       </div>
     </div>

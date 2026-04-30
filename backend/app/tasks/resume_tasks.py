@@ -5,6 +5,43 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _clean_confidence_signals(signals):
+    """Keep confidence notes useful for recruiters and remove repeated AI boilerplate."""
+    cleaned = []
+    seen = set()
+
+    for signal in signals or []:
+        skill = str(signal.get("skill") or "").strip()
+        if not skill:
+            continue
+
+        key = skill.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        reason = str(signal.get("reason") or "").strip()
+        generic_reasons = (
+            f"no evidence of {skill.lower()} usage in project descriptions or work history",
+            f"no evidence of {skill.lower()} usage in projects or work history",
+        )
+        if reason.lower() in generic_reasons:
+            reason = "Claimed in the resume, but the parser did not find a concrete project, employer, or deliverable that proves hands-on use."
+
+        cleaned.append({
+            "skill": skill,
+            "claimed_years": signal.get("claimed_years") or 0,
+            "supported_years": signal.get("supported_years") or 0,
+            "flag": bool(signal.get("flag")),
+            "reason": reason[:260],
+        })
+
+        if len(cleaned) >= 5:
+            break
+
+    return cleaned
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def parse_resume_task(self, candidate_id: int, extracted_text: str, org_id: int):
     """Parse resume text with AI and store skill graph."""
@@ -88,7 +125,7 @@ def parse_resume_task(self, candidate_id: int, extracted_text: str, org_id: int)
                     candidate.availability = result["availability"]
 
             # Store confidence signals
-            confidence_signals = result.get("confidence_signals", [])
+            confidence_signals = _clean_confidence_signals(result.get("confidence_signals", []))
             if confidence_signals:
                 score = AIScore(
                     entity_type=EntityType.candidate,

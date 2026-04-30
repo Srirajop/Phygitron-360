@@ -4,15 +4,19 @@ import { forgeApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import {
   Search, Filter, BookOpen, Clock, ChevronRight, CheckCircle,
-  SlidersHorizontal, X, Star, Zap
+  SlidersHorizontal, X, Star, Zap, Layers, PlayCircle, Sparkles, TrendingUp
 } from 'lucide-react';
+import './forge_styles.css';
+import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
+import BorderGlow from '../../components/BorderGlow';
+import TopHeader from '../../components/TopHeader';
 
 const DIFF_CONFIG = {
-  beginner:     { badge: 'badge-success', emoji: '🌱', label: 'Beginner' },
-  intermediate: { badge: 'badge-info',    emoji: '🌿', label: 'Intermediate' },
-  advanced:     { badge: 'badge-primary', emoji: '🔥', label: 'Advanced' },
-  expert:       { badge: 'badge-danger',  emoji: '⭐', label: 'Expert' },
+  beginner:     { badge: 'badge-success', color: '#10B981', label: 'Beginner' },
+  intermediate: { badge: 'badge-info',    color: '#3B82F6', label: 'Intermediate' },
+  advanced:     { badge: 'badge-primary', color: '#8257e5', label: 'Advanced' },
+  expert:       { badge: 'badge-danger',  color: '#EF4444', label: 'Expert' },
 };
 
 function CourseCard({ course, onEnroll, onNavigate }) {
@@ -25,7 +29,7 @@ function CourseCard({ course, onEnroll, onNavigate }) {
     setEnrolling(true);
     try {
       await forgeApi.enroll(course.id);
-      toast.success('Enrolled successfully!');
+      toast.success('Path activated. Enjoy your journey!');
       onEnroll(course.id);
     } catch {
       toast.error('Failed to enroll');
@@ -35,43 +39,93 @@ function CourseCard({ course, onEnroll, onNavigate }) {
   };
 
   return (
-    <div className="course-card" style={{ display: 'flex', flexDirection: 'column' }}>
-      <div className="course-card-thumb" style={{ cursor: 'pointer' }} onClick={onNavigate}>
-        <span style={{ position: 'relative', zIndex: 2, fontSize: '2.5rem' }}>{cfg.emoji}</span>
-        <span className={`badge ${cfg.badge}`} style={{ position: 'absolute', top: 12, right: 12, zIndex: 3 }}>
-          {cfg.label}
-        </span>
-      </div>
-      <div className="course-card-body" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <h4 style={{ marginBottom: 6, fontSize: '0.95rem', cursor: 'pointer' }} onClick={onNavigate}>
-          {course.title}
-        </h4>
-        <p style={{
-          flex: 1, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 14,
-          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-        }}>{course.description}</p>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-          {course.estimated_hours && (
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              <Clock size={12} /> {course.estimated_hours}h
+    <motion.div 
+      initial={{ opacity: 0, y: 15 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="forge-grain"
+    >
+      <BorderGlow 
+        borderRadius={20} 
+        glowRadius={30} 
+        glowIntensity={0.6}
+        backgroundColor="var(--forge-bg)"
+        className="forge-course-card"
+      >
+        <div style={{ cursor: 'pointer', height: '100%', display: 'flex', flexDirection: 'column' }} onClick={onNavigate}>
+          <div className="forge-thumbnail">
+            <div className="forge-thumbnail-overlay" />
+            <BookOpen size={40} color="rgba(255,255,255,0.4)" style={{ position: 'relative', zIndex: 2 }} />
+            <span className="forge-card-badge">
+              {cfg.label}
             </span>
-          )}
-        </div>
+            {course.enrolled && (
+              <div style={{ 
+                position: 'absolute', bottom: 12, left: 12, zIndex: 10,
+                background: 'rgba(16,185,129,0.95)', color: 'white',
+                borderRadius: '8px', padding: '4px 10px', fontSize: '0.6rem', fontWeight: 800,
+                display: 'flex', alignItems: 'center', gap: 4, backdropFilter: 'blur(4px)'
+              }}>
+                <CheckCircle size={10} /> ENROLLED
+              </div>
+            )}
+          </div>
 
-        <button
-          className={`btn btn-block ${course.enrolled ? 'btn-secondary' : 'btn-primary'}`}
-          onClick={handleEnroll}
-          disabled={enrolling}
-          style={{ fontWeight: 700 }}
-        >
-          {enrolling ? <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
-            : course.enrolled ? <><CheckCircle size={15} /> Continue Learning</>
-            : <><Zap size={15} /> Enroll Now</>
-          }
-        </button>
-      </div>
-    </div>
+          <div className="forge-card-body">
+            <div className="forge-card-category">{course.category || 'General'}</div>
+            <h4 className="forge-card-title">{course.title}</h4>
+            
+            <p className="forge-card-desc" style={{
+              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden'
+            }}>{course.description}</p>
+
+            {course.enrolled && course.progress_percent !== undefined && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                  <span style={{ fontWeight: 800 }}>PROGRESS</span>
+                  <span style={{ fontWeight: 800, color: 'var(--forge-accent)' }}>{Math.round(course.progress_percent)}%</span>
+                </div>
+                <div className="progress-bar" style={{ height: 3, background: 'rgba(255,255,255,0.05)', border: 'none' }}>
+                  <div className="progress-fill" style={{ width: `${course.progress_percent}%`, background: 'var(--forge-accent)', boxShadow: 'none' }} />
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto' }}>
+              <div style={{ display: 'flex', gap: 12 }}>
+                {course.estimated_hours && (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    <Clock size={12} /> {course.estimated_hours}h
+                  </span>
+                )}
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                  <Layers size={12} /> {course.sections_count || 0} Modules
+                </span>
+              </div>
+              
+              <button
+                className={`btn btn-sm ${course.enrolled ? 'btn-ghost' : 'btn-primary'}`}
+                onClick={handleEnroll}
+                disabled={enrolling}
+                style={{ 
+                  padding: '6px 16px', 
+                  borderRadius: '10px', 
+                  fontSize: '0.75rem',
+                  background: course.enrolled ? 'var(--forge-card-bg)' : 'var(--forge-accent)',
+                  color: course.enrolled ? 'var(--forge-text-main)' : 'white',
+                  border: course.enrolled ? '1px solid var(--forge-border)' : 'none',
+                  fontWeight: 800
+                }}
+              >
+                {enrolling ? <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                  : course.enrolled ? 'RESUME'
+                  : 'START COURSE'
+                }
+              </button>
+            </div>
+          </div>
+        </div>
+      </BorderGlow>
+    </motion.div>
   );
 }
 
@@ -113,100 +167,115 @@ export default function CourseLibrary() {
   };
 
   const handleEnroll = (courseId) => {
-    setCourses(prev => prev.map(c => c.id === courseId ? { ...c, enrolled: true } : c));
+    setCourses(prev => prev.map(c => c.id === courseId ? { ...c, enrolled: true, progress_percent: 0 } : c));
   };
 
   const difficulties = ['', 'beginner', 'intermediate', 'advanced', 'expert'];
-  const diffLabels = { '': 'All Levels', beginner: '🌱 Beginner', intermediate: '🌿 Intermediate', advanced: '🔥 Advanced', expert: '⭐ Expert' };
+  const diffLabels = { '': 'All Levels', beginner: 'Beginner', intermediate: 'Intermediate', advanced: 'Advanced', expert: 'Expert' };
 
   return (
-    <div>
-      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
-        <div>
-          <h1>Course Library</h1>
-          <p>Explore {total} course{total !== 1 ? 's' : ''} available for your organisation</p>
-        </div>
+    <div className="forge-container forge-grain" style={{ minHeight: '100vh', padding: '0 40px 80px' }}>
+      <TopHeader />
+      
+      <div style={{ padding: '60px 0 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 16 }}>
+        <motion.div initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12 }}>
+            <div style={{ width: 44, height: 44, borderRadius: '12px', background: 'rgba(124, 58, 237, 0.1)', color: 'var(--forge-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(124, 58, 237, 0.2)' }}>
+              <Layers size={22} />
+            </div>
+            <h1 style={{ margin: 0, fontSize: '2.8rem', fontWeight: 900, letterSpacing: '-0.05em', color: 'var(--forge-text-main)' }}>Forge</h1>
+          </div>
+          <p style={{ margin: 0, fontSize: '1.2rem', color: 'var(--forge-text-dim)', maxWidth: 600 }}>Master new skills with clear, step-by-step learning courses.</p>
+        </motion.div>
         {['instructor', 'admin', 'hr'].includes(user?.role) && (
-          <button className="btn btn-primary" onClick={() => nav('/forge/build')}>
-            <Zap size={16} /> Create Course
-          </button>
+          <motion.button 
+            whileHover={{ y: -2 }}
+            whileTap={{ y: 0 }}
+            className="btn btn-shimmer" 
+            onClick={() => nav('/forge/build')} 
+            style={{ padding: '14px 32px', borderRadius: 16, height: 'auto', fontWeight: 800, letterSpacing: '0.05em' }}
+          >
+            CREATE COURSE
+          </motion.button>
         )}
       </div>
 
-      <div className="page-body">
+      <div className="page-body" style={{ padding: 0 }}>
         {/* Search + Filter Bar */}
-        <div className="card animate-fade-in" style={{ marginBottom: 28 }}>
-          <div className="card-body" style={{ padding: '16px 20px' }}>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-              <form onSubmit={handleSearch} style={{ flex: 1, display: 'flex', gap: 8, minWidth: 220 }}>
-                <div style={{ flex: 1, position: 'relative' }}>
-                  <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                  <input
-                    id="course-search"
-                    className="form-control"
-                    placeholder="Search courses…"
-                    value={searchInput}
-                    onChange={e => setSearchInput(e.target.value)}
-                    style={{ paddingLeft: 38 }}
-                  />
-                </div>
-                <button type="submit" className="btn btn-primary" style={{ padding: '10px 18px' }}>Search</button>
-                {(search || dFilter) && (
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setSearch(''); setSearchInput(''); setDFilter(''); }}>
-                    <X size={14} /> Clear
-                  </button>
-                )}
-              </form>
-
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  <SlidersHorizontal size={14} /> Filter:
-                </div>
-                {difficulties.map(d => (
-                  <button
-                    key={d}
-                    className={`btn btn-sm ${dFilter === d ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => setDFilter(d)}
-                    style={{ fontSize: '0.78rem' }}
-                  >
-                    {diffLabels[d]}
-                  </button>
-                ))}
+        <div style={{ marginBottom: 40 }}>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+            <form onSubmit={handleSearch} style={{ flex: 1, display: 'flex', gap: 12, minWidth: 300 }}>
+              <div style={{ flex: 1, position: 'relative' }}>
+                <Search size={18} style={{ position: 'absolute', left: 18, top: '50%', transform: 'translateY(-50%)', color: 'var(--forge-text-dim)' }} />
+                <input
+                  id="course-search"
+                  className="form-control"
+                  placeholder="Query knowledge graphs..."
+                  value={searchInput}
+                  onChange={e => setSearchInput(e.target.value)}
+                  style={{ 
+                    paddingLeft: 52, height: 56, borderRadius: '16px', 
+                    background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)',
+                    color: 'var(--forge-text-main)', fontSize: '1rem'
+                  }}
+                />
               </div>
+              <button type="submit" className="btn btn-primary" style={{ padding: '0 32px', height: 56, borderRadius: '16px', background: 'var(--forge-accent)', border: 'none', fontWeight: 800 }}>Search</button>
+            </form>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', background: 'var(--forge-card-bg)', padding: '6px', borderRadius: '18px', border: '1px solid var(--forge-border)' }}>
+              {difficulties.map(d => (
+                <button
+                  key={d}
+                  className={`btn btn-sm ${dFilter === d ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => setDFilter(d)}
+                  style={{ 
+                    fontSize: '0.75rem', borderRadius: '14px', padding: '10px 18px',
+                    background: dFilter === d ? 'var(--forge-accent)' : 'transparent',
+                    color: dFilter === d ? 'white' : 'var(--forge-text-dim)',
+                    border: 'none',
+                    fontWeight: 700,
+                    letterSpacing: '0.02em'
+                  }}
+                >
+                  {diffLabels[d].toUpperCase()}
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
         {/* Results */}
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}><div className="spinner spinner-lg" /></div>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 80 }}><div className="spinner spinner-lg" style={{ borderColor: 'var(--forge-accent)', borderTopColor: 'transparent' }} /></div>
         ) : courses.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon">📚</div>
-            <p>No courses found{search ? ` for "${search}"` : ''}.</p>
+          <div className="card" style={{ textAlign: 'center', padding: '100px 40px', background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', borderRadius: 24 }}>
+            <div style={{ fontSize: '4rem', marginBottom: 24, opacity: 0.5 }}>- 0 -</div>
+            <h3 style={{ color: 'white' }}>No paths detected</h3>
+            <p style={{ color: 'var(--forge-text-dim)' }}>Zero matches for "{search || 'applied filters'}" in current knowledge base.</p>
+            <button className="btn btn-secondary" style={{ marginTop: 24, borderRadius: 12, background: 'rgba(255,255,255,0.1)', color: 'white', border: 'none' }} onClick={() => { setSearch(''); setSearchInput(''); setDFilter(''); }}>RESET FILTERS</button>
           </div>
         ) : (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px,1fr))', gap: 20, marginBottom: 32 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 32, marginBottom: 60 }}>
               {courses.map((c, i) => (
-                <div key={c.id} className={`animate-fade-in stagger-${Math.min(i+1,5)}`}>
-                  <CourseCard
-                    course={c}
-                    onEnroll={handleEnroll}
-                    onNavigate={() => nav(`/forge/course/${c.id}`)}
-                  />
-                </div>
+                <CourseCard
+                  key={c.id}
+                  course={c}
+                  onEnroll={handleEnroll}
+                  onNavigate={() => nav(`/forge/course/${c.id}`)}
+                />
               ))}
             </div>
 
             {/* Pagination */}
             {pages > 1 && (
-              <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
-                <button className="btn btn-secondary btn-sm" disabled={page === 1} onClick={() => load(page - 1)}>← Prev</button>
-                <span style={{ padding: '8px 16px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                  Page {page} of {pages}
-                </span>
-                <button className="btn btn-secondary btn-sm" disabled={page === pages} onClick={() => load(page + 1)}>Next →</button>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: 12, paddingBottom: 60 }}>
+                <button className="btn" disabled={page === 1} onClick={() => load(page - 1)} style={{ borderRadius: '12px', background: 'rgba(255,255,255,0.05)', color: 'white', border: 'none' }}>PREV</button>
+                <div style={{ display: 'flex', alignItems: 'center', padding: '0 24px', fontWeight: 800, background: 'rgba(255,255,255,0.03)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem' }}>
+                  {page} / {pages}
+                </div>
+                <button className="btn" disabled={page === pages} onClick={() => load(page + 1)} style={{ borderRadius: '12px', background: 'rgba(255,255,255,0.05)', color: 'white', border: 'none' }}>NEXT</button>
               </div>
             )}
           </>

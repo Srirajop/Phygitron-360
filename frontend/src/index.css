@@ -42,6 +42,8 @@
   --grad-1: rgba(124, 58, 237, 0.15);
   --grad-2: rgba(236, 72, 153, 0.08);
   --grad-3: rgba(6, 182, 212, 0.06);
+
+  --calendar-filter: invert(1);
 }
 
 [data-theme='light'] {
@@ -69,6 +71,8 @@
   --grad-1: rgba(124, 58, 237, 0.06);
   --grad-2: rgba(236, 72, 153, 0.03);
   --grad-3: rgba(6, 182, 212, 0.02);
+
+  --calendar-filter: none;
 }
 
 /* ── Reset & Base ────────────────────────────────────────────── */
@@ -151,7 +155,7 @@ a:hover { color: var(--primary-dark); }
 
 .btn-primary {
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-  color: white;
+  color: #FFFFFF !important;
   box-shadow: 0 4px 14px rgba(124,58,237,0.35);
 }
 .btn-primary:hover { box-shadow: 0 6px 20px rgba(124,58,237,0.5); transform: translateY(-1px); }
@@ -174,8 +178,8 @@ a:hover { color: var(--primary-dark); }
   color: var(--primary); 
 }
 
-.btn-danger { background: linear-gradient(135deg, #EF4444, #DC2626); color: white; box-shadow: 0 4px 14px rgba(239,68,68,0.3); }
-.btn-success { background: linear-gradient(135deg, #10B981, #059669); color: white; box-shadow: 0 4px 14px rgba(16,185,129,0.3); }
+.btn-danger { background: linear-gradient(135deg, #EF4444, #DC2626); color: #FFFFFF !important; box-shadow: 0 4px 14px rgba(239,68,68,0.3); }
+.btn-success { background: linear-gradient(135deg, #10B981, #059669); color: #FFFFFF !important; box-shadow: 0 4px 14px rgba(16,185,129,0.3); }
 
 .btn-sm { padding: 7px 14px; font-size: 0.8rem; }
 .btn-lg { padding: 14px 28px; font-size: 1rem; }
@@ -186,7 +190,7 @@ a:hover { color: var(--primary-dark); }
 /* Shimmer button effect */
 .btn-shimmer {
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-  color: white;
+  color: #FFFFFF !important;
   box-shadow: 0 4px 14px rgba(124,58,237,0.35);
   position: relative;
   overflow: hidden;
@@ -208,24 +212,55 @@ a:hover { color: var(--primary-dark); }
 /* ── Form Elements ───────────────────────────────────────────── */
 .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; }
 .form-label { font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); }
-.form-control {
-  padding: 11px 16px;
+.form-control, .search-input {
+  padding: 12px 18px;
   background: var(--bg-input);
-  border: 1.5px solid var(--border);
+  border: 1px solid rgba(124, 58, 237, 0.12);
   border-radius: var(--radius);
-  font-family: inherit; font-size: 0.95rem; color: var(--text-primary);
-  transition: var(--transition);
+  font-family: inherit; 
+  font-size: 0.95rem; 
+  color: var(--text-primary);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   outline: none;
   width: 100%;
 }
-.form-control:focus {
-  background: var(--bg-card-hover);
+.form-control:focus, .search-input:focus {
+  background: var(--bg-card);
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(124,58,237,0.12);
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.1), 0 4px 20px rgba(0, 0, 0, 0.25);
 }
-.form-control::placeholder { color: var(--text-muted); }
+.form-control::placeholder, .search-input::placeholder { color: var(--text-muted); opacity: 0.7; }
 select.form-control { cursor: pointer; }
 textarea.form-control { resize: vertical; min-height: 100px; }
+input.form-control[type="date"] {
+  position: relative;
+  cursor: pointer;
+  -webkit-appearance: none;
+  min-height: 45px;
+}
+input.form-control[type="date"]::-webkit-calendar-picker-indicator {
+  background: transparent;
+  bottom: 0;
+  color: transparent;
+  cursor: pointer;
+  height: auto;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: auto;
+  opacity: 0;
+}
+/* Better way: Just make sure it's clickable and icon is visible if possible */
+.form-date-group { position: relative; }
+.form-date-group .calendar-icon {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--primary);
+}
 
 /* ── Badges ──────────────────────────────────────────────────── */
 .badge {

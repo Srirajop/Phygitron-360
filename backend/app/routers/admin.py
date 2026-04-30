@@ -19,10 +19,18 @@ def success(data=None, message=""):
 @router.get("/users")
 async def list_users(
     role: Optional[str] = None,
-    current_user: User = Depends(require_role(["admin"])),
+    current_user: User = Depends(require_role(["org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(User).where(User.org_id == current_user.org_id)
+    target_org_id = current_user.org_id
+    if current_user.role.value == "super_admin":
+        # In a real SaaS, Super Admin would pass org_id as a param. 
+        # For now, if current_user.org_id is None, they see everything or we can add a param.
+        pass 
+    
+    query = select(User)
+    if current_user.role.value != "super_admin" or target_org_id:
+        query = query.where(User.org_id == target_org_id)
     if role:
         query = query.where(User.role == role)
     result = await db.execute(query)
@@ -44,7 +52,7 @@ class UserCreate(BaseModel):
 @router.post("/users")
 async def create_user(
     body: UserCreate,
-    current_user: User = Depends(require_role(["admin"])),
+    current_user: User = Depends(require_role(["org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     existing = await db.execute(select(User).where(User.email == body.email))
@@ -69,7 +77,7 @@ async def create_user(
 async def update_user_role(
     user_id: int,
     role: str,
-    current_user: User = Depends(require_role(["admin"])),
+    current_user: User = Depends(require_role(["org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).where(User.id == user_id))
@@ -84,7 +92,7 @@ async def update_user_role(
 @router.put("/users/{user_id}/toggle-active")
 async def toggle_user_active(
     user_id: int,
-    current_user: User = Depends(require_role(["admin"])),
+    current_user: User = Depends(require_role(["org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).where(User.id == user_id))
@@ -98,10 +106,12 @@ async def toggle_user_active(
 
 @router.get("/org-settings")
 async def get_org_settings(
-    current_user: User = Depends(require_role(["admin"])),
+    org_id: Optional[int] = None,
+    current_user: User = Depends(require_role(["org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Organisation).where(Organisation.id == current_user.org_id))
+    target_id = org_id if current_user.role.value == "super_admin" and org_id else current_user.org_id
+    result = await db.execute(select(Organisation).where(Organisation.id == target_id))
     org = result.scalar_one_or_none()
     if not org:
         raise HTTPException(status_code=404, detail="Organisation not found")
@@ -117,7 +127,7 @@ class OrgSettingsUpdate(BaseModel):
 @router.put("/org-settings")
 async def update_org_settings(
     body: OrgSettingsUpdate,
-    current_user: User = Depends(require_role(["admin"])),
+    current_user: User = Depends(require_role(["org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Organisation).where(Organisation.id == current_user.org_id))

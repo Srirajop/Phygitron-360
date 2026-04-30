@@ -5,14 +5,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db
-from app.routers import auth, source, verify, forge, deploy, admin, journey
+from app.routers import auth, source, verify, forge, deploy, admin, journey, onboarding, notifications
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    # await init_db()
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     yield
 
@@ -53,6 +53,8 @@ app.include_router(forge.router)
 app.include_router(deploy.router)
 app.include_router(admin.router)
 app.include_router(journey.router)
+app.include_router(onboarding.router)
+app.include_router(notifications.router)
 
 
 @app.get("/")

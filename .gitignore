@@ -181,3 +181,12 @@ frontend/lint_output_utf8.txt
 test_wrapper.py
 wrapped_test.py
 offer_template.png
+
+# Phygitron 360 Specific
+backend/uploads/
+backend/brain/
+*.db
+*.zip
+*.log
+backend/*.txt
+.verify_exec/

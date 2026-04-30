@@ -3,8 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { deployApi, adminApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import {
-  Users, Search, Filter, Download, UserPlus, ChevronDown,
-  ArrowUpDown, BarChart2, Briefcase, Shield
+  ArrowUpDown, BarChart2, Briefcase, Shield, FileText, ExternalLink,
+  Users, Download, UserPlus, Search
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -13,7 +13,10 @@ const STATUS_CONFIG = {
   on_leave:    { badge: 'badge-warning', label: 'On Leave',    dot: '#F59E0B' },
   deployed:    { badge: 'badge-info',    label: 'Deployed',    dot: '#3B82F6' },
   offboarded:  { badge: 'badge-muted',   label: 'Offboarded',  dot: '#9CA3AF' },
+  exited:      { badge: 'badge-danger',  label: 'Exited',      dot: '#EF4444' },
 };
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function Avatar({ name, size = 38 }) {
   const initials = (name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
@@ -131,7 +134,7 @@ export default function EmployeeList() {
           <button className="btn btn-secondary" onClick={exportCsv}>
             <Download size={15} /> Export CSV
           </button>
-          {['hr', 'admin'].includes(user?.role) && (
+          {['hr', 'org_admin'].includes(user?.role) && (
             <button className="btn btn-primary" onClick={() => nav('/deploy/add')}>
               <UserPlus size={15} /> Add Employee
             </button>
@@ -214,7 +217,7 @@ export default function EmployeeList() {
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Employee <SortIcon col="name" /></span>
                   </th>
                   <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('department')}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Department <SortIcon col="department" /></span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Dept / Role <SortIcon col="department" /></span>
                   </th>
                   <th>Skills</th>
                   <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('capability_index')}>
@@ -256,10 +259,10 @@ export default function EmployeeList() {
                         </div>
                       </td>
                       <td>
-                        {e.department
-                          ? <span className="badge badge-primary" style={{ fontSize: '0.72rem' }}>{e.department}</span>
-                          : <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>—</span>
-                        }
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span className="badge badge-primary" style={{ fontSize: '0.72rem', alignSelf: 'flex-start', marginBottom: 4 }}>{e.department || 'General'}</span>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{e.designation || '—'}</span>
+                        </div>
                       </td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -279,7 +282,21 @@ export default function EmployeeList() {
                         </div>
                       </td>
                       <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                        {e.join_date ? new Date(e.join_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {e.join_date ? new Date(e.join_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+                          {e.resume_url && (
+                             <a 
+                               href={e.resume_url.startsWith('http') ? e.resume_url : `${API_BASE}/${e.resume_url.replace(/^\/+/, '')}`} 
+                               target="_blank" 
+                               rel="noopener noreferrer" 
+                               onClick={ev => ev.stopPropagation()}
+                               style={{ color: 'var(--primary)', opacity: 0.8 }}
+                               title="View Resume"
+                             >
+                               <FileText size={16} />
+                             </a>
+                          )}
+                        </div>
                       </td>
                       <td onClick={ev => ev.stopPropagation()}>
                         <Link

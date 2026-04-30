@@ -4,7 +4,12 @@ from app.models.skill_taxonomy import SkillTaxonomy
 from app.models.source import Candidate, CandidateSkill, SkillGraphEdge, JobRole, CandidateInvite
 from app.models.verify import Assessment, AssessmentQuestion, AssessmentAssignment, AssessmentResult, ProctoringFlag
 from app.models.forge import Course, CourseSection, SectionQuiz, Enrollment, LearningProgress, Certificate
-from app.models.deploy import Employee, EmployeeSkill, Deployment, ProjectRequirement
+from app.models.deploy import (
+    Employee, EmployeeSkill, Deployment, ProjectRequirement, Attendance, LeaveRequest,
+    LeaveBalance, KRALibrary, KRAAssessment, KRAAssessmentItem, TrainingProgram, 
+    TrainingAssignment, OnboardingInvite, AssetChecklist
+)
+from app.models.notification import Notification
 from app.models.ai_score import AIScore
 
 __all__ = [
@@ -12,6 +17,8 @@ __all__ = [
     "Candidate", "CandidateSkill", "SkillGraphEdge", "JobRole", "CandidateInvite",
     "Assessment", "AssessmentQuestion", "AssessmentAssignment", "AssessmentResult", "ProctoringFlag",
     "Course", "CourseSection", "SectionQuiz", "Enrollment", "LearningProgress", "Certificate",
-    "Employee", "EmployeeSkill", "Deployment", "ProjectRequirement",
+    "Employee", "EmployeeSkill", "Deployment", "ProjectRequirement", "Attendance", "LeaveRequest",
+    "LeaveBalance", "KRALibrary", "KRAAssessment", "KRAAssessmentItem", "TrainingProgram", 
+    "TrainingAssignment", "OnboardingInvite", "AssetChecklist", "Notification",
     "AIScore",
 ]
