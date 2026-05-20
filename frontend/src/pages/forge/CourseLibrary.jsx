@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { forgeApi } from '../../api';
+import { forgeApi, adminApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import {
   Search, Filter, BookOpen, Clock, ChevronRight, CheckCircle,
@@ -19,7 +19,8 @@ const DIFF_CONFIG = {
   expert:       { badge: 'badge-danger',  color: '#EF4444', label: 'Expert' },
 };
 
-function CourseCard({ course, onEnroll, onNavigate }) {
+function CourseCard({ course, onEnroll, onNavigate, onAssign }) {
+  const { user } = useAuth();
   const [enrolling, setEnrolling] = useState(false);
   const cfg = DIFF_CONFIG[course.difficulty] || DIFF_CONFIG.beginner;
 
@@ -102,25 +103,47 @@ function CourseCard({ course, onEnroll, onNavigate }) {
                 </span>
               </div>
               
-              <button
-                className={`btn btn-sm ${course.enrolled ? 'btn-ghost' : 'btn-primary'}`}
-                onClick={handleEnroll}
-                disabled={enrolling}
-                style={{ 
-                  padding: '6px 16px', 
-                  borderRadius: '10px', 
-                  fontSize: '0.75rem',
-                  background: course.enrolled ? 'var(--forge-card-bg)' : 'var(--forge-accent)',
-                  color: course.enrolled ? 'var(--forge-text-main)' : 'white',
-                  border: course.enrolled ? '1px solid var(--forge-border)' : 'none',
-                  fontWeight: 800
-                }}
-              >
-                {enrolling ? <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-                  : course.enrolled ? 'RESUME'
-                  : 'START COURSE'
-                }
-              </button>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {['instructor', 'org_admin', 'hr', 'super_admin'].includes(user?.role) && (
+                  <button
+                    className="btn btn-sm btn-ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAssign(course);
+                    }}
+                    style={{ 
+                      padding: '6px 12px', 
+                      borderRadius: '10px', 
+                      fontSize: '0.75rem',
+                      background: 'rgba(236, 72, 153, 0.1)',
+                      color: '#EC4899',
+                      border: '1px solid rgba(236, 72, 153, 0.2)',
+                      fontWeight: 800
+                    }}
+                  >
+                    ASSIGN
+                  </button>
+                )}
+                <button
+                  className={`btn btn-sm ${course.enrolled ? 'btn-ghost' : 'btn-primary'}`}
+                  onClick={handleEnroll}
+                  disabled={enrolling}
+                  style={{ 
+                    padding: '6px 16px', 
+                    borderRadius: '10px', 
+                    fontSize: '0.75rem',
+                    background: course.enrolled ? 'var(--forge-card-bg)' : 'var(--forge-accent)',
+                    color: course.enrolled ? 'var(--forge-text-main)' : 'white',
+                    border: course.enrolled ? '1px solid var(--forge-border)' : 'none',
+                    fontWeight: 800
+                  }}
+                >
+                  {enrolling ? <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                    : course.enrolled ? 'RESUME'
+                    : 'START COURSE'
+                  }
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -142,6 +165,46 @@ export default function CourseLibrary() {
   const [search, setSearch] = useState('');
   const [dFilter, setDFilter] = useState('');
   const [searchInput, setSearchInput] = useState('');
+
+  // Course Assignment State
+  const [candidates, setCandidates] = useState([]);
+  const [assignModal, setAssignModal] = useState({ open: false, courseId: null, deadline: '', loading: false });
+  const [selectedCandidates, setSelectedCandidates] = useState([]);
+  const [assignSearch, setAssignSearch] = useState('');
+  const [selectedCourseForAssign, setSelectedCourseForAssign] = useState(null);
+
+  const openAssignModal = (course) => {
+    setSelectedCourseForAssign(course);
+    setAssignModal({ open: true, courseId: course.id, deadline: '', loading: false });
+    setSelectedCandidates([]);
+    setAssignSearch('');
+    if (candidates.length === 0) {
+      adminApi.listUsers().then(r => {
+        const actualCandidates = (r.data.data || []).filter(c => 
+          !c.email.includes('.local') && ['candidate', 'employee'].includes(c.role)
+        );
+        setCandidates(actualCandidates);
+      }).catch(console.error);
+    }
+  };
+
+  const handleAssign = async (e) => {
+    e.preventDefault();
+    if (selectedCandidates.length === 0) { toast.error('Select at least one user'); return; }
+    setAssignModal(m => ({ ...m, loading: true }));
+    try {
+      await forgeApi.bulkEnroll({
+        course_id: assignModal.courseId,
+        user_ids: selectedCandidates,
+        deadline: assignModal.deadline ? new Date(assignModal.deadline).toISOString() : null,
+      });
+      toast.success('Course assigned successfully!');
+      setAssignModal({ open: false, courseId: null, deadline: '', loading: false });
+    } catch {
+      toast.error('Failed to assign course');
+      setAssignModal(m => ({ ...m, loading: false }));
+    }
+  };
 
   const load = useCallback(async (pg = 1) => {
     setLoading(true);
@@ -187,7 +250,7 @@ export default function CourseLibrary() {
           </div>
           <p style={{ margin: 0, fontSize: '1.2rem', color: 'var(--forge-text-dim)', maxWidth: 600 }}>Master new skills with clear, step-by-step learning courses.</p>
         </motion.div>
-        {['instructor', 'admin', 'hr'].includes(user?.role) && (
+        {['instructor', 'org_admin', 'hr', 'super_admin'].includes(user?.role) && (
           <motion.button 
             whileHover={{ y: -2 }}
             whileTap={{ y: 0 }}
@@ -264,6 +327,7 @@ export default function CourseLibrary() {
                   course={c}
                   onEnroll={handleEnroll}
                   onNavigate={() => nav(`/forge/course/${c.id}`)}
+                  onAssign={openAssignModal}
                 />
               ))}
             </div>
@@ -279,6 +343,101 @@ export default function CourseLibrary() {
               </div>
             )}
           </>
+        )}
+
+        {assignModal.open && (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', zIndex: 9999,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+            backdropFilter: 'blur(8px)'
+          }}>
+            <div className="card animate-scale-in" style={{ width: 'min(540px, 100%)', maxHeight: '85vh', overflow: 'hidden', background: '#111118', border: '1px solid var(--forge-border)', borderRadius: '24px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)' }}>
+              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 32px 16px', borderBottom: '1px solid var(--forge-border)' }}>
+                <div>
+                  <h4 style={{ margin: 0, color: 'var(--forge-text-main)', fontSize: '1.25rem', fontWeight: 800 }}>Assign Course</h4>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--forge-text-dim)', marginTop: 4, fontWeight: 600 }}>{selectedCourseForAssign?.title}</div>
+                </div>
+                <button className="btn btn-ghost btn-sm" onClick={() => setAssignModal({ ...assignModal, open: false })} style={{ color: 'var(--forge-text-dim)', padding: 4, background: 'transparent', border: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>✕</button>
+              </div>
+              <div className="card-body" style={{ overflowY: 'auto', maxHeight: 'calc(85vh - 120px)', padding: '24px 32px 32px' }}>
+                <form onSubmit={handleAssign}>
+                  <div className="form-group" style={{ marginBottom: 20 }}>
+                    <label className="form-label" style={{ fontWeight: 700, display: 'block', marginBottom: 8, color: 'var(--forge-text-main)', fontSize: '0.85rem', letterSpacing: '0.02em' }}>SEARCH USERS</label>
+                    <input 
+                      type="text" 
+                      className="form-control" 
+                      placeholder="Search by name or email..." 
+                      value={assignSearch} 
+                      onChange={e => setAssignSearch(e.target.value)} 
+                      style={{ 
+                        width: '100%', 
+                        background: 'rgba(255,255,255,0.03)', 
+                        border: '1px solid var(--forge-border)', 
+                        color: 'var(--forge-text-main)',
+                        borderRadius: '12px',
+                        padding: '12px 16px',
+                        fontSize: '0.9rem'
+                      }} 
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedCandidates(candidates.map(c => c.id))} style={{ borderRadius: '8px', fontSize: '0.7rem', padding: '6px 12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', fontWeight: 700 }}>Select All</button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedCandidates(candidates.filter(c => c.role === 'employee').map(c => c.id))} style={{ borderRadius: '8px', fontSize: '0.7rem', padding: '6px 12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', fontWeight: 700 }}>All Employees</button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedCandidates(candidates.filter(c => c.role === 'candidate').map(c => c.id))} style={{ borderRadius: '8px', fontSize: '0.7rem', padding: '6px 12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', fontWeight: 700 }}>All Trainees</button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedCandidates([])} style={{ borderRadius: '8px', fontSize: '0.7rem', padding: '6px 12px', color: 'var(--forge-text-dim)', fontWeight: 700, border: 'none', background: 'transparent' }}>Clear</button>
+                  </div>
+                  <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--forge-border)', borderRadius: '14px', marginBottom: 24, background: 'rgba(0,0,0,0.2)' }}>
+                    {candidates.filter(c => (c.full_name || '').toLowerCase().includes(assignSearch.toLowerCase()) || (c.email || '').toLowerCase().includes(assignSearch.toLowerCase())).map(c => (
+                      <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--forge-border)', cursor: 'pointer', margin: 0 }}>
+                        <input 
+                          type="checkbox" 
+                          checked={selectedCandidates.includes(c.id)} 
+                          onChange={e => {
+                            setSelectedCandidates(prev => e.target.checked ? [...prev, c.id] : prev.filter(id => id !== c.id));
+                          }} 
+                          style={{ width: 16, height: 16, accentColor: 'var(--forge-accent)', cursor: 'pointer' }} 
+                        />
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ fontWeight: 700, color: 'var(--forge-text-main)', fontSize: '0.85rem' }}>{c.full_name || 'User'}</div>
+                          <span className={`badge ${c.role === 'employee' ? 'badge-info' : 'badge-muted'}`} style={{ fontSize: '0.6rem', padding: '2px 8px', borderRadius: '6px', fontWeight: 800 }}>
+                            {c.role === 'employee' ? 'EMPLOYEE' : 'TRAINEE'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--forge-text-dim)', fontFamily: 'monospace' }}>{c.email}</div>
+                      </label>
+                    ))}
+                    {candidates.length === 0 && <div style={{ padding: 24, textAlign: 'center', color: 'var(--forge-text-dim)', fontSize: '0.85rem' }}>No users found.</div>}
+                  </div>
+                  
+                  <div className="form-group" style={{ marginBottom: 28 }}>
+                    <label className="form-label" style={{ fontWeight: 700, display: 'block', marginBottom: 8, color: 'var(--forge-text-main)', fontSize: '0.85rem', letterSpacing: '0.02em' }}>DEADLINE (OPTIONAL)</label>
+                    <input 
+                      type="date" 
+                      className="form-control" 
+                      value={assignModal.deadline} 
+                      onChange={e => setAssignModal({ ...assignModal, deadline: e.target.value })} 
+                      style={{ 
+                        width: '100%', 
+                        background: 'rgba(255,255,255,0.03)', 
+                        border: '1px solid var(--forge-border)', 
+                        color: 'var(--forge-text-main)',
+                        borderRadius: '12px',
+                        padding: '12px 16px',
+                        fontSize: '0.9rem'
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+                    <button type="button" className="btn btn-ghost" onClick={() => setAssignModal({ ...assignModal, open: false })} style={{ borderRadius: '12px', fontWeight: 800, padding: '12px 24px', fontSize: '0.85rem', color: 'var(--forge-text-main)', border: 'none', background: 'transparent' }}>Cancel</button>
+                    <button type="submit" className="btn btn-primary" disabled={assignModal.loading || selectedCandidates.length === 0} style={{ borderRadius: '12px', fontWeight: 800, padding: '12px 28px', fontSize: '0.85rem', background: 'var(--forge-accent)', border: 'none', color: 'white', cursor: 'pointer', boxShadow: '0 4px 14px rgba(124, 58, 237, 0.3)' }}>
+                      {assignModal.loading ? 'Assigning...' : `Assign to ${selectedCandidates.length} User(s)`}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

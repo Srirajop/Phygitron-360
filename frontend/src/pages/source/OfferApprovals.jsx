@@ -1,14 +1,23 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+
 import { sourceApi } from '../../api';
+import { useAuth } from '../../context/AuthContext';
 import { CheckCircle, XCircle, Clock, Mail, Briefcase, DollarSign, MapPin, Calendar, FileText } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function OfferApprovals() {
+  const { user } = useAuth();
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('pending');
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
+  const [feedback, setFeedback] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isHr = user?.role === 'hr';
+  const canApprove = ['org_admin', 'manager', 'super_admin'].includes(user?.role);
+  const canSend = ['hr', 'org_admin', 'super_admin'].includes(user?.role);
 
   const fetchOffers = async () => {
     setLoading(true);
@@ -16,7 +25,7 @@ export default function OfferApprovals() {
       const res = await sourceApi.listOffers(filterStatus);
       setOffers(res.data.data || []);
     } catch (err) {
-      toast.error('Failed to load offers');
+      toast.error(err?.response?.data?.detail || 'Failed to load offers');
     } finally {
       setLoading(false);
     }
@@ -43,13 +52,28 @@ export default function OfferApprovals() {
   };
 
   const handleApprove = async (id) => {
-    if (!window.confirm('Are you sure you want to approve and send this offer letter?')) return;
+    if (!window.confirm('Are you sure you want to approve this offer? Once approved, it will be locked and sent back to HR for final dispatch.')) return;
     try {
       await sourceApi.approveOffer(id);
-      toast.success('Offer approved and sent!');
+      toast.success('Offer approved and locked!');
       fetchOffers();
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Approval failed');
+    }
+  };
+
+  const handleRequestChanges = async (id) => {
+    if (!feedback.trim()) return toast.error('Please provide feedback for changes');
+    setIsSubmitting(true);
+    try {
+      await sourceApi.requestChangesOffer(id, feedback);
+      toast.success('Feedback sent to HR');
+      setFeedback('');
+      fetchOffers();
+    } catch (err) {
+      toast.error('Failed to send feedback');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -64,12 +88,26 @@ export default function OfferApprovals() {
     }
   };
 
+  const handleSend = async (id) => {
+    if (!window.confirm('Send this approved offer to the candidate now?')) return;
+    setIsSubmitting(true);
+    try {
+      await sourceApi.sendOffer(id);
+      toast.success('Offer sent to candidate');
+      fetchOffers();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to send offer');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div className="animate-fade-in">
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1>Offer Letter Approvals</h1>
-          <p>Review and release offer letters submitted by HR</p>
+          <h1>{isHr ? 'Offer Letters' : 'Offer Letter Approvals'}</h1>
+          <p>{isHr ? 'Track, edit, and send your offer letters through the approval flow' : 'Review and release offer letters submitted by HR'}</p>
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
           <select 
@@ -79,7 +117,9 @@ export default function OfferApprovals() {
             style={{ width: 160 }}
           >
             <option value="pending">Pending Review</option>
-            <option value="approved">Approved / Sent</option>
+            <option value="changes_requested">Changes Requested</option>
+            <option value="approved">Approved / Ready</option>
+            <option value="sent">Sent to Candidate</option>
             <option value="rejected">Rejected</option>
           </select>
         </div>
@@ -96,7 +136,7 @@ export default function OfferApprovals() {
               <Clock size={32} />
             </div>
             <h4>No {filterStatus} offers found</h4>
-            <p>Once HR generates an offer letter, it will appear here for your review.</p>
+            <p>{isHr ? 'Your generated offers will appear here once you create them from a candidate profile.' : 'Once HR generates an offer letter, it will appear here for your review.'}</p>
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 20 }}>
@@ -117,15 +157,19 @@ export default function OfferApprovals() {
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          {!isEditing && offer.status === 'pending' && (
+                          <Link to={`/source/candidates/${offer.candidate_id}`} className="btn btn-ghost btn-sm" style={{ fontSize: '0.75rem', color: 'var(--primary)' }}>
+                            View Profile
+                          </Link>
+                          {!isEditing && (offer.status === 'pending' || offer.status === 'changes_requested') && (
                             <button className="btn btn-ghost btn-sm" onClick={() => startEditing(offer)} style={{ fontSize: '0.75rem' }}>
                               Edit Details
                             </button>
                           )}
-                          <span className={`badge badge-${offer.status === 'pending' ? 'info' : offer.status === 'approved' ? 'success' : 'danger'}`}>
-                            {offer.status.toUpperCase()}
+                          <span className={`badge badge-${offer.status === 'pending' ? 'info' : offer.status === 'approved' ? 'success' : offer.status === 'changes_requested' ? 'warning' : 'danger'}`}>
+                            {(offer.status || 'UNKNOWN').replace('_', ' ').toUpperCase()}
                           </span>
                         </div>
+
                       </div>
 
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
@@ -212,7 +256,7 @@ export default function OfferApprovals() {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                               <input 
                                 className="form-control" 
-                                value={editForm.offer_content.subject} 
+                                value={editForm.offer_content?.subject || ''} 
                                 placeholder="Subject"
                                 onChange={(e) => setEditForm({
                                   ...editForm, 
@@ -257,26 +301,67 @@ export default function OfferApprovals() {
                             <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleUpdate}>Save Changes</button>
                             <button className="btn btn-ghost" onClick={() => setEditingId(null)}>Cancel</button>
                           </>
-                        ) : offer.status === 'pending' ? (
-                          <>
-                            <button 
-                              className="btn btn-primary" 
-                              style={{ flex: 1, gap: 8 }}
-                              onClick={() => handleApprove(offer.id)}
+                         ) : canApprove && offer.status === 'pending' ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.7rem' }}>FEEDBACK FOR CHANGES</label>
+                              <textarea 
+                                className="form-control" 
+                                placeholder="E.g. Please increase the relocation bonus by $2k..."
+                                rows={2}
+                                value={feedback}
+                                onChange={(e) => setFeedback(e.target.value)}
+                              />
+                            </div>
+                            <div style={{ display: 'flex', gap: 12 }}>
+                              <button 
+                                className="btn btn-primary" 
+                                style={{ flex: 1, gap: 8 }}
+                                onClick={() => handleApprove(offer.id)}
+                              >
+                                <CheckCircle size={18} /> Approve
+                              </button>
+                              <button 
+                                className="btn btn-secondary" 
+                                style={{ flex: 1, gap: 8 }}
+                                onClick={() => handleRequestChanges(offer.id)}
+                                disabled={isSubmitting}
+                              >
+                                <FileText size={18} /> Request Changes
+                              </button>
+                              <button 
+                                className="btn btn-ghost" 
+                                style={{ color: 'var(--danger)', gap: 8 }}
+                                onClick={() => handleReject(offer.id)}
+                              >
+                                <XCircle size={18} /> Reject
+                              </button>
+                            </div>
+                          </div>
+                        ) : canSend && offer.status === 'approved' ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                              This offer has been approved and is ready to be sent to the candidate.
+                            </div>
+                            <button
+                              className="btn btn-primary"
+                              style={{ width: '100%', gap: 8 }}
+                              onClick={() => handleSend(offer.id)}
+                              disabled={isSubmitting}
                             >
-                              <CheckCircle size={18} /> Approve & Send
+                              <Mail size={18} /> {isSubmitting ? 'Sending...' : 'Send Offer'}
                             </button>
-                            <button 
-                              className="btn btn-ghost" 
-                              style={{ color: 'var(--danger)', gap: 8 }}
-                              onClick={() => handleReject(offer.id)}
-                            >
-                              <XCircle size={18} /> Reject
-                            </button>
-                          </>
+                          </div>
                         ) : (
-                          <div style={{ flex: 1, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem', fontWeight: 600, padding: '10px', border: '1px dashed var(--border)', borderRadius: 8 }}>
-                            Action Taken: {offer.status.toUpperCase()}
+                          <div style={{ width: '100%' }}>
+                            {offer.feedback && (
+                              <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: 12, marginBottom: 12, fontSize: '0.85rem', color: '#92400e' }}>
+                                <strong>Feedback:</strong> {offer.feedback}
+                              </div>
+                            )}
+                            <div style={{ flex: 1, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem', fontWeight: 600, padding: '10px', border: '1px dashed var(--border)', borderRadius: 8 }}>
+                              Status: {(offer.status || 'UNKNOWN').replace('_', ' ').toUpperCase()}
+                            </div>
                           </div>
                         )}
                       </div>

@@ -2,7 +2,7 @@ import json
 import secrets
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Header, BackgroundTasks
 from starlette.concurrency import run_in_threadpool
 import os
 import shutil
@@ -23,6 +23,7 @@ from app.models.skill_taxonomy import SkillTaxonomy
 from app.models.verify import AssessmentResult
 from app.utils.auth import get_current_user, require_role, require_module
 from app.utils.s3 import upload_bytes_to_s3
+from app.utils.email import send_course_assignment_notification_email
 from app.utils.bulk_zip import process_bulk_zip
 from app.utils.disk import ensure_free_space, safe_proactive_cleanup
 
@@ -615,6 +616,12 @@ async def get_course(
             progress_data[p.section_id] = {
                 "completed": p.completed, "video_progress_seconds": p.video_progress_seconds,
                 "quiz_score": float(p.quiz_score) if p.quiz_score else None,
+                "progress_percent": float(p.progress_percent or 0),
+                "scorm_progress_percent": float(p.scorm_progress_percent) if p.scorm_progress_percent is not None else None,
+                "scorm_score": float(p.scorm_score) if p.scorm_score is not None else None,
+                "scorm_status": p.scorm_status,
+                "scorm_location": p.scorm_location,
+                "last_scorm_commit_at": p.last_scorm_commit_at.isoformat() if p.last_scorm_commit_at else None,
             }
 
     return success({
@@ -622,7 +629,12 @@ async def get_course(
         "difficulty": course.difficulty.value, "category": course.category, "is_featured": course.is_featured,
         "estimated_hours": float(course.estimated_hours) if course.estimated_hours else None,
         "sections": section_data,
-        "enrollment": {"id": enrollment.id, "progress_percent": float(enrollment.progress_percent)} if enrollment else None,
+        "enrollment": {
+            "id": enrollment.id,
+            "progress_percent": float(enrollment.progress_percent),
+            "last_accessed_at": enrollment.last_accessed_at.isoformat() if enrollment.last_accessed_at else None,
+            "completed_at": enrollment.completed_at.isoformat() if enrollment.completed_at else None,
+        } if enrollment else None,
         "progress": progress_data,
     })
 
@@ -773,8 +785,41 @@ async def _generate_certificate_inline(enrollment_id: int, user_id: int, db: Asy
 
 class SectionCompleteRequest(BaseModel):
     enrollment_id: int
+    completed: Optional[bool] = None
+    progress_percent: Optional[float] = None
     video_progress_seconds: Optional[int] = None
     quiz_score: Optional[float] = None
+    scorm_progress_percent: Optional[float] = None
+    scorm_score: Optional[float] = None
+    scorm_status: Optional[str] = None
+    scorm_location: Optional[str] = None
+    scorm_suspend_data: Optional[str] = None
+
+
+def _clamp_percent(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return max(0.0, min(100.0, float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _derive_completion_status(
+    completed_flag: Optional[bool],
+    progress_percent: Optional[float],
+    scorm_status: Optional[str],
+    quiz_score: Optional[float],
+    quiz_pass_score: Optional[float] = None,
+) -> bool:
+    if completed_flag is True:
+        return True
+    if progress_percent is not None and progress_percent >= 100:
+        return True
+    if quiz_score is not None and quiz_pass_score is not None and quiz_score >= quiz_pass_score:
+        return True
+    normalized = (scorm_status or "").strip().lower()
+    return normalized in {"completed", "complete", "passed", "success"}
 
 
 @router.post("/sections/{section_id}/complete")
@@ -798,38 +843,90 @@ async def complete_section(
         prog = LearningProgress(enrollment_id=body.enrollment_id, section_id=section_id)
         db.add(prog)
 
-    prog.completed = True
-    prog.completed_at = datetime.utcnow()
+    section_res = await db.execute(select(CourseSection).where(CourseSection.id == section_id))
+    section = section_res.scalar_one_or_none()
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    raw_progress = body.progress_percent
+    if raw_progress is None:
+        raw_progress = body.scorm_progress_percent
+    if raw_progress is None and body.quiz_score is not None:
+        raw_progress = 100.0
+    if raw_progress is None and body.completed is True:
+        raw_progress = 100.0
+
+    progress_percent = _clamp_percent(raw_progress)
+    scorm_progress = _clamp_percent(body.scorm_progress_percent)
+    scorm_score = _clamp_percent(body.scorm_score)
+
+    quiz_pass_score = float(section.pass_score) if section.content_type.value == "quiz" and section.pass_score is not None else None
+    if section.content_type.value == "quiz" and body.quiz_score is not None:
+        progress_percent = 100.0 if quiz_pass_score is not None and body.quiz_score >= quiz_pass_score else max(0.0, min(99.0, float(body.quiz_score)))
+
+    is_complete = _derive_completion_status(body.completed, progress_percent, body.scorm_status, body.quiz_score, quiz_pass_score)
+    if section.content_type.value != "lab" and body.completed is None and progress_percent is None:
+        is_complete = True
+        progress_percent = 100.0
+
+    if progress_percent is not None:
+        prog.progress_percent = progress_percent
     if body.video_progress_seconds:
         prog.video_progress_seconds = body.video_progress_seconds
     if body.quiz_score is not None:
         prog.quiz_score = body.quiz_score
+    if scorm_progress is not None:
+        prog.scorm_progress_percent = scorm_progress
+        prog.progress_percent = scorm_progress
+    if scorm_score is not None:
+        prog.scorm_score = scorm_score
+    if body.scorm_status is not None:
+        prog.scorm_status = body.scorm_status[:64]
+    if body.scorm_location is not None:
+        prog.scorm_location = body.scorm_location[:255]
+    if body.scorm_suspend_data is not None:
+        prog.scorm_suspend_data = body.scorm_suspend_data
+    if any(v is not None for v in [body.scorm_progress_percent, body.scorm_score, body.scorm_status, body.scorm_location, body.scorm_suspend_data]):
+        prog.last_scorm_commit_at = datetime.utcnow()
+
+    prog.completed = is_complete
+    if is_complete:
+        prog.progress_percent = 100.0
+        prog.completed_at = prog.completed_at or datetime.utcnow()
+    elif body.completed is False:
+        prog.completed_at = None
 
     # Update enrollment progress %
     enroll_res = await db.execute(select(Enrollment).where(Enrollment.id == body.enrollment_id))
     enrollment = enroll_res.scalar_one_or_none()
     if enrollment:
-        total_sections_res = await db.execute(
-            select(func.count()).select_from(CourseSection).where(CourseSection.course_id == enrollment.course_id)
-        )
-        completed_sections_res = await db.execute(
-            select(func.count()).select_from(LearningProgress).where(
-                LearningProgress.enrollment_id == body.enrollment_id,
-                LearningProgress.completed == True
+        section_progress_res = await db.execute(
+            select(CourseSection.id, LearningProgress.progress_percent)
+            .select_from(CourseSection)
+            .outerjoin(
+                LearningProgress,
+                and_(
+                    LearningProgress.section_id == CourseSection.id,
+                    LearningProgress.enrollment_id == body.enrollment_id,
+                ),
             )
+            .where(CourseSection.course_id == enrollment.course_id)
         )
-        total = total_sections_res.scalar() or 1
-        completed = completed_sections_res.scalar() or 0
-        enrollment.progress_percent = round((completed / total) * 100, 2)
+        section_rows = section_progress_res.all()
+        total = len(section_rows) or 1
+        total_progress = sum(float(pct or 0) for _, pct in section_rows)
+        enrollment.progress_percent = round(total_progress / total, 2)
         enrollment.last_accessed_at = datetime.utcnow()
 
         if enrollment.progress_percent >= 100:
-            enrollment.completed_at = datetime.utcnow()
+            enrollment.completed_at = enrollment.completed_at or datetime.utcnow()
             # Generate certificate inline
             try:
                 await _generate_certificate_inline(enrollment.id, current_user.id, db)
             except Exception as e:
                 logger.warning(f"Certificate generation failed: {e}")
+        else:
+            enrollment.completed_at = None
 
     await db.commit()
     return success({"progress_percent": float(enrollment.progress_percent) if enrollment else 0})
@@ -906,6 +1003,16 @@ async def team_analytics(
         enrolled = await db.execute(select(func.count()).select_from(Enrollment).where(Enrollment.user_id == emp.user_id))
         completed = await db.execute(select(func.count()).select_from(Enrollment).where(Enrollment.user_id == emp.user_id, Enrollment.completed_at != None))
         certs = await db.execute(select(func.count()).select_from(Certificate).where(Certificate.user_id == emp.user_id))
+        avg_progress_res = await db.execute(select(func.avg(Enrollment.progress_percent)).where(Enrollment.user_id == emp.user_id))
+        in_progress_res = await db.execute(
+            select(func.count()).select_from(Enrollment).where(
+                Enrollment.user_id == emp.user_id,
+                Enrollment.progress_percent > 0,
+                Enrollment.completed_at == None,
+            )
+        )
+        last_access_res = await db.execute(select(func.max(Enrollment.last_accessed_at)).where(Enrollment.user_id == emp.user_id))
+        last_accessed = last_access_res.scalar()
         team_data.append({
             "employee_id": emp.id,
             "name": user.full_name if user else str(emp.user_id),
@@ -913,6 +1020,9 @@ async def team_analytics(
             "enrolled": enrolled.scalar() or 0,
             "completed": completed.scalar() or 0,
             "certificates": certs.scalar() or 0,
+            "avg_progress_percent": round(float(avg_progress_res.scalar() or 0), 2),
+            "in_progress": in_progress_res.scalar() or 0,
+            "last_accessed_at": last_accessed.isoformat() if last_accessed else None,
         })
 
     return success(team_data)
@@ -937,6 +1047,7 @@ async def get_transcript(
             "course_title": course.title, "progress_percent": float(enroll.progress_percent),
             "enrolled_at": enroll.created_at.isoformat() if enroll.created_at else None,
             "completed_at": enroll.completed_at.isoformat() if enroll.completed_at else None,
+            "last_accessed_at": enroll.last_accessed_at.isoformat() if enroll.last_accessed_at else None,
         } for enroll, course in enroll_res.all()],
         "certificates": [{
             "course_title": course.title, "issued_at": cert.issued_at.isoformat(),
@@ -1009,10 +1120,16 @@ async def my_courses(
     current_user: User = Depends(require_role(["instructor", "org_admin", "hr"])),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Course).where(Course.instructor_id == current_user.id)
-        .order_by(Course.created_at.desc())
-    )
+    if current_user.role.value in ["org_admin", "hr", "super_admin"]:
+        query = select(Course)
+        if current_user.role.value != "super_admin":
+            query = query.where(Course.org_id == current_user.org_id)
+    else:
+        # Let instructors see all courses in their organization too, to allow collaborative assignment,
+        # or fall back to their own courses if desired. In our case, allowing org-level visibility aligns with the Assessment Hub.
+        query = select(Course).where(Course.org_id == current_user.org_id)
+
+    result = await db.execute(query.order_by(Course.created_at.desc()))
     courses = result.scalars().all()
 
     out = []
@@ -1190,6 +1307,7 @@ async def course_enrollments(
         "progress_percent": float(e.progress_percent),
         "enrolled_at": e.created_at.isoformat() if e.created_at else None,
         "completed_at": e.completed_at.isoformat() if e.completed_at else None,
+        "last_accessed_at": e.last_accessed_at.isoformat() if e.last_accessed_at else None,
         "triggered_by": e.triggered_by.value,
     } for e, u in rows])
 
@@ -1205,19 +1323,35 @@ class BulkEnrollBody(BaseModel):
 @router.post("/bulk-enroll")
 async def bulk_enroll(
     body: BulkEnrollBody,
-    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager", "instructor"])),
     db: AsyncSession = Depends(get_db),
 ):
+    course_res = await db.execute(select(Course).where(Course.id == body.course_id))
+    course = course_res.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    users_res = await db.execute(select(User).where(User.id.in_(body.user_ids)))
+    users_map = {u.id: u for u in users_res.scalars()}
+
     enrolled = 0
     skipped = 0
+    new_enrollments = []
+
     for uid in body.user_ids:
+        user = users_map.get(uid)
+        if not user:
+            skipped += 1
+            continue
+
         existing = await db.execute(
             select(Enrollment).where(Enrollment.user_id == uid, Enrollment.course_id == body.course_id)
         )
         if existing.scalar_one_or_none():
             skipped += 1
             continue
-        from datetime import date
+
         deadline = datetime.fromisoformat(body.deadline) if body.deadline else None
         e = Enrollment(
             user_id=uid,
@@ -1227,7 +1361,21 @@ async def bulk_enroll(
         )
         db.add(e)
         enrolled += 1
+        new_enrollments.append(user)
+
     await db.commit()
+
+    for user in new_enrollments:
+        background_tasks.add_task(
+            send_course_assignment_notification_email,
+            to_email=user.email,
+            candidate_name=user.full_name or user.email,
+            course_title=course.title,
+            deadline=body.deadline,
+            difficulty=course.difficulty.value,
+            estimated_hours=float(course.estimated_hours) if course.estimated_hours else None
+        )
+
     return success({"enrolled": enrolled, "skipped": skipped})
 
 

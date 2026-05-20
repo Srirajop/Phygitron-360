@@ -48,7 +48,7 @@ class JourneyUpdate(BaseModel):
 @router.post("/journeys")
 async def create_journey(
     body: JourneyCreate,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     journey = Journey(
@@ -75,7 +75,7 @@ async def create_journey(
 
 @router.get("/journeys")
 async def list_journeys(
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Journey).order_by(Journey.created_at.desc())
@@ -144,7 +144,7 @@ async def get_journey(
 async def update_journey(
     journey_id: int,
     body: JourneyUpdate,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Journey).where(Journey.id == journey_id))
@@ -183,7 +183,7 @@ async def update_journey(
 async def assign_journey(
     journey_id: int,
     body: AssignJourneyRequest,
-    current_user: User = Depends(require_role(["hr", "admin"])),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     # Verify journey exists

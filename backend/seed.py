@@ -37,7 +37,8 @@ async def seed():
 
     async with Session() as db:
         # Organisation
-        org = Organisation(name="EwandZDigital", domain="ewandz.com", primary_color="#7C3AED")
+        org = Organisation(name="EwandZDigital", domain="ewandz.com", primary_color="#7C3AED",
+                          has_source=True, has_verify=True, has_forge=True, has_deploy=True)
         db.add(org)
         await db.flush()
 

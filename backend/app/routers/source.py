@@ -297,7 +297,9 @@ async def score_candidates(
 # ── ATS Algorithmic Match Scoring ──────────────────────────────────────────────
 
 LEVEL_WEIGHTS = {"beginner": 1, "intermediate": 2, "advanced": 3, "expert": 4}
-NOISE_TOKENS = {"and", "or", "the", "of", "for", "with", "in", "at", "a", "an", "to", "on"}
+NOISE_TOKENS = {"and", "or", "the", "of", "for", "with", "in", "at", "a", "an", "to", "on", "is", "are"}
+# Skills shorter than this are only matched if they are whole words
+MIN_TOKEN_LEN = 1 
 ROLE_SKILL_PRESETS = {
     "cyber": ["Cyber Security", "Network Security", "SIEM", "Penetration Testing", "Linux", "Python"],
     "security": ["Cyber Security", "Network Security", "SIEM", "Penetration Testing", "Linux", "Python"],
@@ -319,34 +321,58 @@ def _normalise_level(value, fallback="intermediate") -> str:
 
 
 def normalise_required_skills(role: Optional[JobRole]) -> list:
+    """Convert job role required_skills into a canonical list.
+    
+    Priority:
+    1. Use skills explicitly defined in the JD (required_skills field) — always preferred.
+    2. If NO skills were defined, infer from title/description using keyword presets.
+    3. Last resort: tokenise the title itself.
+    
+    Critically: if the user SAVED skills on the role, we ONLY use those — no mixing with presets.
+    """
     if not role:
         return []
 
+    # Step 1: Parse explicitly saved required_skills
     normalised = []
-    for item in role.required_skills or []:
+    raw = role.required_skills or []
+    for item in raw:
         if isinstance(item, str):
-            name = item
+            name = item.strip()
             level = "intermediate"
         elif isinstance(item, dict):
-            name = item.get("skill") or item.get("name") or item.get("title") or item.get("normalized_name")
-            level = item.get("level") or item.get("min_level") or item.get("required_level") or "intermediate"
+            name = (
+                item.get("skill") or item.get("name") or
+                item.get("title") or item.get("normalized_name") or ""
+            ).strip()
+            level = (
+                item.get("level") or item.get("min_level") or
+                item.get("required_level") or "intermediate"
+            )
         else:
             continue
         name = _clean_skill_name(name)
         if name:
             normalised.append({"skill": name, "level": _normalise_level(level)})
 
+    # If JD has explicit skills, return them ONLY — do not blend with AI presets
     if normalised:
         return normalised
 
+    # Step 2: No explicit skills — infer from role title + description keywords
     haystack = f"{role.title or ''} {role.description or ''}".lower()
     inferred = []
     for keyword, skills in ROLE_SKILL_PRESETS.items():
         if keyword in haystack:
             inferred.extend(skills)
 
+    # Step 3: Last resort — tokenise the title
     if not inferred and role.title:
-        inferred = [part.strip() for part in role.title.replace("/", " ").replace("-", " ").split() if len(part.strip()) > 2]
+        inferred = [
+            part.strip() for part in
+            role.title.replace("/", " ").replace("-", " ").split()
+            if len(part.strip()) > 2
+        ]
 
     seen = set()
     fallback = []
@@ -359,18 +385,32 @@ def normalise_required_skills(role: Optional[JobRole]) -> list:
 
 
 def _skill_tokens(value: str) -> set:
+    # Keep 1+ letter tokens, but exclude noise. 
+    # alphanumeric only to avoid "c++" vs "c" issues if needed, but let's keep it simple first.
     cleaned = "".join(ch.lower() if ch.isalnum() else " " for ch in str(value or ""))
-    return {token for token in cleaned.split() if token and token not in NOISE_TOKENS}
+    return {token for token in cleaned.split() if len(token) >= MIN_TOKEN_LEN and token not in NOISE_TOKENS}
 
 
 def _skill_similarity(required: str, candidate: str) -> float:
-    req = str(required or "").lower().strip()
-    cand = str(candidate or "").lower().strip()
+    """Return similarity score 0..1 between a required skill and a candidate's skill."""
+    req = " ".join(str(required or "").lower().split())
+    cand = " ".join(str(candidate or "").lower().split())
     if not req or not cand:
         return 0.0
+
+    # 1. Perfect match
     if req == cand:
         return 1.0
 
+    # 2. Whole-word substring check (e.g. "React" matches "React JS")
+    # This prevents "C" from matching "InstruCtional"
+    import re
+    # Escape special chars and check for word boundaries
+    pattern = r'\b' + re.escape(req) + r'\b'
+    if re.search(pattern, cand) or re.search(r'\b' + re.escape(cand) + r'\b', req):
+        return 0.95
+
+    # 3. Token-based overlap for multi-word phrases
     req_tokens = _skill_tokens(req)
     cand_tokens = _skill_tokens(cand)
     if not req_tokens or not cand_tokens:
@@ -382,11 +422,13 @@ def _skill_similarity(required: str, candidate: str) -> float:
 
     coverage = len(overlap) / len(req_tokens)
     jaccard = len(overlap) / len(req_tokens | cand_tokens)
-    if coverage >= 0.75:
-        return 0.85
-    if jaccard >= 0.5:
-        return 0.65
-    return 0.45
+
+    if coverage >= 1.0:
+        return 0.9  # All required tokens found in candidate skill (but not as a single phrase)
+    if coverage >= 0.5:
+        return 0.5 * coverage + 0.2
+    
+    return 0.1
 
 
 
@@ -476,7 +518,10 @@ async def search_candidates(
     from sqlalchemy import or_, and_
     
     # Base queries
-    cand_query = select(Candidate, User).join(User, User.id == Candidate.user_id).where(Candidate.org_id == current_user.org_id)
+    cand_query = select(Candidate, User).join(User, Candidate.user_id == User.id)
+    if current_user.role.value != "super_admin":
+        cand_query = cand_query.where(Candidate.org_id == current_user.org_id)
+
     emp_query = select(Employee, User).join(User, User.id == Employee.user_id).where(Employee.org_id == current_user.org_id)
 
     def exp_bounds():
@@ -530,6 +575,7 @@ async def search_candidates(
             results.append({
                 "id": e.id, "user_id": u.id, "name": e.full_name if hasattr(e, 'full_name') else u.full_name or "Unknown",
                 "email": u.email, "location": getattr(e, 'location', 'Office'), "exp_years": 0,
+
                 "status": e.status.value, "resume_url": None, "type": "Employee",
                 "created_at": e.created_at, "is_employee": True
             })
@@ -540,7 +586,7 @@ async def search_candidates(
     if role_id:
         role_res = await db.execute(select(JobRole).where(JobRole.id == role_id))
         role = role_res.scalar_one_or_none()
-        if not role or role.org_id != current_user.org_id:
+        if not role or (current_user.role.value != "super_admin" and role.org_id != current_user.org_id):
             raise HTTPException(status_code=404, detail="Role not found")
         req_skills = normalise_required_skills(role)
 
@@ -581,13 +627,18 @@ async def search_candidates(
             item["created_at"] = item["created_at"].isoformat()
 
     # Apply sorting
+    # When a role is selected, ALWAYS rank by fit score first (highest match on top)
     sort_keys = [s.strip() for s in sort_by.split(",") if s.strip()]
-    if "fit_score" in sort_keys and role_id:
-        output.sort(key=lambda x: (x.get("ats_score") or 0, x.get("exp_years") or 0, x["created_at"] or ""), reverse=True)
+    if role_id:
+        # Primary sort: role fit score (descending), secondary: experience, tertiary: newest
+        output.sort(
+            key=lambda x: (x.get("ats_score") or 0, x.get("exp_years") or 0, x.get("created_at") or ""),
+            reverse=True
+        )
     elif "experience" in sort_keys:
-        output.sort(key=lambda x: (x["exp_years"] or 0, x["created_at"] or ""), reverse=True)
+        output.sort(key=lambda x: (x["exp_years"] or 0, x.get("created_at") or ""), reverse=True)
     else:
-        output.sort(key=lambda x: x["created_at"] or "", reverse=True)
+        output.sort(key=lambda x: x.get("created_at") or "", reverse=True)
 
     output = output[:limit]
 
@@ -597,36 +648,68 @@ async def search_candidates(
 @router.get("/candidates/{candidate_id}")
 async def get_candidate(
     candidate_id: int,
-    role_id: Optional[int] = None,
+    role_id: Optional[int] = Query(None),
     current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    # Level 1 (super_admin) sees ALL candidates across ALL orgs
+    # Level 2 (org_admin), Level 3 (hr, manager) only see their org's candidates
+    is_super = role_val == "super_admin"
 
-    result = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
+    logger.info(f"Fetching candidate {candidate_id} for user {current_user.id} (Role: {role_val}, Org: {current_user.org_id})")
+
+    # Fetch Candidate — super_admin bypasses org filter
+    query = select(Candidate).where(Candidate.id == candidate_id)
+    if not is_super:
+        query = query.where(Candidate.org_id == current_user.org_id)
+    
+    result = await db.execute(query)
     candidate = result.scalar_one_or_none()
-    if not candidate or candidate.org_id != current_user.org_id:
+    if not candidate:
+        logger.warning(f"❌ Candidate {candidate_id} not found or access denied for user {current_user.id}")
         raise HTTPException(status_code=404, detail="Candidate not found")
 
-    # Skills
+    # 2. Fetch Skills
     skills_res = await db.execute(
         select(CandidateSkill, SkillTaxonomy).join(SkillTaxonomy).where(CandidateSkill.candidate_id == candidate_id)
     )
     cand_skills = [{"id": cs.id, "skill_id": cs.skill_id, "name": st.name, "level": cs.level.value, "source": cs.source.value, "years_of_use": cs.years_of_use, "evidence": cs.evidence} for cs, st in skills_res]
 
+    # 3. Fetch User
     user_res = await db.execute(select(User).where(User.id == candidate.user_id))
     user = user_res.scalar_one_or_none()
 
-    # Check if employee
+    # 4. Check if Employee
     emp_res = await db.execute(select(Employee).where(Employee.user_id == candidate.user_id))
     emp = emp_res.scalar_one_or_none()
 
-    # AI scores
+    # 5. Get Latest Offer
+    offer_res = await db.execute(
+        select(OfferLetter).where(OfferLetter.candidate_id == candidate_id).order_by(OfferLetter.created_at.desc())
+    )
+    offer = offer_res.scalars().first()
+    offer_data = None
+    if offer:
+        offer_data = {
+            "id": offer.id,
+            "status": offer.status.value,
+            "feedback": offer.feedback,
+            "role_title": offer.role_title,
+            "salary": offer.salary,
+            "department": offer.department,
+            "location": offer.location,
+            "start_date": offer.start_date.isoformat() if offer.start_date else None,
+            "offer_content": offer.offer_content,
+        }
+
+    # 6. AI scores
     scores_res = await db.execute(
         select(AIScore).where(AIScore.entity_type == EntityType.candidate, AIScore.entity_id == candidate_id)
     )
     scores = [{"type": s.score_type.value, "score": float(s.score) if s.score else None, "reasoning": s.reasoning} for s in scores_res.scalars()]
 
-    import json
+    # 7. Role Fit Analysis
     if role_id:
         role_res = await db.execute(select(JobRole).where(JobRole.id == role_id))
         role = role_res.scalar_one_or_none()
@@ -647,14 +730,13 @@ async def get_candidate(
             scores = [s for s in scores if s["type"] != "role_fit"]
             scores.append(fit_score_obj)
 
+    # 8. Calculate basic ATS Score
     num_skills = len(cand_skills)
     exp = candidate.exp_years or 0
     loc_points = 10 if candidate.location else 0
     resume_points = 10 if candidate.resume_url else 0
-    
     skill_points = min(num_skills * 5, 50)
     exp_points = min(exp * 5, 30)
-    
     resume_ats_score = skill_points + exp_points + loc_points + resume_points
 
     return success({
@@ -670,6 +752,7 @@ async def get_candidate(
         "resume_url": candidate.resume_url,
         "skills": cand_skills,
         "ai_scores": scores,
+        "latest_offer": offer_data,
     })
 
 
@@ -687,7 +770,12 @@ async def list_job_roles(
     current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(JobRole).where(JobRole.org_id == current_user.org_id))
+    query = select(JobRole)
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    if role_val != "super_admin":
+        query = query.where(JobRole.org_id == current_user.org_id)
+    
+    result = await db.execute(query)
     roles = result.scalars().all()
     return success([{
         "id": r.id,
@@ -704,16 +792,65 @@ async def create_job_role(
     current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
+    required_skills = body.required_skills or []
+    if not required_skills and body.description:
+        try:
+            from app.agents.agents import run_extract_jd_skills_agent
+            import asyncio
+            ai_result = await asyncio.to_thread(run_extract_jd_skills_agent, body.description)
+            required_skills = [{"skill": s.get("name"), "level": s.get("level", "intermediate")} for s in ai_result.get("skills", [])]
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to extract skills from JD: {e}")
+
     role = JobRole(
         org_id=current_user.org_id,
         title=body.title,
         description=body.description,
-        required_skills=body.required_skills or [],
+        required_skills=required_skills,
         min_experience=body.min_experience,
     )
     db.add(role)
     await db.commit()
     return success({"id": role.id, "title": role.title, "required_skills": normalise_required_skills(role)})
+
+
+@router.put("/job-roles/{role_id}")
+async def update_job_role(
+    role_id: int,
+    body: JobRoleCreate,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    role_res = await db.execute(select(JobRole).where(JobRole.id == role_id, JobRole.org_id == current_user.org_id))
+    role = role_res.scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+
+    required_skills = body.required_skills or []
+    if not required_skills and body.description:
+        try:
+            from app.agents.agents import run_extract_jd_skills_agent
+            import asyncio
+            ai_result = await asyncio.to_thread(run_extract_jd_skills_agent, body.description)
+            required_skills = [{"skill": s.get("name"), "level": s.get("level", "intermediate")} for s in ai_result.get("skills", [])]
+        except Exception as e:
+            logger.warning(f"Failed to extract skills from JD: {e}")
+
+    role.title = body.title
+    role.description = body.description
+    role.required_skills = required_skills
+    role.min_experience = body.min_experience
+    await db.commit()
+    await db.refresh(role)
+    return success({
+        "id": role.id,
+        "title": role.title,
+        "description": role.description,
+        "min_experience": role.min_experience,
+        "required_skills": normalise_required_skills(role),
+    }, "Job role updated")
 
 
 @router.delete("/job-roles")
@@ -875,7 +1012,10 @@ async def offer_preview(
     # Get candidate and user
     cand_res = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
     candidate = cand_res.scalar_one_or_none()
-    if not candidate or candidate.org_id != current_user.org_id:
+    
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    is_super = role_val == "super_admin"
+    if not candidate or (not is_super and str(candidate.org_id) != str(current_user.org_id)):
         raise HTTPException(status_code=404, detail="Candidate not found")
 
     user_res = await db.execute(select(User).where(User.id == candidate.user_id))
@@ -908,7 +1048,10 @@ async def convert_to_employee(
     # Get candidate and user
     cand_res = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
     candidate = cand_res.scalar_one_or_none()
-    if not candidate or candidate.org_id != current_user.org_id:
+    
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    is_super = role_val == "super_admin"
+    if not candidate or (not is_super and str(candidate.org_id) != str(current_user.org_id)):
         raise HTTPException(status_code=404, detail="Candidate not found")
 
     user_res = await db.execute(select(User).where(User.id == candidate.user_id))
@@ -973,7 +1116,10 @@ async def revert_employee_to_candidate(
     # 1. Get Employee
     emp_res = await db.execute(select(Employee).where(Employee.id == employee_id))
     emp = emp_res.scalar_one_or_none()
-    if not emp or emp.org_id != current_user.org_id:
+    
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    is_super = role_val == "super_admin"
+    if not emp or (not is_super and str(emp.org_id) != str(current_user.org_id)):
         raise HTTPException(status_code=404, detail="Employee record not found")
 
     # 2. Get User
@@ -1006,7 +1152,12 @@ async def delete_candidate(
     from sqlalchemy import delete
     
     # Find candidate
-    result = await db.execute(select(Candidate).where(Candidate.id == candidate_id, Candidate.org_id == current_user.org_id))
+    query = select(Candidate).where(Candidate.id == candidate_id)
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    if role_val != "super_admin":
+        query = query.where(Candidate.org_id == current_user.org_id)
+    
+    result = await db.execute(query)
     candidate = result.scalar_one_or_none()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -1038,8 +1189,13 @@ async def list_active_candidates(
     db: AsyncSession = Depends(get_db)
 ):
     from sqlalchemy import or_, and_
-    query = select(User).where(
-        User.org_id == current_user.org_id,
+    query = select(User, Candidate).join(Candidate, Candidate.user_id == User.id)
+    
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    if role_val != "super_admin":
+        query = query.where(User.org_id == current_user.org_id)
+    
+    query = query.where(
         User.is_active == True,
         or_(
             and_(User.role == UserRole.candidate, User.first_login == False),
@@ -1048,19 +1204,29 @@ async def list_active_candidates(
     ).order_by(User.created_at.desc())
     
     res = await db.execute(query)
-    users = res.scalars().all()
+    rows = res.all()
     
     data = []
-    for u in users:
+    for u, c in rows:
+        # Check if they are actually an employee in the deploy module
+        from app.models.deploy import Employee
+        emp_res = await db.execute(select(Employee).where(Employee.user_id == u.id))
+        emp = emp_res.scalar_one_or_none()
+
+        
         data.append({
-            "id": u.id,
+            "id": c.id,
+            "user_id": u.id,
+            "employee_id": emp.id if emp else None,
             "name": u.full_name or u.email.split("@")[0],
             "email": u.email,
-            "type": "Employee" if u.role == UserRole.employee else "Trainee",
+            "is_employee": emp is not None,
+            "type": "Employee" if emp else "Trainee",
             "created_at": u.created_at.isoformat()
         })
         
     return success(data=data)
+
 
 
 # ── Offer Approvals ──────────────────────────────────────────────────────────
@@ -1068,12 +1234,16 @@ async def list_active_candidates(
 @router.get("/offers")
 async def list_offers(
     status: Optional[str] = "pending",
-    current_user: User = Depends(require_role(["org_admin", "manager"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy.orm import selectinload
     
-    query = select(OfferLetter).options(selectinload(OfferLetter.candidate)).where(OfferLetter.org_id == current_user.org_id)
+    query = select(OfferLetter).options(selectinload(OfferLetter.candidate))
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    if role_val != "super_admin":
+        query = query.where(OfferLetter.org_id == current_user.org_id)
+    
     if status:
         query = query.where(OfferLetter.status == status)
     
@@ -1097,6 +1267,7 @@ async def list_offers(
             "start_date": o.start_date.isoformat() if o.start_date else None,
             "status": o.status.value,
             "offer_content": o.offer_content,
+            "feedback": o.feedback,
             "created_at": o.created_at.isoformat(),
         })
     
@@ -1107,16 +1278,20 @@ async def list_offers(
 async def update_offer(
     offer_id: int,
     body: dict = Body(...),
-    current_user: User = Depends(require_role(["org_admin", "manager"])),
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(OfferLetter).where(OfferLetter.id == offer_id, OfferLetter.org_id == current_user.org_id))
+    query = select(OfferLetter).where(OfferLetter.id == offer_id)
+    if current_user.role.value != "super_admin":
+        query = query.where(OfferLetter.org_id == current_user.org_id)
+        
+    result = await db.execute(query)
     offer = result.scalar_one_or_none()
     if not offer:
         raise HTTPException(status_code=404, detail="Offer not found")
 
-    if offer.status != OfferStatus.pending:
-        raise HTTPException(status_code=400, detail="Only pending offers can be edited")
+    if offer.status not in [OfferStatus.pending, OfferStatus.changes_requested]:
+        raise HTTPException(status_code=400, detail="Only pending or feedback offers can be edited")
 
     if "role_title" in body: offer.role_title = body["role_title"]
     if "salary" in body: offer.salary = body["salary"]
@@ -1124,6 +1299,11 @@ async def update_offer(
     if "location" in body: offer.location = body["location"]
     if "offer_content" in body: offer.offer_content = body["offer_content"]
     
+    # Reset to pending if it was changes_requested
+    if offer.status == OfferStatus.changes_requested:
+        offer.status = OfferStatus.pending
+        offer.feedback = None
+
     if "start_date" in body and body["start_date"]:
         try:
             offer.start_date = datetime.strptime(body["start_date"], "%Y-%m-%d")
@@ -1148,13 +1328,78 @@ async def approve_offer(
     import os
 
     # 1. Get Offer
-    result = await db.execute(select(OfferLetter).where(OfferLetter.id == offer_id, OfferLetter.org_id == current_user.org_id))
+    query = select(OfferLetter).where(OfferLetter.id == offer_id)
+    if current_user.role.value != "super_admin":
+        query = query.where(OfferLetter.org_id == current_user.org_id)
+        
+    result = await db.execute(query)
     offer = result.scalar_one_or_none()
     if not offer:
         raise HTTPException(status_code=404, detail="Offer not found")
     
     if offer.status != OfferStatus.pending:
         raise HTTPException(status_code=400, detail=f"Offer is already {offer.status.value}")
+
+    offer.status = OfferStatus.approved
+    offer.approved_by = current_user.id
+    
+    await db.commit()
+    return success(message="Offer approved and locked. Ready for HR dispatch.")
+
+
+class FeedbackBody(BaseModel):
+    feedback: str
+
+@router.post("/offers/{offer_id}/request-changes")
+async def request_changes_offer(
+    offer_id: int,
+    body: FeedbackBody,
+    current_user: User = Depends(require_role(["org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(OfferLetter).where(OfferLetter.id == offer_id)
+    if current_user.role.value != "super_admin":
+        query = query.where(OfferLetter.org_id == current_user.org_id)
+        
+    result = await db.execute(query)
+    offer = result.scalar_one_or_none()
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    if offer.status != OfferStatus.pending:
+        raise HTTPException(status_code=400, detail="Can only request changes on pending offers")
+
+    offer.status = OfferStatus.changes_requested
+    offer.feedback = body.feedback
+    
+    await db.commit()
+    return success(message="Feedback sent to HR.")
+
+
+@router.post("/offers/{offer_id}/send")
+async def send_approved_offer(
+    offer_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.deploy import Employee, EmployeeStatus
+    from app.utils.pdf import generate_professional_pdf
+    from app.utils.email import send_offer_letter_email
+    import tempfile
+    import os
+
+    # 1. Get Offer
+    query = select(OfferLetter).where(OfferLetter.id == offer_id)
+    if current_user.role.value != "super_admin":
+        query = query.where(OfferLetter.org_id == current_user.org_id)
+        
+    result = await db.execute(query)
+    offer = result.scalar_one_or_none()
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    
+    if offer.status != OfferStatus.approved:
+        raise HTTPException(status_code=400, detail="Only approved offers can be sent to candidates")
 
     # 2. Get Candidate/User/Org
     cand_res = await db.execute(select(Candidate).where(Candidate.id == offer.candidate_id))
@@ -1213,11 +1458,10 @@ async def approve_offer(
     )
     db.add(emp)
     
-    offer.status = OfferStatus.approved
-    offer.approved_by = current_user.id
+    offer.status = OfferStatus.sent
     
     await db.commit()
-    return success({"employee_id": emp.id}, "Offer approved and sent to candidate.")
+    return success({"employee_id": emp.id}, "Offer sent to candidate successfully.")
 
 
 @router.post("/offers/{offer_id}/reject")
@@ -1226,7 +1470,11 @@ async def reject_offer(
     current_user: User = Depends(require_role(["org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(OfferLetter).where(OfferLetter.id == offer_id, OfferLetter.org_id == current_user.org_id))
+    query = select(OfferLetter).where(OfferLetter.id == offer_id)
+    if current_user.role.value != "super_admin":
+        query = query.where(OfferLetter.org_id == current_user.org_id)
+        
+    result = await db.execute(query)
     offer = result.scalar_one_or_none()
     if not offer:
         raise HTTPException(status_code=404, detail="Offer not found")

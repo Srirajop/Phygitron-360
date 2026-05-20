@@ -100,7 +100,8 @@ export default function AssessmentTaker() {
   const [strikeCount, setStrikeCount] = useState(0);
 
   const submittingRef = useRef(false);
-  const startTime = useRef(Date.now());
+  const startTime = useRef(null);
+  const sessionStartedAtRef = useRef(null);
   const pgEvents = useRef([]);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -120,6 +121,8 @@ export default function AssessmentTaker() {
   const motionViolationTimer = useRef(null);
   const backgroundMovementTimer = useRef(null);
   const cameraTrackViolationTimer = useRef(null);
+  const multipleFacesTimerRef = useRef(null);
+  const seenFaceOnceRef = useRef(false);
   const strikes = useRef(0);
   const submitRef = useRef(null);
   const handleCheatAttemptRef = useRef(null);
@@ -127,6 +130,7 @@ export default function AssessmentTaker() {
   const violationCooldownsRef = useRef({});
   const faceDetectorRef = useRef(null);
   const MAX_STRIKES = 5;
+  const PROCTORING_START_GRACE_MS = 8000;
 
   // Load assessment
   useEffect(() => {
@@ -201,12 +205,17 @@ export default function AssessmentTaker() {
   }, []);
 
   useEffect(() => {
+    if (!hasStarted) return;
     const t0 = setTimeout(() => captureScreenshot('Initial Snapshot'), 5000);
     const t1 = setInterval(() => captureScreenshot('Periodic Screenshot'), 60000);
     return () => { clearTimeout(t0); clearInterval(t1); };
-  }, [captureScreenshot]);
+  }, [hasStarted, captureScreenshot]);
 
   const handleCheatAttempt = useCallback((actionName, eventType = 'proctoring_violation', cooldownMs = 15000) => {
+    if (!hasStarted || submittingRef.current) return false;
+    const startedAt = sessionStartedAtRef.current || 0;
+    if (startedAt && (Date.now() - startedAt) < PROCTORING_START_GRACE_MS) return false;
+
     const now = Date.now();
     const lastForThisViolation = violationCooldownsRef.current[actionName] || 0;
     if (now - lastForThisViolation < cooldownMs) return false;   // blocked by cooldown
@@ -245,7 +254,7 @@ export default function AssessmentTaker() {
       toast.error(`Warning: ${actionName}! (Strike ${strikes.current}/${MAX_STRIKES})`, { icon: '⚠️', duration: 4000 });
     }
     return true;  // strike was issued
-  }, [captureScreenshot]);
+  }, [captureScreenshot, hasStarted]);
 
   // ── Proctoring Analysis: Speech (SpeechRecognition) + CV/Face (every 2500ms) ─
   useEffect(() => {
@@ -303,11 +312,19 @@ export default function AssessmentTaker() {
       const voiceAvg  = voiceBand.reduce((a, b) => a + b, 0) / voiceBand.length;
       const activeBins = voiceBand.filter(v => v > 28).length;
       const voiceRatio = activeBins / voiceBand.length; // spread across frequencies
+      const timeBuf = new Uint8Array(analyserRef.current.fftSize);
+      analyserRef.current.getByteTimeDomainData(timeBuf);
+      let rmsSum = 0;
+      for (const sample of timeBuf) {
+        const centered = (sample - 128) / 128;
+        rmsSum += centered * centered;
+      }
+      const rms = Math.sqrt(rmsSum / timeBuf.length);
 
       const cal = audioCalibrationRef.current;
       // Calibrate for ~15 s (30 samples × 500 ms) — long enough to capture real
       // room ambience including fan, AC, and keyboard baseline noise.
-      if (cal.samples.length < 30) {
+      if (cal.samples.length < 16) {
         cal.samples.push(voiceAvg);
         cal.baseline = cal.samples.reduce((a, b) => a + b, 0) / cal.samples.length;
         return;
@@ -316,18 +333,21 @@ export default function AssessmentTaker() {
       // Conservative thresholds to avoid false positives from ambient noise:
       //   +35 above baseline  (was +20) — requires a clear spike above room noise
       //   voiceRatio > 0.40   (was 0.25) — voice has wide harmonic spread; noise is narrow
-      const isVoiceLike = voiceAvg > Math.max(baseline + 35, 40) && voiceRatio > 0.40;
+      const energeticVoice = voiceAvg > Math.max(baseline + 24, 30) && voiceRatio > 0.26;
+      const loudMicActivity = voiceAvg > Math.max(baseline + 18, 24) && rms > 0.085;
+      const isVoiceLike = energeticVoice || loudMicActivity;
       if (isVoiceLike) {
         if (!audioViolationTimer.current) audioViolationTimer.current = Date.now();
-        // Require 4 s of sustained voice-like signal before flagging (was 2 s)
-        if (Date.now() - audioViolationTimer.current > 4000) {
-          const fired = handleCheatAttemptRef.current?.('Voice / Murmur Detected Near Microphone', 'audio_detected', 15000);
+        // Sustained for 2.5 s to catch obvious speaking or singing without
+        // punishing a single cough or tap.
+        if (Date.now() - audioViolationTimer.current > 2500) {
+          const fired = handleCheatAttemptRef.current?.('Voice / Murmur Detected Near Microphone', 'audio_detected', 12000);
           if (fired) audioViolationTimer.current = null;
         }
       } else {
         audioViolationTimer.current = null;
         // Slowly drift baseline to adapt to room ambience
-        cal.baseline = baseline * 0.97 + voiceAvg * 0.03;
+        cal.baseline = baseline * 0.98 + voiceAvg * 0.02;
       }
     }, 500);
 
@@ -335,7 +355,7 @@ export default function AssessmentTaker() {
     const cvInterval = setInterval(async () => {
       const vid = videoRef.current;
       const videoTrack = streamRef.current?.getVideoTracks?.()[0];
-      const trackDead = !videoTrack || videoTrack.readyState !== 'live' || videoTrack.muted || !videoTrack.enabled || !vid || vid.videoWidth === 0;
+      const trackDead = !videoTrack || videoTrack.readyState !== 'live' || videoTrack.muted || !videoTrack.enabled;
 
       if (trackDead) {
         if (!cameraTrackViolationTimer.current) cameraTrackViolationTimer.current = Date.now();
@@ -346,25 +366,49 @@ export default function AssessmentTaker() {
         return;
       }
       cameraTrackViolationTimer.current = null;
+      if (!vid || vid.readyState < 2 || vid.videoWidth === 0) return;
 
       // ── Native FaceDetector (preferred) ──────────────────────────────────────
       if (faceDetectorRef.current && vid.readyState >= 2) {
         try {
           const faces = await faceDetectorRef.current.detect(vid);
 
-          if (faces.length === 0) {
-            // No face in frame
-            if (!motionViolationTimer.current) motionViolationTimer.current = Date.now();
-            if (Date.now() - motionViolationTimer.current > 3000) {
-              handleCheatAttempt('Face Not Visible in Camera', 'person_not_visible');
+          const frameArea = (vid.videoWidth || 1) * (vid.videoHeight || 1);
+          const significantFaces = faces.filter(face => {
+            const box = face.boundingBox;
+            if (!box) return false;
+            const areaRatio = (box.width * box.height) / frameArea;
+            const centerX = box.x + box.width / 2;
+            const centerY = box.y + box.height / 2;
+            const reasonablyCentered = centerX >= vid.videoWidth * 0.08 && centerX <= vid.videoWidth * 0.92 && centerY >= vid.videoHeight * 0.08 && centerY <= vid.videoHeight * 0.92;
+            return areaRatio >= 0.015 && reasonablyCentered;
+          });
+          const hasPrimaryFace = significantFaces.length >= 1;
+          const hasMultipleSignificantFaces = significantFaces.length >= 2;
+
+          if (!hasPrimaryFace) {
+            multipleFacesTimerRef.current = null;
+            // Only strike after we've confirmed a face at least once in this session.
+            if (!seenFaceOnceRef.current) {
+              motionViolationTimer.current = null;
+            } else if (!motionViolationTimer.current) {
+              motionViolationTimer.current = Date.now();
+            } else if (Date.now() - motionViolationTimer.current > 12000) {
+              handleCheatAttempt('Face Not Visible in Camera', 'person_not_visible', 20000);
               captureScreenshot('Face Not Visible');
               motionViolationTimer.current = null;
             }
           } else {
+            seenFaceOnceRef.current = true;
             motionViolationTimer.current = null;
-            if (faces.length > 1) {
-              // Persistent: re-strike every 20 s while extra person stays in frame
-              handleCheatAttempt(`Multiple Faces Detected (${faces.length})`, 'proctoring_violation', 20000);
+            if (hasMultipleSignificantFaces) {
+              if (!multipleFacesTimerRef.current) multipleFacesTimerRef.current = Date.now();
+              if (Date.now() - multipleFacesTimerRef.current > 4000) {
+                handleCheatAttempt(`Multiple Faces Detected (${significantFaces.length})`, 'proctoring_violation', 30000);
+                multipleFacesTimerRef.current = null;
+              }
+            } else {
+              multipleFacesTimerRef.current = null;
             }
           }
 
@@ -407,9 +451,13 @@ export default function AssessmentTaker() {
         let brightness = 0;
         const skinHistogram = new Array(W).fill(0);
         let totalSkinPixels = 0;
+        let centerSkinPixels = 0;
 
         // Top 65% of frame to capture faces, ignoring lower area (hands/keyboard)
         const faceZoneH = Math.floor(H * 0.65);
+        const centerStartX = Math.floor(W * 0.25);
+        const centerEndX = Math.floor(W * 0.75);
+        const centerWidth = centerEndX - centerStartX;
 
         for (let i = 0; i < data.length; i += 4) {
           const px = i / 4, x = px % W, y = Math.floor(px / W);
@@ -423,11 +471,13 @@ export default function AssessmentTaker() {
           if (isSkin) {
             skinHistogram[x]++;
             totalSkinPixels++;
+            if (x >= centerStartX && x < centerEndX) centerSkinPixels++;
           }
         }
 
         const avgBright = brightness / (W * H);
         const overallRatio = totalSkinPixels / (W * faceZoneH);
+        const centerRatio = centerSkinPixels / (centerWidth * faceZoneH);
 
         // ── Brightness checks ─────────────────
         if (avgBright < 8) {
@@ -439,13 +489,6 @@ export default function AssessmentTaker() {
         } else { cameraViolationTimer.current = null; }
 
         // ── Face presence check ─────────────────
-        if (overallRatio < 0.015 && avgBright > 8) {
-          if (!motionViolationTimer.current) motionViolationTimer.current = Date.now();
-          if (Date.now() - motionViolationTimer.current > 5000) {
-            handleCheatAttempt('Person Not Visible in Camera', 'person_not_visible');
-            motionViolationTimer.current = null;
-          }
-        } else { motionViolationTimer.current = null; }
 
         // ── Peak detection for multiple people ──
         // Smooth the histogram slightly
@@ -485,12 +528,44 @@ export default function AssessmentTaker() {
           peaks.push({ start: currentPeakStart, end: W, max: peakMaxVal });
         }
 
+        const centralFacePeak = peaks.find(p => {
+          const width = p.end - p.start;
+          const centerX = (p.start + p.end) / 2;
+          return width >= 18 && width <= 110 && centerX >= W * 0.2 && centerX <= W * 0.8;
+        });
+        const likelyFacePresent = avgBright > 12 && peaks.length <= 1 && overallRatio > 0.018 && centerRatio > 0.012 && !!centralFacePeak;
+        const stronglyMissingFace = avgBright > 14 && peaks.length === 0 && overallRatio < 0.004 && centerRatio < 0.002;
+
+        if (likelyFacePresent) {
+          seenFaceOnceRef.current = true;
+          motionViolationTimer.current = null;
+        } else {
+          const longEnoughSinceStart = sessionStartedAtRef.current && (Date.now() - sessionStartedAtRef.current > 20000);
+          const canStrikeForMissingFace = seenFaceOnceRef.current || longEnoughSinceStart;
+          if (canStrikeForMissingFace && stronglyMissingFace) {
+            if (!motionViolationTimer.current) motionViolationTimer.current = Date.now();
+            if (Date.now() - motionViolationTimer.current > 15000) {
+              handleCheatAttempt('Person Not Visible in Camera', 'person_not_visible', 30000);
+              captureScreenshot('Person Not Visible');
+              motionViolationTimer.current = null;
+            }
+          } else {
+            motionViolationTimer.current = null;
+          }
+        }
+
         // If we see multiple distinct wide peaks separated by gaps, it's multiple faces
-        if (peaks.length >= 2 && avgBright > 8) {
+        const strongPeaks = peaks.filter(p => {
+          const width = p.end - p.start;
+          const centerX = (p.start + p.end) / 2;
+          return width >= 14 && width <= 90 && centerX >= W * 0.05 && centerX <= W * 0.95;
+        });
+        if (strongPeaks.length >= 2 && avgBright > 10 && overallRatio > 0.02) {
           if (!backgroundMovementTimer.current) backgroundMovementTimer.current = Date.now();
-          // Sustained for 3.5 seconds to ensure it's not a hand passing through
-          if (Date.now() - backgroundMovementTimer.current > 3500) {
-            const fired = handleCheatAttempt('Multiple People Detected in Camera', 'proctoring_violation', 20000);
+          // Still require sustained evidence, but not so long that a real second
+          // person in frame is missed during testing.
+          if (Date.now() - backgroundMovementTimer.current > 5000) {
+            const fired = handleCheatAttempt('Multiple People Detected in Camera', 'proctoring_violation', 30000);
             if (fired) backgroundMovementTimer.current = null;
           }
         } else {
@@ -512,20 +587,24 @@ export default function AssessmentTaker() {
   }, [hasStarted, handleCheatAttempt, captureScreenshot]);
 
   useEffect(() => {
-    const handler = () => { if (document.hidden && !submittingRef.current) handleCheatAttempt('Tab Switching'); };
+    const handler = () => {
+      if (!hasStarted || submittingRef.current) return;
+      if (document.hidden) handleCheatAttempt('Tab Switching');
+    };
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
-  }, [handleCheatAttempt]);
+  }, [hasStarted, handleCheatAttempt]);
 
   useEffect(() => {
     const onFSChange = () => {
       const isFS = !!document.fullscreenElement;
       setIsFullscreen(isFS);
-      if (!isFS && !submittingRef.current) handleCheatAttempt('Exiting Fullscreen');
+      if (!hasStarted || submittingRef.current) return;
+      if (!isFS) handleCheatAttempt('Exiting Fullscreen');
     };
     document.addEventListener('fullscreenchange', onFSChange);
     return () => document.removeEventListener('fullscreenchange', onFSChange);
-  }, [handleCheatAttempt]);
+  }, [hasStarted, handleCheatAttempt]);
 
   const handleSubmit = useCallback(async (isMalpractice = false) => {
     if (submitting) return;
@@ -546,7 +625,7 @@ export default function AssessmentTaker() {
       const res = await verifyApi.submitAssessment({
         assessment_id: parseInt(id),
         answers: formattedAnswers,
-        time_taken_seconds: Math.floor((Date.now() - startTime.current) / 1000),
+        time_taken_seconds: startTime.current ? Math.floor((Date.now() - startTime.current) / 1000) : 0,
         proctoring_events: pgEvents.current,
         is_malpractice: isMalpractice,
       });
@@ -568,7 +647,13 @@ export default function AssessmentTaker() {
   const requestFS = () => {
     if (document.documentElement.requestFullscreen) {
       document.documentElement.requestFullscreen()
-        .then(() => { setIsFullscreen(true); setHasStarted(true); })
+        .then(() => {
+          const now = Date.now();
+          sessionStartedAtRef.current = now;
+          if (!startTime.current) startTime.current = now;
+          setIsFullscreen(true);
+          setHasStarted(true);
+        })
         .catch(() => toast.error('Fullscreen blocked. Please click again.'));
     }
   };

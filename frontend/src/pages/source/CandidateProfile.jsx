@@ -105,6 +105,7 @@ export default function CandidateProfile() {
   const { id } = useParams();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [errorDetail, setErrorDetail] = useState(null);
   const [showInvite, setShowInvite] = useState(false);
   const [inviteForm, setInviteForm] = useState({ job_role_id: '', deadline: '' });
   const [jobRoles, setJobRoles] = useState([]);
@@ -168,13 +169,51 @@ export default function CandidateProfile() {
     e.preventDefault();
     setConverting(true);
     try {
-      await sourceApi.convertToEmployee(id, { ...convertForm, offer_content: previewData });
+      // Clean up the request body to avoid 422 errors from empty strings in EmailStr fields
+      const submitBody = { 
+        ...convertForm,
+        salary: String(convertForm.salary || ''),
+        role_title: String(convertForm.role_title || ''),
+        department: String(convertForm.department || ''),
+        offer_content: previewData 
+      };
+      if (!submitBody.recipient_email || !submitBody.recipient_email.includes('@')) {
+        delete submitBody.recipient_email;
+      }
+      
+      await sourceApi.convertToEmployee(id, submitBody);
       toast.success('Offer submitted for approval! 📝');
       setShowPreview(false);
+      
+      // Refetch data with a small delay to ensure DB consistency
+      setTimeout(async () => {
+        try {
+          const r = await sourceApi.getCandidate(id);
+          if (r.data?.data) {
+            setData(r.data.data);
+          }
+        } catch (e) {
+          console.error("Failed to refetch candidate after conversion:", e);
+        }
+      }, 500);
+      
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Conversion failed');
+    } finally {
+      setConverting(false);
+    }
+  };
+
+  const handleSendOffer = async (offerId) => {
+    if (!window.confirm('Are you sure you want to send the finalized offer to the candidate?')) return;
+    setConverting(true);
+    try {
+      await sourceApi.sendOffer(offerId);
+      toast.success('Offer sent to candidate! ✉️');
       const r = await sourceApi.getCandidate(id);
       setData(r.data.data);
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Conversion failed');
+      toast.error(err?.response?.data?.detail || 'Failed to send offer');
     } finally {
       setConverting(false);
     }
@@ -211,15 +250,48 @@ export default function CandidateProfile() {
           recipient_email: r.data.data.user?.email || ''
         }));
       })
+      .catch(err => {
+        const detail = err.response?.data?.detail || err.message;
+        console.error("❌ Failed to fetch candidate:", detail);
+        setErrorDetail(detail);
+        toast.error(`Failed to load candidate: ${detail}`);
+      })
       .finally(() => setLoading(false));
-    
-    verifyApi.getUserResults(id)
-      .then(r => setResults(r.data.data || []))
-      .catch(e => console.error("Failed to fetch user results:", e));
+
+
   }, [id]);
 
+  useEffect(() => {
+    if (data?.user?.id) {
+      verifyApi.getUserResults(data.user.id)
+        .then(r => setResults(r.data.data || []))
+        .catch(e => console.error("Failed to fetch user results:", e));
+    }
+  }, [data?.user?.id]);
+
   if (loading) return <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}><div className="spinner spinner-lg" /></div>;
-  if (!data) return <div className="page-body"><p>Candidate not found.</p></div>;
+  
+  if (!data) return (
+    <div className="page-body">
+      <div className="card" style={{ textAlign: 'center', padding: 48 }}>
+        <div style={{ color: 'var(--danger)', marginBottom: 16 }}><AlertTriangle size={48} /></div>
+        <h3>Candidate Not Found</h3>
+        <p style={{ color: 'var(--text-muted)' }}>
+          We couldn't find a candidate with ID: <strong>{id}</strong>. 
+        </p>
+        {errorDetail && (
+          <div style={{ marginTop: 12, padding: 12, background: 'var(--danger-lightest)', borderRadius: 8, color: 'var(--danger)', fontSize: '0.85rem' }}>
+            <strong>Error:</strong> {errorDetail}
+          </div>
+        )}
+        <p style={{ color: 'var(--text-muted)', marginTop: 16 }}>
+          This might happen if the candidate was deleted or belongs to a different organization.
+        </p>
+        <Link to="/source" className="btn btn-primary" style={{ marginTop: 24 }}>Back to Talent Vault</Link>
+      </div>
+    </div>
+  );
+
 
   const queryParams = new URLSearchParams(window.location.search);
   const roleId = queryParams.get('role_id');
@@ -244,14 +316,14 @@ export default function CandidateProfile() {
             {data.user?.full_name?.[0] || '?'}
           </div>
           <div>
-            <h1 style={{ marginBottom: 4 }}>{data.user?.full_name || 'Unknown'} <span style={{ fontWeight: 400, fontSize: '1rem', opacity: 0.7 }}>({data.type})</span></h1>
+            <h1 style={{ marginBottom: 4 }}>{data.user?.full_name || 'Unknown'} <span style={{ fontWeight: 400, fontSize: '1rem', opacity: 0.7 }}>({data.type || 'Candidate'})</span></h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, color: 'var(--text-muted)', fontSize: '0.875rem' }}>
               {data.location && <span><MapPin size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> {data.location}</span>}
               {data.exp_years > 0 && <span><Clock size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> {data.exp_years} years exp</span>}
-              <span className={`badge badge-${data.status === 'active' ? 'success' : 'muted'}`}>{data.status}</span>
+              <span className={`badge badge-${(data.status || 'active') === 'active' ? 'success' : 'muted'}`}>{data.status || 'active'}</span>
             </div>
           </div>
-          {roleId && fitScore && (
+          {roleId && fitScore && fitScore.score != null && (
             <div style={{ marginLeft: 'auto', textAlign: 'center' }}>
               <div style={{ fontSize: '3rem', fontWeight: 900, color: fitScore.score >= 70 ? 'var(--success)' : fitScore.score >= 40 ? 'var(--warning)' : 'var(--danger)' }}>{Math.round(fitScore.score)}%</div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>Role Fit Score</div>
@@ -503,12 +575,60 @@ export default function CandidateProfile() {
                 )}
                 {data.status !== 'archived' ? (
                   <>
-                    <button onClick={openInviteModal} className="btn btn-primary btn-block" style={{ marginTop: 8 }}>
-                      Send Assessment Invite
-                    </button>
-                    <button onClick={() => setShowConvert(true)} className="btn btn-shimmer btn-block" style={{ marginTop: 12, background: 'linear-gradient(135deg, #10B981, #059669)', border: 'none' }}>
-                      Convert to Employee
-                    </button>
+                    {data.latest_offer && (
+                      <div className="card" style={{ padding: 12, marginBottom: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <span style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>OFFER STATUS</span>
+                          <span className={`badge badge-${data.latest_offer.status === 'approved' ? 'success' : data.latest_offer.status === 'pending' ? 'info' : data.latest_offer.status === 'changes_requested' ? 'warning' : 'muted'}`}>
+                            {(data.latest_offer.status || '').replace('_', ' ').toUpperCase() || 'UNKNOWN'}
+                          </span>
+                        </div>
+                        
+                        {data.latest_offer.feedback && (
+                          <div style={{ fontSize: '0.8rem', color: '#92400e', background: '#fffbeb', padding: 8, borderRadius: 6, marginBottom: 10 }}>
+                            <strong>Feedback:</strong> {data.latest_offer.feedback}
+                          </div>
+                        )}
+
+                        {data.latest_offer.status === 'approved' && (
+                          <button onClick={() => handleSendOffer(data.latest_offer.id)} className="btn btn-primary btn-block" style={{ background: 'var(--success)', borderColor: 'var(--success)' }} disabled={converting}>
+                            {converting ? 'Sending...' : 'Send Final Offer to Candidate'}
+                          </button>
+                        )}
+                        
+                        {(data.latest_offer.status === 'pending' || data.latest_offer.status === 'changes_requested') && (
+                          <button onClick={() => {
+                            setConvertForm({
+                              salary: data.latest_offer.salary,
+                              role_title: data.latest_offer.role_title,
+                              department: data.latest_offer.department,
+                              location: data.latest_offer.location || 'Office',
+                              start_date: data.latest_offer.start_date ? data.latest_offer.start_date.split('T')[0] : '',
+                              recipient_email: data.user?.email || ''
+                            });
+                            let content = data.latest_offer.offer_content;
+                            if (typeof content === 'string') {
+                              try { content = JSON.parse(content); } catch (e) { console.error("Failed to parse offer_content", e); }
+                            }
+                            setPreviewData(content);
+                            setShowPreview(true);
+                          }} className="btn btn-secondary btn-block">
+                            {data.latest_offer.status === 'changes_requested' ? 'Edit & Resubmit Offer' : 'Review/Edit Offer'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {!data.latest_offer && (
+                      <>
+                        <button onClick={openInviteModal} className="btn btn-primary btn-block" style={{ marginTop: 8 }}>
+                          Send Assessment Invite
+                        </button>
+                        <button onClick={() => setShowConvert(true)} className="btn btn-shimmer btn-block" style={{ marginTop: 12, background: 'linear-gradient(135deg, #10B981, #059669)', border: 'none' }}>
+                          Convert to Employee
+                        </button>
+                      </>
+                    )}
                   </>
                 ) : (
                   data.employee_id && (
@@ -646,12 +766,12 @@ export default function CandidateProfile() {
 
                 <div className="form-group">
                   <label className="form-label">Email Subject</label>
-                  <input required className="form-control" value={previewData.subject} onChange={e => setPreviewData({...previewData, subject: e.target.value})} />
+                  <input required className="form-control" value={previewData.subject || ''} onChange={e => setPreviewData({...previewData, subject: e.target.value})} />
                 </div>
 
                 <div className="form-group">
                   <label className="form-label">Salutation</label>
-                  <input required className="form-control" value={previewData.salutation} onChange={e => setPreviewData({...previewData, salutation: e.target.value})} />
+                  <input required className="form-control" value={previewData.salutation || ''} onChange={e => setPreviewData({...previewData, salutation: e.target.value})} />
                 </div>
 
                 <div className="form-group">
@@ -660,7 +780,7 @@ export default function CandidateProfile() {
                     required 
                     className="form-control" 
                     style={{ minHeight: 300, lineHeight: 1.6 }} 
-                    value={previewData.body_paragraphs.join('\n\n')} 
+                    value={(previewData.body_paragraphs || []).join('\n\n')} 
                     onChange={e => setPreviewData({...previewData, body_paragraphs: e.target.value.split('\n\n')})}
                   />
                   <small style={{ color: 'var(--text-muted)' }}>Separate paragraphs with a double line break.</small>
@@ -669,17 +789,17 @@ export default function CandidateProfile() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                   <div className="form-group">
                     <label className="form-label">Closing</label>
-                    <input required className="form-control" value={previewData.closing} onChange={e => setPreviewData({...previewData, closing: e.target.value})} />
+                    <input required className="form-control" value={previewData.closing || ''} onChange={e => setPreviewData({...previewData, closing: e.target.value})} />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Signatory Name</label>
-                    <input required className="form-control" value={previewData.signatory_name} onChange={e => setPreviewData({...previewData, signatory_name: e.target.value})} />
+                    <input required className="form-control" value={previewData.signatory_name || ''} onChange={e => setPreviewData({...previewData, signatory_name: e.target.value})} />
                   </div>
                 </div>
 
                 <div className="form-group">
                   <label className="form-label">Signatory Title</label>
-                  <input required className="form-control" value={previewData.signatory_title} onChange={e => setPreviewData({...previewData, signatory_title: e.target.value})} />
+                  <input required className="form-control" value={previewData.signatory_title || ''} onChange={e => setPreviewData({...previewData, signatory_title: e.target.value})} />
                 </div>
               </div>
               <div className="modal-footer">

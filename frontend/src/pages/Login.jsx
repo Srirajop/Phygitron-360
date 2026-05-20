@@ -33,7 +33,15 @@ export default function Login() {
       if (first_login) {
         navigate('/change-password');
       } else {
-        const homeMap = { candidate: '/verify/dashboard', employee: '/forge', hr: '/source', instructor: '/forge', manager: '/deploy', admin: '/admin/users' };
+        const homeMap = {
+          super_admin: '/platform/dashboard',
+          candidate: '/verify/dashboard',
+          employee: '/forge',
+          hr: '/source',
+          instructor: '/forge/my-courses',
+          manager: '/deploy',
+          org_admin: '/source',
+        };
         navigate(homeMap[role] || '/');
       }
     } catch (err) {

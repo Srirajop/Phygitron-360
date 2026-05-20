@@ -77,6 +77,7 @@ import UserManagement from './pages/admin/UserManagement';
 import OrgSettings from './pages/admin/OrgSettings';
 import SuperAdminDashboard from './pages/admin/SuperAdminDashboard';
 import OrgManagement from './pages/admin/OrgManagement';
+import RoleManagement from './pages/admin/RoleManagement';
 
 // Journey
 import AdminJourneys from './pages/journey/AdminJourneys';
@@ -89,7 +90,7 @@ const ROLE_HOME = {
   hr: '/source',
   instructor: '/forge/my-courses',
   manager: '/deploy',
-  org_admin: '/admin/users',
+  org_admin: '/source',
 };
 
 function PrivateRoute({ children, roles }) {
@@ -106,7 +107,8 @@ function ModuleGate({ children, module }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="page-loader"><div className="spinner" /></div>;
   if (!user) return <Navigate to="/login" replace />;
-  if (user.role === 'super_admin') return children;
+  // Super admin and org admin bypass module gates as they need to manage things
+  if (['super_admin', 'org_admin'].includes(user.role)) return children;
   if (!user.modules?.includes(module)) {
     return <Navigate to={ROLE_HOME[user.role] || '/'} replace />;
   }
@@ -167,8 +169,8 @@ export default function App() {
             <Route path="/platform/settings" element={<PrivateRoute roles={['super_admin']}><AppLayout><div className="page-content center">Global Settings UI (Coming Soon)</div></AppLayout></PrivateRoute>} />
 
             {/* Source */}
-            <Route path="/source" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><SourceDashboard /></AppLayout></PrivateRoute></ModuleGate>} />
-            <Route path="/source/active" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><ActiveCandidates /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/source" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><SourceDashboard /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/source/active" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><ActiveCandidates /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/upload" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><ResumeUpload /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/candidates/:id" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><CandidateProfile /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/invite-status/:roleId" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><InviteStatus /></AppLayout></PrivateRoute></ModuleGate>} />
@@ -180,7 +182,7 @@ export default function App() {
             <Route path="/verify/result/:id" element={<ModuleGate module="verify"><PrivateRoute><AppLayout><ResultScreen /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/verify/leaderboard/:id" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><Leaderboard /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/verify/build" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','instructor']}><AppLayout><AssessmentBuilder /></AppLayout></PrivateRoute></ModuleGate>} />
-            <Route path="/verify/manage" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','instructor']}><AppLayout><ManageAssessments /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/verify/manage" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','instructor','manager']}><AppLayout><ManageAssessments /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/verify/analytics/:id" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><AssessmentAnalytics /></AppLayout></PrivateRoute></ModuleGate>} />
 
             {/* Forge */}
@@ -205,6 +207,7 @@ export default function App() {
             {/* Admin */}
             <Route path="/admin/users" element={<PrivateRoute roles={['org_admin']}><AppLayout><UserManagement /></AppLayout></PrivateRoute>} />
             <Route path="/admin/org-settings" element={<PrivateRoute roles={['org_admin']}><AppLayout><OrgSettings /></AppLayout></PrivateRoute>} />
+            <Route path="/admin/roles" element={<PrivateRoute roles={['org_admin']}><AppLayout><RoleManagement /></AppLayout></PrivateRoute>} />
 
             {/* Journey */}
             <Route path="/admin/journeys" element={<PrivateRoute roles={['hr','org_admin']}><AppLayout><AdminJourneys /></AppLayout></PrivateRoute>} />

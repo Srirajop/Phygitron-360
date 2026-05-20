@@ -41,7 +41,7 @@ export default function AdminJourneys() {
     }
   };
 
-  const canEdit = ['hr', 'admin'].includes(user?.role);
+  const canEdit = ['hr', 'org_admin', 'super_admin'].includes(user?.role);
 
   useEffect(() => { loadData(); }, []);
 

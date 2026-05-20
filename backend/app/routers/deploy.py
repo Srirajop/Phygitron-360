@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, date
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, Body
@@ -28,8 +29,10 @@ from app.utils.auth import (
     generate_temp_password,
     hash_password,
 )
+from app.routers.notifications import create_notification
 
 router = APIRouter(prefix="/api/v1/deploy", tags=["Deploy"])
+logger = logging.getLogger(__name__)
 
 def success(data=None, message=""):
     return {"success": True, "data": data if data is not None else {}, "message": message}
@@ -892,33 +895,53 @@ async def remove_employee_skill(
     await db.commit()
     return success(message="Skill removed")
 
-@router.post("/employees/{id}/offboard")
+@router.post("/employees/{employee_id}/offboard")
 async def offboard_employee(
-    id: int,
+    employee_id: int,
     data: dict = Body(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_role(["org_admin", "hr"]))
 ):
     """Marks an employee as exited and records details."""
-    result = await db.execute(select(Employee).where(Employee.id == id))
-    emp = result.scalar_one_or_none()
-    if not emp: raise HTTPException(404, "Employee not found")
+    try:
+        result = await db.execute(
+            select(Employee).where(Employee.id == employee_id, Employee.org_id == current_user.org_id)
+        )
+        emp = result.scalar_one_or_none()
+        if not emp:
+            raise HTTPException(404, "Employee record not found in your organisation")
 
-    emp.status = EmployeeStatus.exited
-    emp.exit_date = datetime.strptime(data.get("exit_date", date.today().isoformat()), "%Y-%m-%d").date()
-    emp.exit_reason = data.get("reason", "Not specified")
-    emp.clearance_status = "Pending"
+        # Update Status
+        logger.info(f"🚀 Initiating offboarding for Employee ID: {employee_id}")
+        emp.status = EmployeeStatus.offboarded
 
-    # Trigger notification
-    from app.routers.notifications import create_notification
-    await create_notification(
-        db, current_user.id, "Offboarding Initiated", 
-        f"Offboarding process started for {emp.emp_id}. Checklist activated.",
-        NotificationType.success
-    )
+        
+        exit_date_str = data.get("exit_date")
+        if exit_date_str:
+            try:
+                emp.exit_date = datetime.strptime(exit_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD")
+        else:
+            emp.exit_date = date.today()
 
-    await db.commit()
-    return success(message="Employee offboarded successfully")
+        emp.exit_reason = data.get("reason", "Not specified")
+        emp.clearance_status = "Pending"
+
+        # Trigger notification to the admin/manager who initiated
+        await create_notification(
+            db, current_user.id, "Offboarding Initiated", 
+            f"Offboarding process started for {emp.emp_id or 'Employee'}. Checklist activated.",
+            NotificationType.success
+        )
+
+        await db.commit()
+        return success(message="Employee offboarded successfully")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during offboarding: {str(e)}")
+        raise HTTPException(500, detail=f"Internal server error during offboarding: {str(e)}")
 
 @router.get("/departments")
 async def list_departments(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -1419,7 +1442,8 @@ async def create_payroll(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    require_role(current_user, [UserRole.org_admin, UserRole.hr])
+    if current_user.role.value not in ["org_admin", "hr", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     emp_res = await db.execute(select(Employee).where(Employee.id == id, Employee.org_id == current_user.org_id))
     emp = emp_res.scalar_one_or_none()

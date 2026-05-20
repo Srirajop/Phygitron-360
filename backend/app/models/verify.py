@@ -7,6 +7,7 @@ from app.database import Base
 
 class AssessmentType(str, enum.Enum):
     mcq = "mcq"
+    mcq_multi = "mcq_multi"
     coding = "coding"
     written = "written"
     mixed = "mixed"
@@ -15,6 +16,7 @@ class AssessmentType(str, enum.Enum):
 class AssessmentStatus(str, enum.Enum):
     draft = "draft"
     active = "active"
+    inactive = "inactive"
     closed = "closed"
 
 
@@ -64,6 +66,7 @@ class Assessment(Base):
     show_result_immediately = Column(Boolean, default=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     status = Column(Enum(AssessmentStatus), default=AssessmentStatus.draft)
+    is_deleted = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -138,6 +141,7 @@ class AssessmentResult(Base):
     assessment = relationship("Assessment", back_populates="results")
     user = relationship("User", foreign_keys=[user_id])
     proctoring_flags = relationship("ProctoringFlag", back_populates="result")
+    queries = relationship("AssessmentQuery", back_populates="result")
 
 
 class ProctoringFlag(Base):
@@ -152,3 +156,23 @@ class ProctoringFlag(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     result = relationship("AssessmentResult", back_populates="proctoring_flags")
+
+
+class AssessmentQuery(Base):
+    __tablename__ = "assessment_queries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organisations.id"), nullable=False)
+    assessment_id = Column(Integer, ForeignKey("assessments.id"), nullable=False)
+    assessment_result_id = Column(Integer, ForeignKey("assessment_results.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    subject = Column(String(255), nullable=True)
+    message = Column(Text, nullable=False)
+    status = Column(String(50), default="open", nullable=False)
+    response = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    assessment = relationship("Assessment", foreign_keys=[assessment_id])
+    result = relationship("AssessmentResult", back_populates="queries")
+    user = relationship("User", foreign_keys=[user_id])

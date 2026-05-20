@@ -1,14 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { verifyApi, adminApi } from '../../api';
-import { BarChart2, PlusCircle, Send, Eye, Calendar } from 'lucide-react';
+import { BarChart2, PlusCircle, Send, Eye, Calendar, Trash2, Play, Pause } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
 
-const STATUS_BADGE = { draft: 'badge-muted', active: 'badge-success', archived: 'badge-info' };
+const STATUS_BADGE = { 
+  draft: 'badge-muted', 
+  active: 'badge-success', 
+  inactive: 'badge-warning',
+  archived: 'badge-info',
+  closed: 'badge-danger'
+};
 
 export default function ManageAssessments() {
   const { user } = useAuth();
+  const canCreateOrAssign = ['hr', 'org_admin', 'instructor'].includes(user?.role);
+  const canViewAnalytics = ['super_admin', 'org_admin', 'hr', 'manager'].includes(user?.role);
   const [assessments, setAssessments] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -61,11 +69,33 @@ export default function ManageAssessments() {
     } catch { toast.error('Failed'); }
   };
 
+  const toggleStatus = async (id, currentStatus) => {
+    const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
+    try {
+      await verifyApi.updateAssessmentStatus(id, newStatus);
+      setAssessments(a => a.map(x => x.id === id ? { ...x, status: newStatus } : x));
+      toast.success(`Assessment ${newStatus === 'active' ? 'Activated' : 'Deactivated'}`);
+    } catch {
+      toast.error('Failed to update status');
+    }
+  };
+
+  const deleteAssessment = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this assessment? This action cannot be undone.')) return;
+    try {
+      await verifyApi.deleteAssessment(id);
+      setAssessments(a => a.filter(x => x.id !== id));
+      toast.success('Assessment Deleted');
+    } catch {
+      toast.error('Failed to delete assessment');
+    }
+  };
+
   return (
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div><h1>Manage Assessments</h1><p>Create, publish, and monitor assessments</p></div>
-        <Link to="/verify/build" className="btn btn-shimmer"><PlusCircle size={16} /> Create Assessment</Link>
+        {canCreateOrAssign && <Link to="/verify/build" className="btn btn-shimmer"><PlusCircle size={16} /> Create Assessment</Link>}
       </div>
       <div className="page-body">
         <div className="card animate-fade-in">
@@ -84,10 +114,31 @@ export default function ManageAssessments() {
                       <td><span className={`badge ${STATUS_BADGE[a.status] || 'badge-muted'}`}>{a.status}</span></td>
                       <td>
                         <div style={{ display: 'flex', gap: 8 }}>
-                          {a.status === 'draft' && <button className="btn btn-secondary btn-sm" onClick={() => publish(a.id)}>Publish</button>}
-                          {a.status === 'active' && <button className="btn btn-shimmer btn-sm" onClick={() => openAssignModal(a.id)}><Send size={14} /> Assign</button>}
-                          {['super_admin', 'org_admin', 'hr'].includes(user?.role) && (
-                            <Link to={`/verify/analytics/${a.id}`} className="btn btn-ghost btn-sm"><BarChart2 size={14} /></Link>
+                          {canCreateOrAssign && a.status === 'draft' && (
+                            <button className="btn btn-secondary btn-sm" onClick={() => publish(a.id)}>Publish</button>
+                          )}
+                          {canCreateOrAssign && a.status === 'active' && (
+                            <>
+                              <button className="btn btn-shimmer btn-sm" onClick={() => openAssignModal(a.id)} title="Assign">
+                                <Send size={14} /> Assign
+                              </button>
+                              <button className="btn btn-ghost btn-sm text-warning" onClick={() => toggleStatus(a.id, a.status)} title="Deactivate">
+                                <Pause size={14} />
+                              </button>
+                            </>
+                          )}
+                          {canCreateOrAssign && a.status === 'inactive' && (
+                            <button className="btn btn-ghost btn-sm text-success" onClick={() => toggleStatus(a.id, a.status)} title="Activate">
+                              <Play size={14} />
+                            </button>
+                          )}
+                          {canCreateOrAssign && (
+                            <button className="btn btn-ghost btn-sm text-danger" onClick={() => deleteAssessment(a.id)} title="Delete">
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                          {canViewAnalytics && (
+                            <Link to={`/verify/analytics/${a.id}`} className="btn btn-ghost btn-sm" title="Analytics"><BarChart2 size={14} /></Link>
                           )}
                         </div>
                       </td>

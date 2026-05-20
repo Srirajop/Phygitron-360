@@ -8,12 +8,14 @@ from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Backgro
 from app.utils.import_utils import extract_text_from_file, parse_questions_with_ai
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from app.database import get_db
 from app.models.user import User
+from app.models.source import Candidate
 from app.models.verify import (
     Assessment, AssessmentQuestion, AssessmentAssignment,
-    AssessmentResult, ProctoringFlag, ProctoringFlagType, AssessmentStatus, AssignmentStatus
+    AssessmentResult, ProctoringFlag, ProctoringFlagType, AssessmentStatus, AssignmentStatus, AssessmentQuery
 )
 from app.utils.auth import get_current_user, require_role, require_module
 from app.utils.email import send_assignment_notification_email
@@ -25,6 +27,32 @@ logger = logging.getLogger(__name__)
 
 def success(data=None, message=""):
     return {"success": True, "data": data if data is not None else {}, "message": message}
+
+
+def serialize_assessment_query(query: AssessmentQuery, user: Optional[User] = None, candidate: Optional[Candidate] = None):
+    # Try to get owner from provided user or the relationship (if loaded)
+    owner = user
+    if not owner:
+        try:
+            owner = query.user
+        except:
+            owner = None
+            
+    return {
+        "id": query.id,
+        "assessment_id": query.assessment_id,
+        "assessment_result_id": query.assessment_result_id,
+        "user_id": query.user_id,
+        "candidate_profile_id": candidate.id if candidate else None,
+        "candidate_name": (owner.full_name or owner.email) if owner else f"User #{query.user_id}",
+        "candidate_email": owner.email if owner else None,
+        "subject": query.subject,
+        "message": query.message,
+        "status": query.status,
+        "response": query.response,
+        "created_at": query.created_at.isoformat() if query.created_at else None,
+        "updated_at": query.updated_at.isoformat() if query.updated_at else None,
+    }
 
 
 def _extract_examples_from_text(text: str) -> list:
@@ -145,6 +173,20 @@ class AssessmentCreate(BaseModel):
     shuffle_questions: bool = False
     show_result_immediately: bool = True
     questions: List[QuestionCreate] = []
+
+
+class AssessmentStatusUpdate(BaseModel):
+    status: AssessmentStatus
+
+
+class AssessmentQueryRequest(BaseModel):
+    subject: Optional[str] = "Assessment Query"
+    message: str
+
+
+class AssessmentQueryUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    response: Optional[str] = None
 
 
 @router.post("/assessments")
@@ -416,7 +458,7 @@ async def list_assessments(
     current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Assessment).order_by(Assessment.created_at.desc())
+    query = select(Assessment).where(Assessment.is_deleted == False).order_by(Assessment.created_at.desc())
     if current_user.role.value != "super_admin":
         query = query.where(Assessment.org_id == current_user.org_id)
     result = await db.execute(query)
@@ -434,7 +476,7 @@ async def get_assessment(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Assessment).where(Assessment.id == assessment_id, Assessment.org_id == current_user.org_id))
+    result = await db.execute(select(Assessment).where(Assessment.id == assessment_id, Assessment.org_id == current_user.org_id, Assessment.is_deleted == False))
     a = result.scalar_one_or_none()
     if not a:
         raise HTTPException(status_code=404, detail="Assessment not found or access denied")
@@ -481,6 +523,38 @@ async def publish_assessment(
     a.status = AssessmentStatus.active
     await db.commit()
     return success(message="Assessment published")
+
+
+
+@router.patch("/assessments/{assessment_id}/status")
+async def update_assessment_status(
+    assessment_id: int,
+    body: AssessmentStatusUpdate,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Assessment).where(Assessment.id == assessment_id, Assessment.org_id == current_user.org_id))
+    a = result.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    a.status = body.status
+    await db.commit()
+    return success(message=f"Assessment status updated to {body.status.value}")
+
+
+@router.delete("/assessments/{assessment_id}")
+async def delete_assessment(
+    assessment_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Assessment).where(Assessment.id == assessment_id, Assessment.org_id == current_user.org_id))
+    a = result.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    a.is_deleted = True
+    await db.commit()
+    return success(message="Assessment deleted")
 
 
 # ── Assignment ────────────────────────────────────────────────────────────────
@@ -616,7 +690,7 @@ async def my_assessments(
 ):
     result = await db.execute(
         select(AssessmentAssignment, Assessment).join(Assessment)
-        .where(AssessmentAssignment.user_id == current_user.id)
+        .where(AssessmentAssignment.user_id == current_user.id, Assessment.is_deleted == False)
     )
     rows = result.all()
     return success([{
@@ -1627,6 +1701,16 @@ class SubmitRequest(BaseModel):
     proctoring_events: Optional[list] = None
     is_malpractice: bool = False
 
+
+class AssessmentQueryRequest(BaseModel):
+    subject: Optional[str] = None
+    message: str
+
+
+class AssessmentQueryUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    response: Optional[str] = None
+
 async def perform_grading_task(result_id: int, answers_dict: dict, assessment_id: int, user_id: int):
     """Background task to handle AI grading and feedback generation."""
     from app.database import AsyncSessionLocal
@@ -1933,6 +2017,12 @@ async def get_result(
         select(ProctoringFlag).where(ProctoringFlag.assessment_result_id == result_id)
     )
     flags = [{"type": f.flag_type, "details": f.details, "flagged_at": f.flagged_at.isoformat()} for f in flags_res.scalars()]
+    appeal_res = await db.execute(
+        select(AssessmentQuery).options(selectinload(AssessmentQuery.user))
+        .where(AssessmentQuery.assessment_result_id == result_id)
+        .order_by(AssessmentQuery.created_at.desc())
+    )
+    appeal_query = appeal_res.scalars().first()
 
     is_hr = current_user.role.value in ["hr", "org_admin", "manager"]
     fb = json.loads(res.feedback) if res.feedback and res.feedback.startswith("{") else {}
@@ -1951,6 +2041,8 @@ async def get_result(
             "proctoring_flags": [],
             "weak_skill_ids": [],
             "is_released": False,
+            "user_id": res.user_id,
+            "appeal_query": serialize_assessment_query(appeal_query) if appeal_query else None,
         })
 
     return success({
@@ -1966,7 +2058,108 @@ async def get_result(
         "weak_skill_ids": res.weak_skill_ids,
         "is_released": is_released,
         "is_malpractice": res.is_malpractice,
+        "user_id": res.user_id,
+        "appeal_query": serialize_assessment_query(appeal_query) if appeal_query else None,
     })
+
+
+@router.post("/result/{result_id}/appeal")
+async def submit_result_appeal(
+    result_id: int,
+    body: AssessmentQueryRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result_res = await db.execute(
+        select(AssessmentResult, Assessment)
+        .join(Assessment, Assessment.id == AssessmentResult.assessment_id)
+        .where(AssessmentResult.id == result_id)
+    )
+    row = result_res.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    res, asmt = row
+    if res.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not res.is_malpractice:
+        raise HTTPException(status_code=400, detail="Appeals are only available for malpractice-flagged assessments")
+
+    existing_res = await db.execute(
+        select(AssessmentQuery).options(selectinload(AssessmentQuery.user))
+        .where(
+            AssessmentQuery.assessment_result_id == result_id,
+            AssessmentQuery.user_id == current_user.id,
+        )
+    )
+    appeal = existing_res.scalar_one_or_none()
+    if appeal:
+        appeal.subject = body.subject or appeal.subject or "Malpractice Appeal"
+        appeal.message = body.message
+        appeal.status = "open"
+        appeal.response = None
+    else:
+        appeal = AssessmentQuery(
+            org_id=asmt.org_id,
+            assessment_id=asmt.id,
+            assessment_result_id=res.id,
+            user_id=current_user.id,
+            subject=body.subject or "Malpractice Appeal",
+            message=body.message,
+            status="open",
+        )
+        db.add(appeal)
+
+    await db.commit()
+    await db.refresh(appeal)
+    return success(serialize_assessment_query(appeal), "Your appeal has been submitted")
+
+
+@router.get("/assessments/{assessment_id}/queries")
+async def get_assessment_queries(
+    assessment_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(AssessmentQuery, User, Candidate)
+        .join(User, User.id == AssessmentQuery.user_id)
+        .outerjoin(Candidate, Candidate.user_id == User.id)
+        .where(
+            AssessmentQuery.assessment_id == assessment_id,
+            AssessmentQuery.org_id == current_user.org_id,
+        )
+        .order_by(AssessmentQuery.created_at.desc())
+    )
+    rows = result.all()
+    return success([serialize_assessment_query(query, user, candidate) for query, user, candidate in rows])
+
+
+@router.patch("/queries/{query_id}")
+async def update_assessment_query(
+    query_id: int,
+    body: AssessmentQueryUpdateRequest,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    query_res = await db.execute(
+        select(AssessmentQuery).where(
+            AssessmentQuery.id == query_id,
+            AssessmentQuery.org_id == current_user.org_id,
+        )
+    )
+    query = query_res.scalar_one_or_none()
+    if not query:
+        raise HTTPException(status_code=404, detail="Query not found")
+
+    if body.status is not None:
+        query.status = body.status
+    if body.response is not None:
+        query.response = body.response
+
+    await db.commit()
+    await db.refresh(query)
+    return success(serialize_assessment_query(query), "Query updated")
 
 
 @router.get("/leaderboard/{assessment_id}")

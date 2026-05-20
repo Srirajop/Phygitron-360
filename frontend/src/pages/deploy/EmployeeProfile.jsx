@@ -283,7 +283,7 @@ export default function EmployeeProfile() {
                         if (reason && date) {
                            deployApi.offboardEmployee(id, { reason, exit_date: date })
                              .then(() => { toast.success("Employee offboarded"); load(); })
-                             .catch(() => toast.error("Offboarding failed"));
+                             .catch((err) => toast.error(err?.response?.data?.detail || "Offboarding failed"));
                         }
                     }}>
                        <UserCheck size={15} /> Offboard

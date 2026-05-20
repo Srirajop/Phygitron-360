@@ -213,6 +213,42 @@ body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
 </body></html>
 """
 
+COURSE_ASSIGN_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
+.container{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(124,58,237,0.1)}
+.header{background:linear-gradient(135deg,#7C3AED,#6B21A8);padding:40px 32px;text-align:center}
+.header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
+.body{padding:32px}
+.body h2{color:#1e1b4b;font-size:20px}
+.detail-box{background:#f8f5ff;border:1px solid #e9d5ff;border-radius:12px;padding:20px;margin:24px 0}
+.btn{display:inline-block;background:linear-gradient(135deg,#7C3AED,#6B21A8);color:#fff;text-decoration:none;padding:14px 32px;border-radius:10px;font-weight:600;font-size:16px;margin:24px 0}
+.footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
+</style></head>
+<body>
+<div class="container">
+  <div class="header"><h1>New Course Assigned! 🎓</h1></div>
+  <div class="body">
+    <h2>Hi {{ candidate_name }},</h2>
+    <p>A new learning course has been assigned to you to accelerate your skills. Please review the details below:</p>
+    <div class="detail-box">
+      <p style="margin: 8px 0;"><strong>Course:</strong> {{ course_title }}</p>
+      {% if difficulty %}<p style="margin: 8px 0;"><strong>Difficulty:</strong> {{ difficulty }}</p>{% endif %}
+      {% if estimated_hours %}<p style="margin: 8px 0;"><strong>Estimated Effort:</strong> {{ estimated_hours }} hours</p>{% endif %}
+      <p style="margin: 8px 0;"><strong>Complete By:</strong> {{ deadline or 'No deadline' }}</p>
+    </div>
+    <p>We hope this course helps you in your professional journey. You can access it anytime in your dashboard.</p>
+    <div style="text-align: center;">
+      <a href="{{ platform_url }}/forge" class="btn" style="color: #ffffff !important; text-decoration: none;">Start Learning →</a>
+    </div>
+  </div>
+  <div class="footer">© 2025 PHYGITRON 360 · Powered by EwandZDigital</div>
+</div>
+</body></html>
+"""
+
 jinja_env = Environment(loader=BaseLoader())
 
 
@@ -375,3 +411,24 @@ async def send_hr_alert_email(
         action_url=action_url or settings.FRONTEND_URL,
     )
     await send_email(to_email, f"ALERT: {event_title}", html)
+
+
+async def send_course_assignment_notification_email(
+    to_email: str,
+    candidate_name: str,
+    course_title: str,
+    deadline: Optional[str] = None,
+    difficulty: Optional[str] = None,
+    estimated_hours: Optional[float] = None,
+):
+    html = render_template(
+        COURSE_ASSIGN_TEMPLATE,
+        candidate_name=candidate_name,
+        course_title=course_title,
+        deadline=deadline,
+        difficulty=difficulty,
+        estimated_hours=estimated_hours,
+        platform_url=settings.FRONTEND_URL,
+    )
+    await send_email(to_email, f"New Course Assigned: {course_title}", html)
+

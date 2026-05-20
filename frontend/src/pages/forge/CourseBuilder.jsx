@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { forgeApi } from '../../api';
+import { useAuth } from '../../context/AuthContext';
 import { 
   PlusCircle, Trash2, ArrowRight, ArrowLeft, Image as ImageIcon, 
   Video, FileText, HelpCircle, CheckCircle, Save, Send, Eye,
@@ -31,12 +32,14 @@ const blankQuiz = () => ({
 
 export default function CourseBuilder() {
   const nav = useNavigate();
+  const { user } = useAuth();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [uploadingSection, setUploadingSection] = useState(null);
   const [expandedIndex, setExpandedIndex] = useState(0);
   const [isBulkMode, setIsBulkMode] = useState(false);
   const [bulkProgress, setBulkProgress] = useState('');
+  const canPublishDirectly = ['org_admin', 'super_admin'].includes(user?.role);
 
   // Step 1: Metadata
   const [title, setTitle] = useState(''); 
@@ -171,11 +174,11 @@ export default function CourseBuilder() {
       const res = await forgeApi.createCourse(payload);
       const courseId = res.data.data.id;
 
-      if (action === 'publish') {
+      if (action === 'publish' && canPublishDirectly) {
         await forgeApi.publishCourse(courseId);
         toast.success('Course published!');
         nav('/forge/my-courses');
-      } else if (action === 'review') {
+      } else if (action === 'review' || (action === 'publish' && !canPublishDirectly)) {
         await forgeApi.submitForReview(courseId);
         toast.success('Course submitted for review!');
         nav('/forge/my-courses');
@@ -564,7 +567,7 @@ export default function CourseBuilder() {
                 <button className="btn btn-ghost" onClick={() => save('draft')} disabled={loading} style={{ background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', borderRadius: 12, padding: '0 32px', height: 56, fontWeight: 800 }}>
                   SAVE DRAFT
                 </button>
-                <button className="btn btn-primary" onClick={() => save('publish')} disabled={loading} style={{ background: 'var(--forge-text-main)', color: 'var(--forge-bg)', border: 'none', borderRadius: 14, padding: '0 40px', height: 56, fontWeight: 900, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
+                <button className="btn btn-primary" onClick={() => save(canPublishDirectly ? 'publish' : 'review')} disabled={loading} style={{ background: 'var(--forge-text-main)', color: 'var(--forge-bg)', border: 'none', borderRadius: 14, padding: '0 40px', height: 56, fontWeight: 900, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
                   {loading ? 'PROCESSING...' : '🚀 DEPLOY TO FORGE'}
                 </button>
               </div>

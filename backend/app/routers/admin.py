@@ -19,7 +19,133 @@ def success(data=None, message=""):
 @router.get("/users")
 async def list_users(
     role: Optional[str] = None,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    target_org_id = current_user.org_id
+    if current_user.role.value == "super_admin":
+        # In a real SaaS, Super Admin would pass org_id as a param. 
+        # For now, if current_user.org_id is None, they see everything or we can add a param.
+        pass 
+    
+    query = select(User)
+    if current_user.role.value != "super_admin" or target_org_id:
+        query = query.where(User.org_id == target_org_id)
+    if role:
+        query = query.where(User.role == role)
+    result = await db.execute(query)
+    users = result.scalars().all()
+    return success([{
+        "id": u.id, "email": u.email, "full_name": u.full_name,
+        "role": u.role.value, "is_active": u.is_active,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+    } for u in users])
+
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    full_name: str
+    role: str
+    password: str
+
+
+@router.post("/users")
+async def create_user(
+    body: UserCreate,
     current_user: User = Depends(require_role(["org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    existing = await db.execute(select(User).where(User.email == body.email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    user = User(
+        email=body.email,
+        full_name=body.full_name,
+        role=body.role,
+        password_hash=hash_password(body.password),
+        org_id=current_user.org_id,
+        is_active=True,
+        first_login=True,
+    )
+    db.add(user)
+    await db.commit()
+    return success({"id": user.id})
+
+
+@router.put("/users/{user_id}/role")
+async def update_user_role(
+    user_id: int,
+    role: str,
+    current_user: User = Depends(require_role(["org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.role = role
+    await db.commit()
+    return success(message="Role updated")
+
+
+@router.put("/users/{user_id}/toggle-active")
+async def toggle_user_active(
+    user_id: int,
+    current_user: User = Depends(require_role(["org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_active = not user.is_active
+    await db.commit()
+    return success({"is_active": user.is_active})
+
+
+@router.get("/org-settings")
+async def get_org_settings(
+    org_id: Optional[int] = None,
+    current_user: User = Depends(require_role(["org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    target_id = org_id if current_user.role.value == "super_admin" and org_id else current_user.org_id
+    result = await db.execute(select(Organisation).where(Organisation.id == target_id))
+    org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    return success({"id": org.id, "name": org.name, "domain": org.domain, "logo_url": org.logo_url, "primary_color": org.primary_color})
+
+
+class OrgSettingsUpdate(BaseModel):
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    primary_color: Optional[str] = None
+
+
+@router.put("/org-settings")
+async def update_org_settings(
+    body: OrgSettingsUpdate,
+    current_user: User = Depends(require_role(["org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Organisation).where(Organisation.id == current_user.org_id))
+    org = result.scalar_one_or_none()
+    if body.name:
+        org.name = body.name
+    if body.domain:
+        org.domain = body.domain
+    if body.primary_color:
+        org.primary_color = body.primary_color
+    await db.commit()
+    return success(message="Settings updated")
+
+
+@router.get("/skills")
+async def list_skills(
+    q: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     target_org_id = current_user.org_id
@@ -155,3 +281,53 @@ async def list_skills(
     result = await db.execute(query)
     skills = result.scalars().all()
     return success([{"id": s.id, "name": s.name, "normalized_name": s.normalized_name, "category": s.category} for s in skills])
+
+
+@router.get("/role-permissions")
+async def get_role_permissions(
+    current_user: User = Depends(require_role(["org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.role_permission import RolePermission
+    result = await db.execute(select(RolePermission).where(RolePermission.org_id == current_user.org_id))
+    perms = result.scalars().all()
+    
+    # Pre-fill empty ones to make UI easier
+    data = {}
+    for p in perms:
+        data[p.role.value] = p.allowed_modules
+    
+    return success(data)
+
+
+class RolePermissionUpdate(BaseModel):
+    role: str
+    allowed_modules: List[str]
+
+
+@router.put("/role-permissions")
+async def update_role_permissions(
+    body: RolePermissionUpdate,
+    current_user: User = Depends(require_role(["org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.role_permission import RolePermission
+    
+    result = await db.execute(select(RolePermission).where(
+        RolePermission.org_id == current_user.org_id,
+        RolePermission.role == body.role
+    ))
+    perm = result.scalar_one_or_none()
+    
+    if perm:
+        perm.allowed_modules = body.allowed_modules
+    else:
+        perm = RolePermission(
+            org_id=current_user.org_id,
+            role=body.role,
+            allowed_modules=body.allowed_modules
+        )
+        db.add(perm)
+        
+    await db.commit()
+    return success(message="Role permissions updated")

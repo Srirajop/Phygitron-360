@@ -3,8 +3,11 @@ import { useParams, Link } from 'react-router-dom';
 import { verifyApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import { CheckCircle, XCircle, Trophy, BookOpen, BarChart2, Download, ExternalLink, FileText } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 const CONFETTI_COLORS = ['#7C3AED', '#A855F7', '#EC4899', '#06B6D4', '#F59E0B', '#10B981'];
+const PROCTORING_EVIDENCE_TYPES = new Set(['screenshot', 'audio_snippet']);
+const MAX_STRIKES = 5;
 
 function Confetti() {
   return (
@@ -29,6 +32,8 @@ export default function ResultScreen() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showConfetti, setShowConfetti] = useState(false);
+  const [appealText, setAppealText] = useState('');
+  const [appealSubmitting, setAppealSubmitting] = useState(false);
 
   useEffect(() => {
     let interval;
@@ -36,6 +41,7 @@ export default function ResultScreen() {
       verifyApi.getResult(id).then(r => {
         const data = r.data.data;
         setResult(data);
+        setAppealText(data.appeal_query?.message || '');
         if (data.pass_status) { setShowConfetti(true); setTimeout(() => setShowConfetti(false), 5000); }
         
         // Stop polling if graded
@@ -77,6 +83,25 @@ export default function ResultScreen() {
   }
   const strengths = Array.isArray(f.strengths) ? f.strengths : [];
   const improvements = Array.isArray(f.improvement_areas) ? f.improvement_areas : (Array.isArray(f.areas_for_improvement) ? f.areas_for_improvement : []);
+  const appealQuery = result.appeal_query;
+  const proctoringFlags = Array.isArray(result.proctoring_flags) ? result.proctoring_flags : [];
+  const violationFlags = proctoringFlags.filter(flag => !PROCTORING_EVIDENCE_TYPES.has(flag.type));
+
+  const handleSubmitAppeal = async () => {
+    if (!appealText.trim()) return;
+    setAppealSubmitting(true);
+    try {
+      const res = await verifyApi.submitAppeal(result.result_id, {
+        subject: 'Malpractice Appeal',
+        message: appealText.trim(),
+      });
+      setResult(prev => ({ ...prev, appeal_query: res.data.data }));
+    } catch {
+      toast.error('Failed to submit appeal');
+    } finally {
+      setAppealSubmitting(false);
+    }
+  };
 
   return (
     <div>
@@ -104,11 +129,100 @@ export default function ResultScreen() {
               <div style={{ background: 'white', border: '1px solid #FEE2E2', borderRadius: 12, padding: 20, marginTop: 32, textAlign: 'left' }}>
                 <div style={{ fontWeight: 700, marginBottom: 10, fontSize: '0.75rem', color: '#991B1B', letterSpacing: '0.05em' }}>SESSION STATUS</div>
                 <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', display: 'grid', gap: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Security Strikes</span> <span style={{ fontWeight: 700 }}>3 of 3</span></div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Security Strikes</span> <span style={{ fontWeight: 700 }}>{violationFlags.length} of {MAX_STRIKES}</span></div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>System Decision</span> <span style={{ color: '#ef4444', fontWeight: 700 }}>Candidate Terminated</span></div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Permanent Record</span> <span style={{ fontWeight: 700 }}>Flagged ⚠️</span></div>
                 </div>
               </div>
+              {(user?.id == result.user_id || ['hr', 'org_admin', 'manager'].includes(user?.role)) && (
+                <div style={{ background: 'white', border: '1px solid #FEE2E2', borderRadius: 12, padding: 20, marginTop: 20, textAlign: 'left' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 8, fontSize: '0.95rem', color: '#991B1B' }}>Appeal / Query</div>
+                  {user?.id == result.user_id ? (
+                    <>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: 12 }}>
+                        If you believe this malpractice flag was incorrect, write your explanation here. HR, admins, and managers can review it later.
+                      </p>
+                      <textarea
+                        className="form-control"
+                        rows={5}
+                        value={appealText}
+                        onChange={e => setAppealText(e.target.value)}
+                        placeholder="Explain what happened during the assessment..."
+                        disabled={appealSubmitting}
+                      />
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                          {appealQuery?.updated_at ? `Last updated ${new Date(appealQuery.updated_at).toLocaleString()}` : 'No appeal submitted yet'}
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {appealQuery && <span className="badge badge-info">{appealQuery.status || 'open'}</span>}
+                          <button className="btn btn-primary btn-sm" onClick={handleSubmitAppeal} disabled={appealSubmitting || !appealText.trim()}>
+                            {appealSubmitting ? 'Submitting...' : (appealQuery ? 'Update Appeal' : 'Submit Appeal')}
+                          </button>
+                        </div>
+                      </div>
+                      {appealQuery?.response && (
+                        <div style={{ marginTop: 16, padding: 12, background: 'var(--primary-lightest)', borderRadius: 8, border: '1px solid var(--primary-light)' }}>
+                          <div style={{ fontWeight: 700, fontSize: '0.75rem', color: 'var(--primary)', marginBottom: 4 }}>OFFICIAL RESPONSE</div>
+                          <div style={{ fontSize: '0.85rem' }}>{appealQuery.response}</div>
+                        </div>
+                      )}
+                    </>
+                  ) : appealQuery ? (
+                    <>
+                      <div style={{ background: 'var(--bg-page)', padding: 12, borderRadius: 8, border: '1px solid var(--border)', marginBottom: 16 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.8rem', marginBottom: 4 }}>Candidate Explanation:</div>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{appealQuery.message}</div>
+                      </div>
+                      
+                      <div className="form-group">
+                        <label className="form-label" style={{ fontSize: '0.8rem' }}>Internal Response / Decision</label>
+                        <textarea
+                          className="form-control"
+                          rows={3}
+                          value={appealQuery.response || ''}
+                          placeholder="Write a response or explain the final decision..."
+                          onChange={async (e) => {
+                            const val = e.target.value;
+                            try {
+                              await verifyApi.updateAssessmentQuery(appealQuery.id, { response: val });
+                              setResult(prev => ({ 
+                                ...prev, 
+                                appeal_query: { ...prev.appeal_query, response: val } 
+                              }));
+                            } catch {}
+                          }}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>ID: #{appealQuery.id}</div>
+                        <select 
+                          className="form-control" 
+                          style={{ width: 'auto', padding: '4px 12px' }}
+                          value={appealQuery.status || 'open'}
+                          onChange={async (e) => {
+                            const status = e.target.value;
+                            try {
+                              await verifyApi.updateAssessmentQuery(appealQuery.id, { status });
+                              setResult(prev => ({ 
+                                ...prev, 
+                                appeal_query: { ...prev.appeal_query, status } 
+                              }));
+                              toast.success(`Marked as ${status}`);
+                            } catch { toast.error('Failed'); }
+                          }}
+                        >
+                          <option value="open">Open</option>
+                          <option value="reviewing">Reviewing</option>
+                          <option value="resolved">Resolved</option>
+                        </select>
+                      </div>
+                    </>
+                  ) : (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No appeal has been submitted by the candidate yet.</p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         ) : result.score === null ? (
@@ -234,31 +348,33 @@ export default function ResultScreen() {
           <div className="card animate-fade-in stagger-3" style={{ maxWidth: 640, margin: '0 auto 24px' }}>
             <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h4>📹 Proctoring Report</h4>
-              {result.proctoring_flags.filter(f => f.type !== 'screenshot').length === 0 ? (
+              {violationFlags.length === 0 ? (
                 <span className="badge badge-success">Clean</span>
               ) : (
-                <span className="badge badge-danger">{result.proctoring_flags.filter(f => f.type !== 'screenshot').length} Violations</span>
+                <span className="badge badge-danger">{violationFlags.length} Violations</span>
               )}
             </div>
             <div className="card-body">
-              {result.proctoring_flags.length === 0 ? (
+              {proctoringFlags.length === 0 ? (
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <CheckCircle size={16} color="var(--success)" /> No proctoring events were recorded.
                 </div>
               ) : (
                 <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.875rem', color: 'var(--text-primary)' }}>
-                  {[...(result.proctoring_flags || [])].sort((a, b) => new Date(a.flagged_at) - new Date(b.flagged_at)).map((flag, idx) => (
+                  {[...proctoringFlags].sort((a, b) => new Date(a.flagged_at) - new Date(b.flagged_at)).map((flag, idx) => (
                     <li key={idx} style={{ marginBottom: 12 }}>
-                      <span className={`badge ${flag.type === 'screenshot' ? 'badge-muted' : 'badge-danger'}`} style={{ marginRight: 8, fontSize: '0.7rem' }}>
+                      <span className={`badge ${PROCTORING_EVIDENCE_TYPES.has(flag.type) ? 'badge-muted' : 'badge-danger'}`} style={{ marginRight: 8, fontSize: '0.7rem' }}>
                         {flag.type.replace('_', ' ').toUpperCase()}
                       </span>
                       at {new Date(flag.flagged_at).toLocaleTimeString()}: 
-                      {flag.type === 'screenshot' ? (
+                      {PROCTORING_EVIDENCE_TYPES.has(flag.type) ? (
                         <div style={{ marginTop: 8 }}>
-                          {flag.details?.startsWith('data:image') ? (
+                          {flag.type === 'screenshot' && flag.details?.startsWith('data:image') ? (
                             <img src={flag.details} alt="Proctor Snapshot" style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                          ) : flag.type === 'audio_snippet' ? (
+                            <span className="text-muted"> [Audio evidence captured]</span>
                           ) : (
-                            <span className="text-muted"> [Snapshot recorded but data missing]</span>
+                            <span className="text-muted"> [Evidence recorded]</span>
                           )}
                         </div>
                       ) : (

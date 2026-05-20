@@ -55,6 +55,7 @@ export const sourceApi = {
 
   listJobRoles: () => api.get('/api/v1/source/job-roles'),
   createJobRole: (data) => api.post('/api/v1/source/job-roles', data),
+  updateJobRole: (id, data) => api.put(`/api/v1/source/job-roles/${id}`, data),
   deleteJobRole: (id) => api.delete(`/api/v1/source/job-roles/${id}`),
   deleteAllJobRoles: () => api.delete('/api/v1/source/job-roles'),
   sendInvite: (data) => api.post('/api/v1/source/send-invite', data),
@@ -73,6 +74,8 @@ export const sourceApi = {
   updateOffer: (id, data) => api.put(`/api/v1/source/offers/${id}`, data),
   approveOffer: (id) => api.post(`/api/v1/source/offers/${id}/approve`),
   rejectOffer: (id) => api.post(`/api/v1/source/offers/${id}/reject`),
+  requestChangesOffer: (id, feedback) => api.post(`/api/v1/source/offers/${id}/request-changes`, { feedback }),
+  sendOffer: (id) => api.post(`/api/v1/source/offers/${id}/send`),
 };
 
 // ── Verify ────────────────────────────────────────────────────────────────
@@ -81,6 +84,8 @@ export const verifyApi = {
   listAssessments: () => api.get('/api/v1/verify/assessments'),
   getAssessment: (id) => api.get(`/api/v1/verify/assessments/${id}`),
   publishAssessment: (id) => api.post(`/api/v1/verify/assessments/${id}/publish`),
+  updateAssessmentStatus: (id, status) => api.patch(`/api/v1/verify/assessments/${id}/status`, { status }),
+  deleteAssessment: (id) => api.delete(`/api/v1/verify/assessments/${id}`),
   assignAssessment: (id, data) => api.post(`/api/v1/verify/assessments/${id}/assign`, data),
   myAssessments: () => api.get('/api/v1/verify/my-assessments'),
   submitAssessment: (data) => api.post('/api/v1/verify/submit', data),
@@ -88,9 +93,12 @@ export const verifyApi = {
   generateCodingMeta: (data) => api.post('/api/v1/verify/generate-coding-meta', data),
   myResults: () => api.get('/api/v1/verify/my-results'),
   getResult: (id) => api.get(`/api/v1/verify/result/${id}`),
+  submitAppeal: (resultId, data) => api.post(`/api/v1/verify/result/${resultId}/appeal`, data),
   leaderboard: (id) => api.get(`/api/v1/verify/leaderboard/${id}`),
   analytics: (id) => api.get(`/api/v1/verify/analytics/${id}`),
   assessmentSubmissions: (id) => api.get(`/api/v1/verify/assessments/${id}/submissions`),
+  assessmentQueries: (id) => api.get(`/api/v1/verify/assessments/${id}/queries`),
+  updateAssessmentQuery: (queryId, data) => api.patch(`/api/v1/verify/queries/${queryId}`, data),
   releaseResult: (id) => api.post(`/api/v1/verify/result/${id}/release`),
   importQuestions: (formData) => api.post('/api/v1/verify/import-questions', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   importFromUrl: (url) => api.post('/api/v1/verify/import-url', { url }),
@@ -128,13 +136,13 @@ export const forgeApi = {
   transcript: () => api.get('/api/v1/forge/transcript'),
   uploadVideo: (fileData) => api.post('/api/v1/forge/upload-video', fileData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   bulkUploadZip: (file) => {
-    // For large raw binary uploads, we want to avoid Axios transformations
-    return api.post('/api/v1/forge/courses/bulk-zip', file, {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.post('/api/v1/forge/courses/bulk-zip', fd, {
       headers: {
-        'Content-Type': 'application/zip',
         'X-Filename': file?.name || 'course-package.zip',
+        'Content-Type': 'multipart/form-data',
       },
-      transformRequest: [(data) => data], // Don't transform the File object
     });
   },
 };
@@ -207,6 +215,8 @@ export const adminApi = {
   orgSettings: () => api.get('/api/v1/admin/org-settings'),
   updateOrgSettings: (data) => api.put('/api/v1/admin/org-settings', data),
   listSkills: (q) => api.get('/api/v1/admin/skills', { params: { q } }),
+  getRolePermissions: () => api.get('/api/v1/admin/role-permissions'),
+  updateRolePermissions: (data) => api.put('/api/v1/admin/role-permissions', data),
 };
 
 // ── Journey ───────────────────────────────────────────────────────────────

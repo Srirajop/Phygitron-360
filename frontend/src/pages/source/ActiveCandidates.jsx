@@ -115,10 +115,15 @@ export default function ActiveCandidates() {
                         {new Date(c.created_at).toLocaleDateString()}
                       </td>
                       <td style={{ padding: '16px 24px' }}>
-                         <Link to={`/source/candidates/${c.id}`} className="btn btn-ghost btn-sm" style={{ gap: '6px' }}>
+                         <Link 
+                           to={c.is_employee ? `/deploy/employee/${c.employee_id}` : `/source/candidates/${c.id}`} 
+                           className="btn btn-ghost btn-sm" 
+                           style={{ gap: '6px' }}
+                         >
                             View Profile
                          </Link>
                       </td>
+
                     </tr>
                   );
                 })}

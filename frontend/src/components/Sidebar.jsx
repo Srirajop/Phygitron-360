@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   Users, Upload, CheckSquare, BookOpen, Briefcase, Settings,
   LogOut, BarChart2, PlusCircle, FileText, Award, Map, Target,
-  Layers, UserCheck, Home, Cpu, Milestone, Clock
+  Layers, UserCheck, Home, Cpu, Milestone, Clock, Shield
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -54,6 +54,7 @@ const roleNavItems = {
       { to: '/deploy/attendance', label: 'Attendance', icon: Clock },
       { to: '/admin/users', label: 'Users', icon: Users },
       { to: '/deploy/skill-map', label: 'Skills', icon: Map },
+      { to: '/admin/roles', label: 'Role Management', icon: Shield },
       { to: '/admin/org-settings', label: 'Settings', icon: Settings },
       { to: '/deploy/analytics', label: 'Analytics', icon: BarChart2 },
     ]},
@@ -61,6 +62,7 @@ const roleNavItems = {
       { to: '/forge', label: 'Dashboard', icon: BookOpen },
       { to: '/forge/library', label: 'Learning Paths', icon: Layers },
       { to: '/forge/my-courses', label: 'Course Builder', icon: FileText },
+      { to: '/forge/build', label: 'Studio', icon: PlusCircle },
     ]},
   ],
   candidate: [
@@ -86,6 +88,14 @@ const roleNavItems = {
     ]},
   ],
   manager: [
+    { section: 'Source', module: 'source', items: [
+      { to: '/source', label: 'Talent Vault', icon: Users },
+      { to: '/source/active', label: 'Active Candidates', icon: UserCheck },
+      { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
+    ]},
+    { section: 'Verify', module: 'verify', items: [
+      { to: '/verify/manage', label: 'Assessments', icon: CheckSquare },
+    ]},
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'My Team', icon: Users },
       { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
@@ -125,8 +135,11 @@ export default function Sidebar() {
   const rawNavItems = roleNavItems[user?.role] || [];
   
   // Conditionally render nav sections based on user.modules
+  // Super admin and org admin bypass module gates
+  const bypassModuleGate = ['super_admin', 'org_admin'].includes(user?.role);
   const navItems = rawNavItems.filter(group => {
     if (!group.module) return true;
+    if (bypassModuleGate) return true;
     return user?.modules?.includes(group.module);
   });
 

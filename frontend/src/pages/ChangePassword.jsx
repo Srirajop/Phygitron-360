@@ -32,7 +32,15 @@ export default function ChangePassword() {
       await authApi.changePassword(password);
       updateUser({ first_login: false });
       toast.success('Password changed! Welcome to PHYGITRON 360 🎉');
-      const homeMap = { candidate: '/verify/dashboard', employee: '/forge', hr: '/source', instructor: '/forge', manager: '/deploy', admin: '/admin/users' };
+      const homeMap = {
+        super_admin: '/platform/dashboard',
+        candidate: '/verify/dashboard',
+        employee: '/forge',
+        hr: '/source',
+        instructor: '/forge/my-courses',
+        manager: '/deploy',
+        org_admin: '/source',
+      };
       navigate(homeMap[user?.role] || '/');
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to change password');

@@ -30,18 +30,50 @@ const getGradient = (id) => {
 
 function CompactCourseCard({ course, onNavigate, showProgress }) {
   const cfg = DIFF_CONFIG[course.difficulty] || DIFF_CONFIG.beginner;
+  const isPastDue = (dateStr) => {
+    if (!dateStr) return false;
+    return new Date(dateStr) < new Date();
+  };
+
   return (
-    <div className="forge-course-card" onClick={onNavigate}>
-      <div className="forge-thumbnail" style={{ background: getGradient(course.course_id || course.id), height: 120 }}>
+    <div className="forge-course-card" onClick={onNavigate} style={{ cursor: 'pointer' }}>
+      <div className="forge-thumbnail" style={{ background: getGradient(course.course_id || course.id), height: 120, position: 'relative' }}>
         <div className="forge-thumbnail-overlay" />
         <BookOpen size={24} color="rgba(255,255,255,0.8)" style={{ position: 'relative', zIndex: 2 }} />
         <span className={`forge-card-badge ${cfg.badge}`} style={{ color: 'white', background: cfg.color, transform: 'scale(0.8)', transformOrigin: 'top right' }}>
           {cfg.label}
         </span>
+        {course.triggered_by === 'hr_push' && (
+          <span 
+            className="forge-card-badge-assigned animate-pulse" 
+            style={{ 
+              position: 'absolute', top: 14, left: 14, zIndex: 10, 
+              background: 'linear-gradient(135deg, #EC4899 0%, #8B5CF6 100%)', 
+              color: 'white', padding: '4px 10px', borderRadius: '8px', 
+              fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', 
+              letterSpacing: '0.08em', boxShadow: '0 0 15px rgba(236, 72, 153, 0.4)',
+              border: '1px solid rgba(255, 255, 255, 0.2)'
+            }}
+          >
+            Assigned
+          </span>
+        )}
       </div>
       <div className="card-body" style={{ padding: '16px', display: 'flex', flexDirection: 'column', flex: 1 }}>
         <h4 style={{ margin: '0 0 6px 0', fontSize: '0.9rem', lineHeight: 1.3, fontWeight: 700 }}>{course.title}</h4>
         
+        {course.deadline && (
+          <div style={{ 
+            display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', 
+            color: isPastDue(course.deadline) ? 'var(--danger)' : 'var(--text-muted)', 
+            marginBottom: 10, fontWeight: 600
+          }}>
+            <Clock size={12} style={{ color: isPastDue(course.deadline) ? 'var(--danger)' : 'var(--primary)' }} />
+            <span>Due: {new Date(course.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+            {isPastDue(course.deadline) && <span style={{ color: 'var(--danger)', fontSize: '0.65rem', fontWeight: 800, marginLeft: 4 }}>[OVERDUE]</span>}
+          </div>
+        )}
+
         {showProgress && course.progress_percent !== undefined ? (
           <div style={{ marginTop: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: 4 }}>
@@ -88,7 +120,7 @@ export default function ForgeDashboard() {
   const [allCourses, setAllCourses] = useState([]);
   const [loading, setLoading] = useState(true);
   const nav = useNavigate();
-  const isInstructor = ['instructor', 'admin', 'hr'].includes(user?.role);
+  const isInstructor = ['instructor', 'org_admin', 'hr', 'super_admin'].includes(user?.role);
 
   useEffect(() => {
     Promise.all([forgeApi.dashboard(), forgeApi.library({ limit: 10 })])

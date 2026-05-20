@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { verifyApi } from '../../api';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
+import toast from 'react-hot-toast';
 
 const COLORS = ['#7C3AED', '#10B981', '#EF4444', '#F59E0B'];
 
@@ -9,16 +10,19 @@ export default function AssessmentAnalytics() {
   const { id } = useParams();
   const [data, setData] = useState(null);
   const [submissions, setSubmissions] = useState([]);
+  const [queries, setQueries] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       verifyApi.analytics(id),
-      verifyApi.assessmentSubmissions(id)
+      verifyApi.assessmentSubmissions(id),
+      verifyApi.assessmentQueries(id),
     ])
-      .then(([a, s]) => {
+      .then(([a, s, q]) => {
         setData(a.data.data);
         setSubmissions(s.data.data || []);
+        setQueries(q.data.data || []);
       })
       .finally(() => setLoading(false));
   }, [id]);
@@ -30,6 +34,16 @@ export default function AssessmentAnalytics() {
       toast.success('Result released to candidate!');
     } catch {
       toast.error('Failed to release result');
+    }
+  };
+
+  const handleQueryStatusChange = async (queryId, status) => {
+    try {
+      const res = await verifyApi.updateAssessmentQuery(queryId, { status });
+      setQueries(prev => prev.map(q => q.id === queryId ? { ...q, ...res.data.data } : q));
+      toast.success('Query updated');
+    } catch {
+      toast.error('Failed to update query');
     }
   };
 
@@ -104,6 +118,46 @@ export default function AssessmentAnalytics() {
                           <Link to={`/verify/result/${s.result_id}`} className="btn btn-ghost btn-sm">Review</Link>
                           {!s.is_released && <button className="btn btn-secondary btn-sm" onClick={() => handleRelease(s.result_id)}>Release</button>}
                         </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="card animate-fade-in stagger-5" style={{ marginTop: 24 }}>
+          <div className="card-header"><h4>Queries</h4></div>
+          <div className="table-container">
+            <table>
+              <thead><tr><th>Candidate</th><th>Profile</th><th>Submitted</th><th>Query</th><th>Status</th></tr></thead>
+              <tbody>
+                {queries.length === 0 ? <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>No assessment queries yet.</td></tr> : (
+                  queries.map(q => (
+                    <tr key={q.id}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{q.candidate_name || 'Candidate'}</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{q.candidate_email || '—'}</div>
+                      </td>
+                      <td>
+                        {q.candidate_profile_id ? (
+                          <Link to={`/source/candidates/${q.candidate_profile_id}`} className="btn btn-ghost btn-sm">Open Profile</Link>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)' }}>—</span>
+                        )}
+                      </td>
+                      <td>{q.created_at ? new Date(q.created_at).toLocaleString() : '—'}</td>
+                      <td style={{ minWidth: 280 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{q.subject || 'Assessment Query'}</div>
+                        <div style={{ whiteSpace: 'pre-wrap', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>{q.message}</div>
+                      </td>
+                      <td>
+                        <select className="form-control" value={q.status || 'open'} onChange={e => handleQueryStatusChange(q.id, e.target.value)} style={{ minWidth: 140 }}>
+                          <option value="open">Open</option>
+                          <option value="reviewing">Reviewing</option>
+                          <option value="resolved">Resolved</option>
+                        </select>
                       </td>
                     </tr>
                   ))

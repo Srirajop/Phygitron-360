@@ -65,18 +65,30 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
 
     # Get org modules for the response
     modules = []
+    org_modules = []
     org_name = ""
     if user.org_id:
         org_res = await db.execute(select(Organisation).where(Organisation.id == user.org_id))
         org = org_res.scalar_one_or_none()
         if org:
             org_name = org.name
-            if org.has_source: modules.append("source")
-            if org.has_verify: modules.append("verify")
-            if org.has_forge: modules.append("forge")
-            if org.has_deploy: modules.append("deploy")
+            if org.has_source: org_modules.append("source")
+            if org.has_verify: org_modules.append("verify")
+            if org.has_forge: org_modules.append("forge")
+            if org.has_deploy: org_modules.append("deploy")
+            
+    modules = org_modules.copy()
     if role_level == 1:
         modules = ["source", "verify", "forge", "deploy", "platform"]
+    elif role_level > 2 and user.org_id:
+        from app.models.role_permission import RolePermission
+        rp_res = await db.execute(select(RolePermission).where(
+            RolePermission.org_id == user.org_id,
+            RolePermission.role == user.role
+        ))
+        rp = rp_res.scalar_one_or_none()
+        if rp:
+            modules = [m for m in org_modules if m in rp.allowed_modules]
 
     return success({
         "access_token": access_token,
@@ -98,12 +110,19 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
 
 
 @router.post("/refresh")
-async def refresh_token(body: RefreshRequest):
+async def refresh_token(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
     payload = decode_token(body.refresh_token)
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     user_id = payload.get("sub")
-    new_access = create_access_token({"sub": user_id, "role": payload.get("role"), "org_id": payload.get("org_id")})
+    # Always fetch current role from DB — not from stale token
+    result = await db.execute(select(User).where(User.id == int(user_id)))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+    from app.utils.auth import get_role_level
+    role_level = get_role_level(user.role.value)
+    new_access = create_access_token({"sub": str(user.id), "role": user.role.value, "org_id": user.org_id, "role_level": role_level})
     return success({"access_token": new_access}, "Token refreshed")
 
 
@@ -143,18 +162,30 @@ async def get_me(current_user: User = Depends(get_current_user), db: AsyncSessio
     role_level = get_role_level(current_user.role.value)
 
     modules = []
+    org_modules = []
     org_name = ""
     if current_user.org_id:
         org_res = await db.execute(select(Organisation).where(Organisation.id == current_user.org_id))
         org = org_res.scalar_one_or_none()
         if org:
             org_name = org.name
-            if org.has_source: modules.append("source")
-            if org.has_verify: modules.append("verify")
-            if org.has_forge: modules.append("forge")
-            if org.has_deploy: modules.append("deploy")
+            if org.has_source: org_modules.append("source")
+            if org.has_verify: org_modules.append("verify")
+            if org.has_forge: org_modules.append("forge")
+            if org.has_deploy: org_modules.append("deploy")
+            
+    modules = org_modules.copy()
     if role_level == 1:
         modules = ["source", "verify", "forge", "deploy", "platform"]
+    elif role_level > 2 and current_user.org_id:
+        from app.models.role_permission import RolePermission
+        rp_res = await db.execute(select(RolePermission).where(
+            RolePermission.org_id == current_user.org_id,
+            RolePermission.role == current_user.role
+        ))
+        rp = rp_res.scalar_one_or_none()
+        if rp:
+            modules = [m for m in org_modules if m in rp.allowed_modules]
 
     return success({
         "id": current_user.id,

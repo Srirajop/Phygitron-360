@@ -17,6 +17,7 @@ class OfferStatus(str, enum.Enum):
     pending = "pending"
     approved = "approved"
     rejected = "rejected"
+    changes_requested = "changes_requested"
     sent = "sent"
     accepted = "accepted"
     declined = "declined"
@@ -179,6 +180,7 @@ class OfferLetter(Base):
 
     offer_content = Column(JSON, nullable=False)
     status = Column(Enum(OfferStatus), default=OfferStatus.pending)
+    feedback = Column(Text, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

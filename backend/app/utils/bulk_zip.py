@@ -392,12 +392,11 @@ def process_bulk_zip(zip_path: str, upload_dir: str) -> Dict:
         file_list = materials["file_list"]
         text_context = materials["text_context"]
         
-        # If it's a simple SCORM package (1 SCO) but has many internal assets,
-        # we'll let the AI Architect decide if it should be broken down.
-        if scorm_plan and len(scorm_plan.get("sections", [])) <= 1 and len(file_list) > 3:
-            print("Detected single-SCO manifest with multiple internal assets. Calling AI Architect for granular plan.")
-        elif scorm_plan:
-            # Traditional SCORM course with multiple items in manifest
+        if scorm_plan:
+            # Treat any valid SCORM manifest as authoritative.
+            # A single-SCO SCORM package often contains many internal assets
+            # (videos, posters, JS, audio) that should stay inside one playable
+            # package rather than being split into fake lessons by the fallback planner.
             return {
                 "plan": scorm_plan,
                 "extract_path": extract_path,
