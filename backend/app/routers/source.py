@@ -1,19 +1,23 @@
 import os
+import asyncio
 import tempfile
 import json
 import logging
+import hashlib
+import zipfile
+import uuid
+from pathlib import Path
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Body
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Body, BackgroundTasks, Form
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func
 from pydantic import BaseModel, EmailStr
-from app.database import get_db
+from app.database import get_db, AsyncSessionLocal
 from app.models.user import User, UserRole
 from app.models.source import (
     Candidate, CandidateSkill, JobRole, CandidateInvite, CandidateStatus, 
-    InviteStatus, OfferLetter, OfferStatus
+    InviteStatus, OfferLetter, OfferStatus, BulkUploadJob, JobStatus
 )
 from app.models.ai_score import AIScore, EntityType, ScoreType
 from app.models.skill_taxonomy import SkillTaxonomy
@@ -27,9 +31,394 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/source", tags=["Source"])
 
+RESUME_PDF_SIZE_LIMIT_BYTES = 30 * 1024 * 1024
+RESUME_ZIP_SIZE_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
+RESUME_ZIP_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB chunks — faster I/O throughput
+MAX_TRACKED_BULK_FILES = 100
+IN_PROCESS_PARSE_WORKERS = 8             # was 4 — more parallel AI workers
+DB_COMMIT_BATCH_SIZE = 50               # commit to DB every N resumes (not every 1)
+DB_DETAIL_WRITE_EVERY = 10              # persist processed_details every N resumes
+TEMP_UPLOAD_DIR = Path(tempfile.gettempdir()) / "phygitron360-source"
+ALLOWED_PDF_MIME_TYPES = {"application/pdf", "application/x-pdf"}
+ALLOWED_ZIP_MIME_TYPES = {
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/octet-stream",
+    "multipart/x-zip",
+}
+
+_resume_parse_queue: asyncio.Queue | None = None
+_resume_parse_workers: list[asyncio.Task] = []
+
+# ── Per-job cancellation events ───────────────────────────────────────────────
+# Maps job_id → asyncio.Event that is set when the job should stop immediately.
+_job_cancel_events: dict[int, asyncio.Event] = {}
+
+
+def _get_cancel_event(job_id: int) -> asyncio.Event:
+    if job_id not in _job_cancel_events:
+        _job_cancel_events[job_id] = asyncio.Event()
+    return _job_cancel_events[job_id]
+
+
+def _fire_cancel_event(job_id: int) -> None:
+    """Signal the background task for job_id to stop immediately."""
+    if job_id in _job_cancel_events:
+        _job_cancel_events[job_id].set()
+
+
+def _cleanup_cancel_event(job_id: int) -> None:
+    _job_cancel_events.pop(job_id, None)
+
 
 def success(data=None, message=""):
     return {"success": True, "data": data if data is not None else {}, "message": message}
+
+
+def _is_pdf_filename(filename: Optional[str]) -> bool:
+    return str(filename or "").lower().endswith(".pdf")
+
+
+def _is_zip_filename(filename: Optional[str]) -> bool:
+    return str(filename or "").lower().endswith(".zip")
+
+
+def _compute_resume_hash(pdf_bytes: bytes) -> str:
+    return hashlib.sha256(pdf_bytes).hexdigest()
+
+
+async def _save_large_upload_to_path(file: UploadFile, destination: Path, max_bytes: int) -> int:
+    """Stream-save an upload to disk using a thread-pool for file I/O so the
+    async event loop stays free to handle other HTTP requests during the upload."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    bytes_written = 0
+    loop = asyncio.get_event_loop()
+
+    try:
+        handle = await loop.run_in_executor(None, lambda: open(destination, "wb"))
+        try:
+            while True:
+                chunk = await file.read(RESUME_ZIP_CHUNK_SIZE)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"ZIP file size exceeds the {max_bytes // (1024 * 1024 * 1024)}GB limit",
+                    )
+                # Write in thread pool — never blocks the event loop
+                await loop.run_in_executor(None, handle.write, chunk)
+        finally:
+            await loop.run_in_executor(None, handle.close)
+    except Exception:
+        if destination.exists():
+            await loop.run_in_executor(None, destination.unlink)
+        raise
+    finally:
+        await file.close()
+
+    return bytes_written
+
+
+async def _create_candidate_from_pdf_bytes(
+    *,
+    filename: str,
+    pdf_bytes: bytes,
+    org_id: int,
+    db: AsyncSession,
+    parse_inline: bool = True,
+) -> tuple[Optional[Candidate], bool, str]:
+    resume_hash = _compute_resume_hash(pdf_bytes)
+    existing_candidate_res = await db.execute(
+        select(Candidate).where(
+            Candidate.org_id == org_id,
+            Candidate.resume_hash == resume_hash,
+        )
+    )
+    existing_candidate = existing_candidate_res.scalar_one_or_none()
+    if existing_candidate:
+        logger.info("Skipping duplicate resume %s for org %s", filename, org_id)
+        return existing_candidate, False, ""
+
+    try:
+        extracted_text = extract_text_from_pdf(pdf_bytes)
+        extracted_text = clean_extracted_text(extracted_text)
+    except Exception as e:
+        logger.warning(f"PDF text extraction failed for {filename}: {e}")
+        extracted_text = ""
+
+    email_stub = f"candidate_{uuid.uuid4().hex}@{org_id}.phygitron.local"
+    display_name = Path(filename).stem.replace("_", " ").replace("-", " ").title()
+    new_user = User(
+        email=email_stub,
+        password_hash=hash_password(generate_temp_password()),
+        role=UserRole.candidate,
+        org_id=org_id,
+        first_login=True,
+        full_name=display_name,
+    )
+    db.add(new_user)
+    await db.flush()
+
+    candidate = Candidate(
+        user_id=new_user.id,
+        org_id=org_id,
+        resume_hash=resume_hash,
+        status=CandidateStatus.invited,
+    )
+    db.add(candidate)
+    await db.flush()
+
+    safe_filename = Path(filename).name or f"resume-{candidate.id}.pdf"
+    s3_key = f"{org_id}/resumes/{candidate.id}/{safe_filename}"
+    try:
+        resume_url = await upload_bytes_to_s3(pdf_bytes, s3_key, "application/pdf")
+        candidate.resume_url = resume_url
+    except Exception as e:
+        logger.warning(f"S3 upload failed for {safe_filename}, using mock URL: {e}")
+        candidate.resume_url = f"mock://{s3_key}"
+
+    if parse_inline:
+        await _parse_resume_inline(candidate.id, extracted_text, org_id, db)
+    return candidate, True, extracted_text
+
+
+def _serialize_bulk_job(job: BulkUploadJob, include_details: bool = True) -> dict:
+    return {
+        "id": job.id,
+        "filename": job.filename,
+        "total_files": job.total_files or 0,
+        "processed_files": job.processed_files or 0,
+        "processed_details": (job.processed_details or []) if include_details else [],
+        "status": job.status.value if hasattr(job.status, "value") else str(job.status),
+        "error_message": job.error_message,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+    }
+
+
+def _trim_job_details(details: list[dict]) -> list[dict]:
+    if len(details) <= MAX_TRACKED_BULK_FILES:
+        return details
+    return details[-MAX_TRACKED_BULK_FILES:]
+
+
+async def _resume_parse_worker() -> None:
+    """Async worker that pulls parse jobs from the queue and runs the CPU-bound
+    AI agent in a thread executor so it never blocks the event loop."""
+    global _resume_parse_queue
+    while True:
+        if _resume_parse_queue is None:
+            return
+
+        job = await _resume_parse_queue.get()
+        if job is None:
+            _resume_parse_queue.task_done()
+            return
+
+        candidate_id, extracted_text, org_id = job
+        try:
+            async with AsyncSessionLocal() as db:
+                await _parse_resume_inline(candidate_id, extracted_text, org_id, db)
+                await db.commit()
+        except Exception:
+            logger.exception("In-process parse worker failed for candidate %s", candidate_id)
+        finally:
+            _resume_parse_queue.task_done()
+
+
+async def start_resume_parse_workers() -> None:
+    global _resume_parse_queue, _resume_parse_workers
+    if _resume_parse_workers:
+        return
+
+    _resume_parse_queue = asyncio.Queue()
+    _resume_parse_workers = [
+        asyncio.create_task(_resume_parse_worker(), name=f"resume-parse-worker-{idx}")
+        for idx in range(IN_PROCESS_PARSE_WORKERS)
+    ]
+
+
+async def stop_resume_parse_workers() -> None:
+    global _resume_parse_queue, _resume_parse_workers
+    if _resume_parse_queue is None:
+        return
+
+    for _ in _resume_parse_workers:
+        await _resume_parse_queue.put(None)
+
+    await asyncio.gather(*_resume_parse_workers, return_exceptions=True)
+    _resume_parse_workers = []
+    _resume_parse_queue = None
+
+
+async def enqueue_resume_parse(candidate_id: int, extracted_text: str, org_id: int) -> None:
+    if _resume_parse_queue is None:
+        await start_resume_parse_workers()
+    if _resume_parse_queue is not None:
+        await _resume_parse_queue.put((candidate_id, extracted_text, org_id))
+
+
+async def _process_bulk_resume_zip(job_id: int, zip_path: str) -> None:
+    """
+    Background task to process a bulk resume ZIP.
+
+    Performance improvements vs original:
+    - Cancel is instant via asyncio.Event (no DB round-trip per file)
+    - DB commits are batched every DB_COMMIT_BATCH_SIZE files (was every 1)
+    - processed_details column only written every DB_DETAIL_WRITE_EVERY files
+    - ZIP reading uses executor for CPU-bound PDF byte extraction
+    """
+    cancel_event = _get_cancel_event(job_id)
+    temp_zip_path = Path(zip_path)
+    loop = asyncio.get_event_loop()
+
+    async with AsyncSessionLocal() as db:
+        try:
+            job = await db.get(BulkUploadJob, job_id)
+            if not job:
+                return
+
+            job.status = JobStatus.processing
+            await db.commit()
+
+            # Open the ZIP in a thread (disk I/O)
+            try:
+                archive = await loop.run_in_executor(
+                    None, lambda: zipfile.ZipFile(temp_zip_path, "r")
+                )
+            except zipfile.BadZipFile:
+                job = await db.get(BulkUploadJob, job_id)
+                if job:
+                    job.status = JobStatus.failed
+                    job.error_message = "The uploaded file is not a valid ZIP archive."
+                    await db.commit()
+                return
+
+            try:
+                pdf_entries = [
+                    info for info in archive.infolist()
+                    if not info.is_dir() and _is_pdf_filename(info.filename)
+                ]
+            finally:
+                pass  # keep archive open for processing below
+
+            job.total_files = len(pdf_entries)
+            job.processed_files = 0
+            job.processed_details = []
+            await db.commit()
+
+            if not pdf_entries:
+                job.status = JobStatus.failed
+                job.error_message = "The ZIP archive does not contain any PDF resumes."
+                await db.commit()
+                archive.close()
+                return
+
+            failed_count = 0
+            pending_details: list[dict] = []
+            pending_commits = 0  # count files since last DB commit
+
+            for index, info in enumerate(pdf_entries):
+                # ── Instant cancellation check (no DB needed) ──────────────
+                if cancel_event.is_set():
+                    job = await db.get(BulkUploadJob, job_id)
+                    if job and job.status != JobStatus.cancelled:
+                        job.status = JobStatus.cancelled
+                        await db.commit()
+                    archive.close()
+                    return
+
+                detail: dict = {
+                    "filename": Path(info.filename).name or info.filename,
+                    "status": "done",
+                }
+                try:
+                    if info.file_size > RESUME_PDF_SIZE_LIMIT_BYTES:
+                        raise ValueError("PDF exceeds the 30MB per-file limit inside the ZIP")
+
+                    # Read PDF bytes in thread pool (CPU/IO bound)
+                    def _read_pdf_bytes(arc=archive, entry=info):
+                        with arc.open(entry, "r") as fh:
+                            return fh.read()
+
+                    pdf_bytes = await loop.run_in_executor(None, _read_pdf_bytes)
+
+                    candidate, created, extracted_text = await _create_candidate_from_pdf_bytes(
+                        filename=info.filename,
+                        pdf_bytes=pdf_bytes,
+                        org_id=job.org_id,
+                        db=db,
+                        parse_inline=False,
+                    )
+                    if not created:
+                        detail["status"] = "duplicate"
+                    elif candidate:
+                        # Don't commit yet — batched below
+                        await enqueue_resume_parse(candidate.id, extracted_text, job.org_id)
+
+                except Exception as exc:
+                    logger.warning(
+                        "Bulk resume processing failed for %s in job %s: %s",
+                        info.filename, job_id, exc
+                    )
+                    detail["status"] = "error"
+                    detail["error"] = str(exc)[:300]
+                    failed_count += 1
+
+                pending_details.append(detail)
+                pending_commits += 1
+                job.processed_files = index + 1
+
+                # ── Batch commit every N files ──────────────────────────────
+                if pending_commits >= DB_COMMIT_BATCH_SIZE:
+                    # Only update the JSON column every DB_DETAIL_WRITE_EVERY files
+                    if (index + 1) % DB_DETAIL_WRITE_EVERY == 0 or pending_commits >= DB_COMMIT_BATCH_SIZE:
+                        all_details = list(job.processed_details or []) + pending_details
+                        job.processed_details = _trim_job_details(all_details)
+                        pending_details = []
+                    await db.commit()
+                    pending_commits = 0
+
+            # ── Final flush of any remaining un-committed files ────────────
+            if pending_details:
+                all_details = list(job.processed_details or []) + pending_details
+                job.processed_details = _trim_job_details(all_details)
+
+            archive.close()
+
+            # Only mark completed if not cancelled
+            if not cancel_event.is_set():
+                if failed_count and failed_count == len(pdf_entries):
+                    job.status = JobStatus.failed
+                    job.error_message = "No resumes could be imported from the ZIP archive."
+                else:
+                    job.status = JobStatus.completed
+                    if failed_count:
+                        job.error_message = f"{failed_count} file(s) failed during import."
+            else:
+                job.status = JobStatus.cancelled
+
+            await db.commit()
+
+        except Exception as exc:
+            logger.exception("Bulk resume ZIP job %s failed", job_id)
+            try:
+                job = await db.get(BulkUploadJob, job_id)
+                if job:
+                    job.status = JobStatus.failed
+                    job.error_message = str(exc)[:500]
+                    await db.commit()
+            except Exception:
+                pass
+        finally:
+            _cleanup_cancel_event(job_id)
+            if temp_zip_path.exists():
+                try:
+                    await loop.run_in_executor(None, temp_zip_path.unlink)
+                except Exception:
+                    pass
 
 
 # ── Inline resume parsing (no Celery needed) ─────────────────────────────────
@@ -42,20 +431,22 @@ async def _parse_resume_inline(candidate_id: int, extracted_text: str, org_id: i
     try:
         if not extracted_text or len(extracted_text.strip()) < 20:
             logger.warning(f"Resume text too short for candidate {candidate_id}, skipping AI parse")
-            result = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
-            candidate = result.scalar_one_or_none()
+            candidate = await db.get(Candidate, candidate_id)
             if candidate:
                 candidate.status = CandidateStatus.active
             return
 
-        # Run the AI agent
-        ai_result = run_parse_resume_agent(extracted_text)
+        # Run the AI agent in a thread pool — it's CPU-bound/synchronous and
+        # MUST NOT block the async event loop (would freeze all other requests)
+        loop = asyncio.get_event_loop()
+        ai_result = await loop.run_in_executor(None, run_parse_resume_agent, extracted_text)
 
         # Update candidate user with actual name if found
         extracted_name = ai_result.get("name")
         if extracted_name and len(extracted_name.strip()) > 1:
-            user_res = await db.execute(select(User).join(Candidate).where(Candidate.id == candidate_id))
-            user_rec = user_res.scalar_one_or_none()
+            candidate_res = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
+            candidate_for_user = candidate_res.scalar_one_or_none()
+            user_rec = await db.get(User, candidate_for_user.user_id) if candidate_for_user else None
             if user_rec:
                 user_rec.full_name = extracted_name.strip()
 
@@ -105,9 +496,20 @@ async def _parse_resume_inline(candidate_id: int, extracted_text: str, org_id: i
 
         await db.flush()
 
-        # Process skill graph edges
-        all_skills = await db.execute(select(SkillTaxonomy))
-        skill_lookup = {s.normalized_name: s.id for s in all_skills.scalars()}
+        # Process skill graph edges without reloading the full taxonomy table for every resume
+        relation_names = set()
+        for rel in ai_result.get("relationships", []):
+            from_name = rel.get("from", "").lower().strip()
+            to_name = rel.get("to", "").lower().strip()
+            if from_name:
+                relation_names.add(from_name)
+            if to_name:
+                relation_names.add(to_name)
+
+        relation_skills = await db.execute(
+            select(SkillTaxonomy).where(SkillTaxonomy.normalized_name.in_(list(relation_names)))
+        ) if relation_names else None
+        skill_lookup = {s.normalized_name: s.id for s in relation_skills.scalars()} if relation_skills else {}
 
         for rel in ai_result.get("relationships", []):
             from_id = skill_lookup.get(rel.get("from", "").lower())
@@ -126,8 +528,7 @@ async def _parse_resume_inline(candidate_id: int, extracted_text: str, org_id: i
                     db.add(edge)
 
         # Update candidate
-        result = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
-        candidate = result.scalar_one_or_none()
+        candidate = await db.get(Candidate, candidate_id)
         if candidate:
             candidate.status = CandidateStatus.active
             candidate.exp_years = ai_result.get("experience_years_total", 0)
@@ -152,77 +553,153 @@ async def _parse_resume_inline(candidate_id: int, extracted_text: str, org_id: i
     except Exception as e:
         logger.error(f"Inline resume parsing failed for candidate {candidate_id}: {e}")
         # Mark candidate as parse_failed
-        result = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
-        candidate = result.scalar_one_or_none()
+        candidate = await db.get(Candidate, candidate_id)
         if candidate:
             candidate.status = CandidateStatus.active  # Still set active so it shows up
             # If we want to show parse_failed instead: candidate.status = CandidateStatus.parse_failed
 
 
 # ── Resume Upload ─────────────────────────────────────────────────────────────
-from fastapi import Form
-
 @router.post("/upload-resume")
 async def upload_resume(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     job_role_id: Optional[int] = Form(None),
     current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
-    # Validate MIME type server-side
-    if file.content_type not in ["application/pdf", "application/x-pdf"]:
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+    del job_role_id  # Reserved for future resume-to-role linking.
+
+    filename = file.filename or "resume.pdf"
+    content_type = (file.content_type or "").lower()
+
+    if _is_zip_filename(filename) or content_type in ALLOWED_ZIP_MIME_TYPES:
+        temp_dir = TEMP_UPLOAD_DIR / str(current_user.org_id)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = temp_dir / f"{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}.zip"
+        await _save_large_upload_to_path(file, zip_path, RESUME_ZIP_SIZE_LIMIT_BYTES)
+
+        if not zipfile.is_zipfile(zip_path):
+            if zip_path.exists():
+                zip_path.unlink()
+            raise HTTPException(status_code=400, detail="Please upload a valid ZIP archive.")
+
+        job = BulkUploadJob(
+            org_id=current_user.org_id,
+            created_by=current_user.id,
+            filename=filename,
+            total_files=0,
+            processed_files=0,
+            processed_details=[],
+            status=JobStatus.pending,
+        )
+        db.add(job)
+        await db.flush()
+        await db.commit()
+        await db.refresh(job)
+
+        background_tasks.add_task(_process_bulk_resume_zip, job.id, str(zip_path))
+        return success(
+            {"job_id": job.id, "status": job.status.value},
+            "ZIP upload received. Resume extraction is running in the background.",
+        )
+
+    if content_type not in ALLOWED_PDF_MIME_TYPES and not _is_pdf_filename(filename):
+        raise HTTPException(status_code=400, detail="Only PDF resumes or ZIP archives are accepted")
 
     pdf_bytes = await file.read()
-    if len(pdf_bytes) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File size exceeds 5MB limit")
+    await file.close()
+    if len(pdf_bytes) > RESUME_PDF_SIZE_LIMIT_BYTES:
+        raise HTTPException(status_code=400, detail="PDF file size exceeds 30MB limit")
 
-    # Extract text from PDF
-    try:
-        extracted_text = extract_text_from_pdf(pdf_bytes)
-        extracted_text = clean_extracted_text(extracted_text)
-    except Exception as e:
-        logger.warning(f"PDF text extraction failed: {e}")
-        extracted_text = ""
-
-    # Create candidate user record
-    from datetime import datetime
-    email_stub = f"candidate_{datetime.utcnow().timestamp():.0f}@{current_user.org_id}.phygitron.local"
-    new_user = User(
-        email=email_stub,
-        password_hash=hash_password(generate_temp_password()),
-        role=UserRole.candidate,
+    candidate, created, _ = await _create_candidate_from_pdf_bytes(
+        filename=filename,
+        pdf_bytes=pdf_bytes,
         org_id=current_user.org_id,
-        first_login=True,
-        full_name=file.filename.replace(".pdf", "").replace("_", " ").title(),
+        db=db,
     )
-    db.add(new_user)
-    await db.flush()
-
-    # Create candidate record
-    candidate = Candidate(
-        user_id=new_user.id,
-        org_id=current_user.org_id,
-        status=CandidateStatus.invited,
-    )
-    db.add(candidate)
-    await db.flush()
-
-    # Upload PDF to S3 (or local fallback)
-    s3_key = f"{current_user.org_id}/resumes/{candidate.id}/{file.filename}"
-    try:
-        resume_url = await upload_bytes_to_s3(pdf_bytes, s3_key, "application/pdf")
-        candidate.resume_url = resume_url
-    except Exception as e:
-        logger.warning(f"S3 upload failed, using mock URL: {e}")
-        candidate.resume_url = f"mock://{s3_key}"
-
-    # Parse resume INLINE (no Celery needed)
-    await _parse_resume_inline(candidate.id, extracted_text, current_user.org_id, db)
-
+    if not created:
+        await db.rollback()
+        return success(
+            {"status": "duplicate"},
+            "This resume already exists in Talent Vault and was skipped.",
+        )
     await db.commit()
 
-    return {"success": True, "data": {"candidate_id": candidate.id, "status": "processed"}, "message": "Resume uploaded and parsed successfully."}
+    return success(
+        {"candidate_id": candidate.id, "status": "processed"},
+        "Resume uploaded and parsed successfully.",
+    )
+
+
+@router.get("/bulk-uploads")
+async def list_bulk_uploads(
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(
+            BulkUploadJob.id,
+            BulkUploadJob.filename,
+            BulkUploadJob.total_files,
+            BulkUploadJob.processed_files,
+            BulkUploadJob.status,
+            BulkUploadJob.error_message,
+            BulkUploadJob.created_at,
+            BulkUploadJob.updated_at,
+        )
+        .where(BulkUploadJob.org_id == current_user.org_id)
+        .order_by(BulkUploadJob.id.desc())
+        .limit(20)
+    )
+    jobs = []
+    for row in result.all():
+        jobs.append({
+            "id": row.id,
+            "filename": row.filename,
+            "total_files": row.total_files or 0,
+            "processed_files": row.processed_files or 0,
+            "processed_details": [],
+            "status": row.status.value if hasattr(row.status, "value") else str(row.status),
+            "error_message": row.error_message,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        })
+    return success(jobs)
+
+
+@router.get("/bulk-uploads/{job_id}")
+async def get_bulk_upload_status(
+    job_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    job = await db.get(BulkUploadJob, job_id)
+    if not job or job.org_id != current_user.org_id:
+        raise HTTPException(status_code=404, detail="Bulk upload job not found")
+    return success(_serialize_bulk_job(job, include_details=True))
+
+
+@router.post("/bulk-uploads/{job_id}/cancel")
+async def cancel_bulk_upload(
+    job_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    job = await db.get(BulkUploadJob, job_id)
+    if not job or job.org_id != current_user.org_id:
+        raise HTTPException(status_code=404, detail="Bulk upload job not found")
+    if job.status in {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}:
+        raise HTTPException(status_code=400, detail="This bulk upload can no longer be cancelled")
+
+    # Fire the in-process cancel event immediately — the background task will
+    # stop at its next iteration (< 1 resume delay) without waiting for a DB poll.
+    _fire_cancel_event(job_id)
+
+    job.status = JobStatus.cancelled
+    await db.commit()
+    await db.refresh(job)
+    return success(_serialize_bulk_job(job, include_details=True), "Job cancellation requested")
 
 
 # ── AI Auto-Scoring ─────────────────────────────────────────────────────────
@@ -499,7 +976,7 @@ def compute_ats_score(cand_skills: list, req_skills: list, exp_years: int = 0, m
     return calculate_role_fit(cand_skills, req_skills, exp_years, min_exp)["score"]
 
 
-# ── Candidate Search ─────────────────────────────────────────────────────────
+# ── Candidate Search ───────────────────────────────────────────────────────────────────────────────────
 
 @router.get("/candidates/search")
 async def search_candidates(
@@ -516,7 +993,10 @@ async def search_candidates(
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy import or_, and_
-    
+
+    # Clamp limit to a safe ceiling to prevent accidental full-table loads
+    limit = min(max(limit, 1), 500)
+
     # Base queries
     cand_query = select(Candidate, User).join(User, Candidate.user_id == User.id)
     if current_user.role.value != "super_admin":
@@ -557,6 +1037,10 @@ async def search_candidates(
         q = apply_filters(cand_query, Candidate)
         if pool == "candidate": q = q.where(User.first_login == True)
         elif pool == "trainee": q = q.where(User.first_login == False)
+        # Performance: when no role scoring is needed, apply LIMIT at the
+        # SQL level so the DB only reads `limit` rows instead of the full table.
+        if not role_id:
+            q = q.order_by(Candidate.created_at.desc()).limit(limit)
         res = await db.execute(q)
         for c, u in res:
             ctype = "Candidate" if u.first_login else "Trainee"
@@ -570,12 +1054,13 @@ async def search_candidates(
     # Employees
     if pool in ["all", "employee"]:
         q = apply_filters(emp_query, Employee)
+        if not role_id:
+            q = q.order_by(Employee.created_at.desc()).limit(limit)
         res = await db.execute(q)
         for e, u in res:
             results.append({
                 "id": e.id, "user_id": u.id, "name": e.full_name if hasattr(e, 'full_name') else u.full_name or "Unknown",
                 "email": u.email, "location": getattr(e, 'location', 'Office'), "exp_years": 0,
-
                 "status": e.status.value, "resume_url": None, "type": "Employee",
                 "created_at": e.created_at, "is_employee": True
             })
@@ -590,15 +1075,45 @@ async def search_candidates(
             raise HTTPException(status_code=404, detail="Role not found")
         req_skills = normalise_required_skills(role)
 
+    # ── BATCH SKILLS LOAD ────────────────────────────────────────────────────────────────────────────
+    # Previously: one DB query per candidate → O(N) round-trips (4 000+ queries
+    # for 4 000 resumes).  Now: two IN-clause queries regardless of result size.
+    cand_ids = [item["id"] for item in results if not item["is_employee"]]
+    emp_ids  = [item["id"] for item in results if item["is_employee"]]
+
+    cand_skills_map: dict[int, list] = {}
+    if cand_ids:
+        batch_res = await db.execute(
+            select(CandidateSkill, SkillTaxonomy)
+            .join(SkillTaxonomy)
+            .where(CandidateSkill.candidate_id.in_(cand_ids))
+        )
+        for cs, st in batch_res:
+            cand_skills_map.setdefault(cs.candidate_id, []).append(
+                {"name": st.name, "level": cs.level.value}
+            )
+
+    emp_skills_map: dict[int, list] = {}
+    if emp_ids:
+        emp_batch_res = await db.execute(
+            select(EmployeeSkill, SkillTaxonomy)
+            .join(SkillTaxonomy)
+            .where(EmployeeSkill.employee_id.in_(emp_ids))
+        )
+        for es, st in emp_batch_res:
+            emp_skills_map.setdefault(es.employee_id, []).append(
+                {"name": st.name, "level": es.level.value}
+            )
+    # ────────────────────────────────────────────────────────────────────────────────────
+
     output = results
     for item in output:
-        if not item["is_employee"]:
-            skills_res = await db.execute(select(CandidateSkill, SkillTaxonomy).join(SkillTaxonomy).where(CandidateSkill.candidate_id == item["id"]))
-            item["skills"] = [{"name": st.name, "level": cs.level.value} for cs, st in skills_res]
-        else:
-            skills_res = await db.execute(select(EmployeeSkill, SkillTaxonomy).join(SkillTaxonomy).where(EmployeeSkill.employee_id == item["id"]))
-            item["skills"] = [{"name": st.name, "level": es.level.value} for es, st in skills_res]
-        
+        # Assign pre-loaded skills — zero extra DB queries
+        item["skills"] = (
+            cand_skills_map.get(item["id"], []) if not item["is_employee"]
+            else emp_skills_map.get(item["id"], [])
+        )
+
         item["fit_reason"] = None
         item["required_skills"] = req_skills
 
@@ -610,18 +1125,16 @@ async def search_candidates(
             item["fit_reason"] = fit
         else:
             item["ats_score"] = None
-            
+
         # Calculate Resume ATS Score
         num_skills = len(item["skills"])
         exp = item.get("exp_years") or 0
         loc_points = 10 if item.get("location") else 0
         resume_points = 10 if item.get("resume_url") else 0
-        
         skill_points = min(num_skills * 5, 50)
         exp_points = min(exp * 5, 30)
-        
         item["resume_ats_score"] = skill_points + exp_points + loc_points + resume_points
-            
+
         # Format date
         if isinstance(item["created_at"], datetime):
             item["created_at"] = item["created_at"].isoformat()

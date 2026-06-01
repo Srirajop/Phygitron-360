@@ -212,9 +212,9 @@ export default function SourceDashboard() {
   const [filters, setFilters] = useState(() => {
     try {
       const saved = sessionStorage.getItem('talentVaultFilters');
-      return saved ? JSON.parse(saved) : { pool: 'all', sort_by: 'newest', limit: 100, role_id: '', search: '', location: '', exp_range: '' };
+      return saved ? JSON.parse(saved) : { pool: 'all', sort_by: 'newest', limit: 20, role_id: '', search: '', location: '', exp_range: '' };
     } catch {
-      return { pool: 'all', sort_by: 'newest', limit: 100, role_id: '', search: '', location: '', exp_range: '' };
+      return { pool: 'all', sort_by: 'newest', limit: 20, role_id: '', search: '', location: '', exp_range: '' };
     }
   });
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -581,11 +581,12 @@ export default function SourceDashboard() {
                 value={filters.limit} 
                 onChange={e => setFilters(f => ({ ...f, limit: parseInt(e.target.value) }))}
               >
-                <option value="100">All Resumes</option>
+                <option value="20">Top 20</option>
+                <option value="50">Top 50</option>
+                <option value="100">Top 100</option>
                 <option value="5">Top 5 {filters.role_id && sortCriteria.includes('fit_score') ? '(Best Fit)' : ''}</option>
                 <option value="10">Top 10 {filters.role_id && sortCriteria.includes('fit_score') ? '(Best Fit)' : ''}</option>
                 <option value="15">Top 15</option>
-                <option value="20">Top 20</option>
               </select>
             </div>
             <div style={{ flex: 1, minWidth: 200 }}>

@@ -45,10 +45,16 @@ export const authApi = {
 
 // ── Source ────────────────────────────────────────────────────────────────
 export const sourceApi = {
-  uploadResume: (file, jobRoleId) => {
-    const fd = new FormData(); fd.append('file', file);
+  uploadResume: (file, jobRoleId, onProgress, signal) => {
+    const fd = new FormData();
+    fd.append('file', file);
     if (jobRoleId) fd.append('job_role_id', jobRoleId);
-    return api.post('/api/v1/source/upload-resume', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return api.post('/api/v1/source/upload-resume', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: onProgress,   // real-time bytes-sent feedback
+      timeout: 30 * 60 * 1000,        // 30 min — large ZIPs take time
+      signal,                          // AbortController signal for mid-flight cancel
+    });
   },
   searchCandidates: (params) => api.get('/api/v1/source/candidates/search', { params }),
   getCandidate: (id, params) => api.get(`/api/v1/source/candidates/${id}`, { params }),

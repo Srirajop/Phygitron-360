@@ -62,8 +62,9 @@ class Candidate(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    org_id = Column(Integer, ForeignKey("organisations.id"), nullable=False)
+    org_id = Column(Integer, ForeignKey("organisations.id"), nullable=False, index=True)
     resume_url = Column(String(512), nullable=True)
+    resume_hash = Column(String(64), nullable=True, index=True)
     location = Column(String(255), nullable=True)
     exp_years = Column(Integer, default=0)
     availability = Column(String(100), nullable=True)
@@ -82,7 +83,7 @@ class CandidateSkill(Base):
     __tablename__ = "candidate_skills"
 
     id = Column(Integer, primary_key=True, index=True)
-    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
+    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False, index=True)
     skill_id = Column(Integer, ForeignKey("skill_taxonomy.id"), nullable=False)
     level = Column(Enum(SkillLevel), default=SkillLevel.beginner)
     source = Column(Enum(SkillSource), default=SkillSource.resume)
