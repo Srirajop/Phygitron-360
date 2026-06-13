@@ -476,10 +476,14 @@ export default function AssessmentTaker() {
         try {
           const faces = await faceDetectorRef.current.detect(vid);
           const frameArea = (vid.videoWidth || 1) * (vid.videoHeight || 1);
+          // Minimum face area raised to 3 % of frame (was 0.6 %).
+          // At 0.6 % a blurry poster, a reflection, or a distant face in the
+          // background would count. At 3 % the face must be close and prominent
+          // — a real person in the same room in front of the camera.
           const sigFaces = faces.filter(f => {
             const box = f.boundingBox;
             if (!box) return false;
-            return (box.width * box.height) / frameArea >= 0.006;
+            return (box.width * box.height) / frameArea >= 0.030;
           });
 
           if (sigFaces.length >= 1) {
@@ -495,9 +499,12 @@ export default function AssessmentTaker() {
           }
 
           if (sigFaces.length >= 2) {
+            // Sustained 5 s before flagging (was 2 s).
+            // Someone briefly walking past or a transient reflection won't accumulate
+            // 5 full seconds of detections sampled every 1.8 s.
             if (!multipleFacesTimerRef.current) multipleFacesTimerRef.current = Date.now();
-            else if (Date.now() - multipleFacesTimerRef.current > 2000) {
-              handleCheatAttemptRef.current?.(`Multiple People in Camera (${sigFaces.length} faces)`, 'proctoring_violation', 20000);
+            else if (Date.now() - multipleFacesTimerRef.current > 5000) {
+              handleCheatAttemptRef.current?.(`Multiple People in Camera (${sigFaces.length} faces)`, 'proctoring_violation', 45000);
               multipleFacesTimerRef.current = null;
             }
           } else {
@@ -527,11 +534,31 @@ export default function AssessmentTaker() {
         motionViolationTimer.current = null;
       }
 
-      // ── Multiple people: histogram peak detection ──────────────────────────
-      const smoothed = [...skinHistogram];
-      for (let x = 1; x < W - 1; x++) smoothed[x] = (skinHistogram[x-1] + skinHistogram[x] + skinHistogram[x+1]) / 3;
+      // ── Multiple people: histogram peak detection (pixel-heuristic fallback only) ──
+      // This path runs only when the native FaceDetector API is unavailable.
+      //
+      // FALSE-POSITIVE MITIGATIONS vs. the old implementation
+      // ─────────────────────────────────────────────────────────────────────────
+      //  • peakThreshold doubled (20 % of face-zone height, was 10 %).
+      //    Low threshold lets arms, forearms, and warm walls generate peaks.
+      //  • Peaks must be face-sized: >= 20 px wide on the 160 px canvas (~12 %
+      //    of frame). Thin arm/hand spikes (< 20 px) are ignored.
+      //  • The two peaks must be SEPARATED by a clear gap >= 20 % of frame width
+      //    (32 px). A raised hand stays next to the face; a second person stands
+      //    at a distinct horizontal position.
+      //  • Overall skin ratio raised to 5 % (was 1.5 %). Isolated warm objects
+      //    (mugs, notepads, painted walls) don't push the whole-frame ratio
+      //    this high.
+      //  • Sustained for 6 s (was 2 s). Transient lighting changes, motion blur,
+      //    or a brief arm-raise won't last long enough to trigger.
+      //  • Per-violation cooldown raised to 45 s (was 20 s).
 
-      const peakThreshold = faceZoneH * 0.10;
+      const smoothed = [...skinHistogram];
+      for (let x = 2; x < W - 2; x++) {
+        smoothed[x] = (skinHistogram[x-2] + skinHistogram[x-1] + skinHistogram[x] + skinHistogram[x+1] + skinHistogram[x+2]) / 5;
+      }
+
+      const peakThreshold = faceZoneH * 0.20; // was 0.10
       const peaks = [];
       let inPeak = false, pkStart = 0;
       for (let x = 0; x < W; x++) {
@@ -539,17 +566,31 @@ export default function AssessmentTaker() {
           if (!inPeak) { inPeak = true; pkStart = x; }
         } else if (inPeak) {
           inPeak = false;
-          if (x - pkStart > 8) peaks.push({ start: pkStart, end: x });
+          peaks.push({ start: pkStart, end: x, width: x - pkStart });
         }
       }
-      if (inPeak && (W - pkStart > 8)) peaks.push({ start: pkStart, end: W });
+      if (inPeak) peaks.push({ start: pkStart, end: W, width: W - pkStart });
 
-      // Two or more distinct skin peaks = multiple people
-      const widePeaks = peaks.filter(p => (p.end - p.start) >= 10 && (p.end - p.start) <= 100);
-      if (widePeaks.length >= 2 && avgBright > 12 && overallRatio > 0.015) {
+      // Keep only face-sized peaks (wide enough to be a head, narrow enough
+      // not to be the whole torso or the entire frame).
+      const MIN_PEAK_W = 20; // ~12.5 % of 160 px canvas
+      const MAX_PEAK_W = 70; // ~44 % — excludes full-torso or full-frame blobs
+      const facePeaks = peaks.filter(p => p.width >= MIN_PEAK_W && p.width <= MAX_PEAK_W);
+
+      // Two peaks must have a clear spatial gap between them.
+      const MIN_GAP_PX = Math.floor(W * 0.20); // 32 px at W=160
+      let hasWellSeparatedPair = false;
+      for (let i = 0; i < facePeaks.length - 1; i++) {
+        if (facePeaks[i + 1].start - facePeaks[i].end >= MIN_GAP_PX) {
+          hasWellSeparatedPair = true;
+          break;
+        }
+      }
+
+      if (hasWellSeparatedPair && avgBright > 16 && overallRatio > 0.05) {
         if (!backgroundMovementTimer.current) backgroundMovementTimer.current = Date.now();
-        else if (Date.now() - backgroundMovementTimer.current > 2000) {
-          handleCheatAttemptRef.current?.('Multiple People Detected in Camera', 'proctoring_violation', 20000);
+        else if (Date.now() - backgroundMovementTimer.current > 6000) { // was 2000
+          handleCheatAttemptRef.current?.('Multiple People Detected in Camera', 'proctoring_violation', 45000); // was 20000
           backgroundMovementTimer.current = null;
         }
       } else {
