@@ -852,6 +852,9 @@ async def assign_assessment(
             existing_assgn.deadline = deadline
             existing_assgn.assigned_by = current_user.id
             existing_assgn.custom_questions = custom_q
+            # CRITICAL: Reset proctoring state so the user isn't instantly blocked
+            existing_assgn.strike_count = 0
+            existing_assgn.terminated_by_proctor = False
             new_assignments.append(uid)
             assigned += 1
         else:
