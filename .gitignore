@@ -190,3 +190,15 @@ backend/brain/
 *.log
 backend/*.txt
 .verify_exec/
+
+# Scratch & Temporary local files
+backend/scratch/
+backend/app/assets/new_logo.jpeg
+backend/app/assets/new_page1_img_0.jpeg
+backend/app/assets/new_page1_img_1.jpeg
+Offer Letter_Sample_2026.pdf
+PHYGITRON _360_March 2026 (1).xlsx
+test_offer_letter.pdf
+test_pydantic.py
+test_redact.pdf
+

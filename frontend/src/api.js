@@ -56,7 +56,8 @@ export const sourceApi = {
       signal,                          // AbortController signal for mid-flight cancel
     });
   },
-  searchCandidates: (params) => api.get('/api/v1/source/candidates/search', { params }),
+  searchCandidates: ({ signal, ...params }) => api.get('/api/v1/source/candidates/search', { params, signal }),
+  candidateStats: () => api.get('/api/v1/source/candidates/stats'),
   getCandidate: (id, params) => api.get(`/api/v1/source/candidates/${id}`, { params }),
 
   listJobRoles: () => api.get('/api/v1/source/job-roles'),
@@ -70,6 +71,7 @@ export const sourceApi = {
   convertCandidate: (id, data) => api.post(`/api/v1/source/candidates/${id}/convert`, data),
   convertToEmployee: (id, data) => api.post(`/api/v1/source/candidates/${id}/convert`, data),
   scoreCandidates: (data) => api.post('/api/v1/source/score-candidates', data),
+  updateCandidate: (id, data) => api.put(`/api/v1/source/candidates/${id}`, data),
   deleteCandidate: (id) => api.delete(`/api/v1/source/candidates/${id}`),
   activeCandidates: () => api.get('/api/v1/source/active-candidates'),
   revertToCandidate: (id) => api.post(`/api/v1/source/employees/${id}/revert`),
@@ -118,6 +120,19 @@ export const verifyApi = {
     const fd = new FormData(); fd.append('file', file);
     return api.post('/api/v1/verify/submissions/upload-file', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
+  // Question Bank (Bucket)
+  listQuestionBank: (params) => api.get('/api/v1/verify/question-bank', { params }),
+  createBankItem: (data) => api.post('/api/v1/verify/question-bank', data),
+  updateBankItem: (id, data) => api.put(`/api/v1/verify/question-bank/${id}`, data),
+  deleteBankItem: (id) => api.delete(`/api/v1/verify/question-bank/${id}`),
+  addBankToAssessment: (data) => api.post('/api/v1/verify/question-bank/bulk-add-to-assessment', data),
+  importFileToBank: (file) => {
+    const fd = new FormData(); fd.append('file', file);
+    return api.post('/api/v1/verify/question-bank/import-file', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  importUrlToBank: (url, tags = []) => api.post('/api/v1/verify/question-bank/import-url', { url, tags }),
+  // Proctoring strike persistence
+  recordStrike: (data) => api.post('/api/v1/verify/record-strike', data),
 };
 
 // ── Forge ─────────────────────────────────────────────────────────────────

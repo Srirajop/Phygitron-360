@@ -2,14 +2,14 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { sourceApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
-import { Search, Filter, Upload, Users, Send, Star, Trash2, Layers, BarChart2, Zap, X, ChevronDown, ArrowUpDown } from 'lucide-react';
+import { Search, Filter, Upload, Users, Send, Star, Trash2, Layers, BarChart2, Zap, X, ChevronDown, ArrowUpDown, Edit } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 /* ── Score Badge ─────────────────────────────────────────────────────────── */
 function CircularScore({ score, title }) {
   const valid = score != null && score >= 0;
   const fillPct = valid ? score : 0;
-  const radius = 18; 
+  const radius = 18;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (fillPct / 100) * circumference;
   const color = score == null ? 'var(--border)' : score >= 70 ? '#10B981' : score >= 40 ? '#F59E0B' : '#EF4444';
@@ -20,13 +20,13 @@ function CircularScore({ score, title }) {
       <div style={{ position: 'relative', width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <svg width="44" height="44" style={{ transform: 'rotate(-90deg)', filter: valid ? `drop-shadow(0 2px 4px ${color}30)` : 'none' }}>
           <circle cx="22" cy="22" r={radius} fill="none" stroke="#F3F4F6" strokeWidth="4" />
-          <circle 
-            cx="22" cy="22" r={radius} fill="none" 
-            stroke={color} strokeWidth="4" 
-            strokeDasharray={circumference} 
-            strokeDashoffset={strokeDashoffset} 
-            strokeLinecap="round" 
-            style={{ transition: 'stroke-dashoffset 1.5s cubic-bezier(0.4, 0, 0.2, 1)' }} 
+          <circle
+            cx="22" cy="22" r={radius} fill="none"
+            stroke={color} strokeWidth="4"
+            strokeDasharray={circumference}
+            strokeDashoffset={strokeDashoffset}
+            strokeLinecap="round"
+            style={{ transition: 'stroke-dashoffset 1.5s cubic-bezier(0.4, 0, 0.2, 1)' }}
           />
         </svg>
         <span style={{ position: 'absolute', fontSize: '0.8rem', fontWeight: 800, color: valid ? 'var(--text-primary)' : 'var(--text-muted)' }}>
@@ -53,7 +53,7 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose} style={{ borderRadius: '50%', width: 36, height: 36, padding: 0 }}><X size={20} /></button>
         </div>
-        
+
         <div className="modal-body" style={{ padding: '32px', overflowY: 'auto', maxHeight: '75vh' }}>
           {/* Top Profile Summary */}
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${candidates.length}, 1fr)`, gap: 24, marginBottom: 40 }}>
@@ -67,14 +67,14 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
                       <Zap size={12} fill="white" /> PRIMARY CHOICE
                     </div>
                   )}
-                  
+
                   <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.75rem', fontWeight: 800, margin: '0 auto 16px', boxShadow: '0 8px 16px -4px rgba(79, 70, 229, 0.2)' }}>
                     {c.name?.charAt(0)}
                   </div>
-                  
+
                   <h5 style={{ margin: '0 0 4px', fontSize: '1.2rem', fontWeight: 800 }}>{c.name}</h5>
                   <p style={{ margin: '0 0 24px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>{c.location || 'Remote'} · {c.exp_years}y Exp</p>
-                  
+
                   <div style={{ display: 'flex', justifyContent: 'center', gap: 32 }}>
                     <CircularScore score={c.ats_score} title="Role Fit" />
                     <CircularScore score={c.resume_ats_score} title="Resume ATS" />
@@ -186,7 +186,7 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
             </div>
           </div>
         </div>
-        
+
         <div className="modal-footer" style={{ padding: '20px 32px', background: '#f8fafc', borderRadius: '0 0 24px 24px', borderTop: '1px solid var(--border)' }}>
           <button className="btn btn-ghost" onClick={onClose} style={{ fontWeight: 600 }}>Close Duel</button>
           <div style={{ display: 'flex', gap: 12 }}>
@@ -200,14 +200,14 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
 }
 
 /* ── Main Component ──────────────────────────────────────────────────────── */
-let cachedCandidates = null;
-let cachedFiltersStr = null;
+// Caching removed to prevent stale fit scores across page navigations
 
 export default function SourceDashboard() {
   const { user } = useAuth();
-  const [candidates, setCandidates] = useState(cachedCandidates || []);
+  const [candidates, setCandidates] = useState([]);
   const [jobRoles, setJobRoles] = useState([]);
-  const [loading, setLoading] = useState(!cachedCandidates);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(new Set());
   const [filters, setFilters] = useState(() => {
     try {
@@ -217,6 +217,7 @@ export default function SourceDashboard() {
       return { pool: 'all', sort_by: 'newest', limit: 20, role_id: '', search: '', location: '', exp_range: '' };
     }
   });
+  const [searchInput, setSearchInput] = useState(filters.search || '');
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteRoleId, setInviteRoleId] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
@@ -234,6 +235,29 @@ export default function SourceDashboard() {
       return ['newest'];
     }
   });
+  const [editingEmailId, setEditingEmailId] = useState(null);
+  const [editEmailVal, setEditEmailVal] = useState('');
+  // AbortController ref: cancels the in-flight search request when a new one starts.
+  // This prevents stale responses from overwriting fresher data and wastes no bandwidth.
+  const abortRef = useRef(null);
+
+  const handleEditEmailSave = async (id) => {
+    const trimmed = editEmailVal.trim();
+    if (!trimmed || !trimmed.includes('@')) {
+      toast.error('Please enter a valid email address');
+      return;
+    }
+    try {
+      await sourceApi.updateCandidate(id, { email: trimmed });
+      toast.success('Email updated successfully');
+      setEditingEmailId(null);
+      // Optimistically update local state — no full refetch needed
+      setCandidates(prev => prev.map(c => c.id === id && !c.is_employee ? { ...c, email: trimmed } : c));
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'Failed to update email';
+      toast.error(msg);
+    }
+  };
 
   useEffect(() => {
     sessionStorage.setItem('talentVaultFilters', JSON.stringify(filters));
@@ -250,6 +274,7 @@ export default function SourceDashboard() {
 
   useEffect(() => {
     sourceApi.listJobRoles().then(r => setJobRoles(r.data.data || []));
+    sourceApi.candidateStats().then(r => setStats(r.data.data || null)).catch(() => {});
   }, []);
 
   const fetchCandidates = useCallback(() => {
@@ -260,40 +285,52 @@ export default function SourceDashboard() {
       // If no role, remove fit_score from sort
       const filteredSort = sortCriteria.filter(s => s !== 'fit_score');
       if (filteredSort.length !== sortCriteria.length) {
-         apiParams.sort_by = filteredSort.length > 0 ? filteredSort.join(',') : 'newest';
+        apiParams.sort_by = filteredSort.length > 0 ? filteredSort.join(',') : 'newest';
       }
     }
     if (!apiParams.search) delete apiParams.search;
     if (!apiParams.location) delete apiParams.location;
     if (!apiParams.exp_range) delete apiParams.exp_range;
-    
-    const currentFiltersStr = JSON.stringify(apiParams);
-    if (cachedCandidates && cachedFiltersStr === currentFiltersStr) {
-      setCandidates(cachedCandidates);
-      setLoading(false);
-      return;
-    }
+
+    // Cancel any in-flight request before firing a new one
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     setLoading(true);
-    sourceApi.searchCandidates(apiParams)
+    sourceApi.searchCandidates({ ...apiParams, signal: controller.signal })
       .then(r => {
         const data = r.data.data || [];
         setCandidates(data);
-        cachedCandidates = data;
-        cachedFiltersStr = currentFiltersStr;
       })
-      .catch(() => { setCandidates([]); toast.error('Failed to load candidates'); })
+      .catch(err => {
+        // Ignore aborted requests
+        if (err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.message === 'canceled') return;
+        setCandidates([]);
+        toast.error('Failed to load candidates');
+      })
       .finally(() => setLoading(false));
   }, [filters, sortCriteria]);
 
   // Debounced search
   const handleSearchChange = (val) => {
-    setFilters(f => ({ ...f, search: val }));
+    setSearchInput(val);
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => {
-      // triggers fetchCandidates via useEffect
+      setFilters(f => ({ ...f, search: val }));
     }, 400);
   };
+
+  // When role_id is cleared, always remove fit_score from sort so profiles
+  // are not stuck ranked by a stale score from the previous role query.
+  useEffect(() => {
+    if (!filters.role_id) {
+      setSortCriteria(prev => {
+        const stripped = prev.filter(k => k !== 'fit_score');
+        return stripped.length === 0 ? ['newest'] : stripped;
+      });
+    }
+  }, [filters.role_id]);
 
   useEffect(() => { fetchCandidates(); }, [filters.role_id, filters.pool, filters.search, filters.location, filters.exp_range, filters.limit, sortCriteria]);
 
@@ -324,11 +361,7 @@ export default function SourceDashboard() {
         candidates.filter(x => !x.is_employee && x.id === id).forEach(x => ns.delete(candidateKey(x)));
         return ns;
       });
-      setCandidates(c => {
-        const nextC = c.filter(x => x.id !== id);
-        if (cachedCandidates) cachedCandidates = nextC;
-        return nextC;
-      });
+      setCandidates(c => c.filter(x => x.id !== id));
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Failed to delete");
     }
@@ -373,7 +406,6 @@ export default function SourceDashboard() {
     try {
       const res = await sourceApi.scoreCandidates({ role_id: parseInt(filters.role_id), candidate_ids: ids });
       toast.success(res.data.message || `Scored ${ids.length} candidates`);
-      cachedFiltersStr = null; // force refetch
       fetchCandidates(); // Reload to show new scores
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Scoring failed — check if AI agent is configured');
@@ -463,12 +495,6 @@ export default function SourceDashboard() {
           <p>Search, compare, and score candidates against roles</p>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-{/*
-          <button className="btn btn-secondary" disabled={!filters.role_id || scoring} onClick={handleScoreCandidates}>
-            <Star size={16} /> {scoring ? 'Scoring...' : 'Refresh Fit Scores'}
-          </button>
-*/}
-
           {canManageRoles && <Link to="/source/upload" className="btn btn-shimmer"><Upload size={16} /> Upload Resumes</Link>}
         </div>
       </div>
@@ -477,12 +503,13 @@ export default function SourceDashboard() {
         {/* ── Stats ── */}
         <div className="stats-grid animate-fade-in">
           {[
+            { label: 'Total CVs', value: stats ? stats.total_cvs : '...', icon: <Layers size={18} /> },
             { label: 'Total Results', value: candidates.length, icon: <Users size={18} /> },
             { label: 'ATS Scored', value: scoredCount, icon: <Star size={18} /> },
             { label: 'Selected', value: selected.size, icon: <ArrowUpDown size={18} /> },
             { label: 'Active Roles', value: jobRoles.length, icon: <Filter size={18} /> },
           ].map((s, i) => (
-            <div key={i} className={`stat-card animate-fade-in stagger-${i+1}`}>
+            <div key={i} className={`stat-card animate-fade-in stagger-${i + 1}`}>
               <div className="stat-icon">{s.icon}</div>
               <div className="stat-value">{s.value}</div>
               <div className="stat-label">{s.label}</div>
@@ -496,12 +523,12 @@ export default function SourceDashboard() {
             <Search size={18} color="var(--text-muted)" />
             <input
               type="text"
-              placeholder="Search by name or email..."
-              value={filters.search}
+              placeholder="Search by name, email, or skill..."
+              value={searchInput}
               onChange={e => handleSearchChange(e.target.value)}
               style={{ border: 'none', outline: 'none', background: 'transparent', flex: 1, fontSize: '0.95rem', color: 'var(--text-primary)' }}
             />
-            {filters.search && (
+            {searchInput && (
               <button className="btn btn-ghost btn-sm" onClick={() => handleSearchChange('')} style={{ padding: 4 }}><X size={14} /></button>
             )}
           </div>
@@ -526,10 +553,10 @@ export default function SourceDashboard() {
                     </button>
                   )}
                   {canManageRoles && (
-                    <button 
-                      type="button" 
-                      onClick={() => handleDeleteRole(filters.role_id)} 
-                      className="btn btn-ghost btn-sm" 
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteRole(filters.role_id)}
+                      className="btn btn-ghost btn-sm"
                       style={{ padding: '0 4px', height: 18, fontSize: 11, color: 'var(--danger)' }}
                     >
                       - Delete {filters.role_id ? 'Role' : 'All Roles'}
@@ -576,9 +603,9 @@ export default function SourceDashboard() {
             </div>
             <div style={{ minWidth: 140 }}>
               <label className="form-label">Show Results</label>
-              <select 
-                className="form-control" 
-                value={filters.limit} 
+              <select
+                className="form-control"
+                value={filters.limit}
                 onChange={e => setFilters(f => ({ ...f, limit: parseInt(e.target.value) }))}
               >
                 <option value="20">Top 20</option>
@@ -592,7 +619,7 @@ export default function SourceDashboard() {
             <div style={{ flex: 1, minWidth: 200 }}>
               <label className="form-label">Sort By</label>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button 
+                <button
                   type="button"
                   className={`btn btn-sm ${sortCriteria.includes('newest') ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => toggleSort('newest')}
@@ -600,7 +627,7 @@ export default function SourceDashboard() {
                 >
                   Recent
                 </button>
-                <button 
+                <button
                   type="button"
                   disabled={!filters.role_id}
                   className={`btn btn-sm ${sortCriteria.includes('fit_score') ? 'btn-primary' : 'btn-secondary'}`}
@@ -622,7 +649,7 @@ export default function SourceDashboard() {
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
             {candidates.map((c, i) => (
-              <div key={candidateKey(c)} className={`card animate-fade-in stagger-${Math.min(i+1,5)}`} style={{ padding: '16px 20px', border: selected.has(candidateKey(c)) ? '2px solid var(--primary)' : '1px solid var(--border)', cursor: 'pointer', transition: 'var(--transition)', width: '100%', maxWidth: '100%', minWidth: 0 }}>
+              <div key={candidateKey(c)} className={`card animate-fade-in stagger-${Math.min(i + 1, 5)}`} style={{ padding: '16px 20px', border: selected.has(candidateKey(c)) ? '2px solid var(--primary)' : '1px solid var(--border)', cursor: 'pointer', transition: 'var(--transition)', width: '100%', maxWidth: '100%', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flexWrap: 'wrap' }}>
                   {/* Checkbox */}
                   <input type="checkbox" style={{ accentColor: 'var(--primary)', width: 16, height: 16, flexShrink: 0 }}
@@ -640,8 +667,24 @@ export default function SourceDashboard() {
                       <span className={`badge badge-${c.type === 'Employee' ? 'primary' : c.type === 'Trainee' ? 'info' : 'success'}`} style={{ fontSize: '0.7rem' }}>{c.type}</span>
                       <span className={`badge badge-${c.status === 'active' ? 'success' : c.status === 'shortlisted' ? 'info' : 'muted'}`} style={{ fontSize: '0.7rem' }}>{c.status}</span>
                     </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>
-                      {c.location} · {c.exp_years > 0 ? `${c.exp_years} yrs exp` : 'Fresher'} · {c.email}
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', overflowWrap: 'anywhere', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                      {c.location} · {c.exp_years > 0 ? `${c.exp_years} yrs exp` : 'Fresher'} · 
+                      {editingEmailId === c.id && !c.is_employee ? (
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                          <input type="email" className="form-control" style={{ padding: '0 4px', height: 22, fontSize: '0.75rem', width: 150 }} value={editEmailVal} onChange={e => setEditEmailVal(e.target.value)} />
+                          <button className="btn btn-primary btn-sm" style={{ padding: '0 6px', height: 22, fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); handleEditEmailSave(c.id); }}>Save</button>
+                          <button className="btn btn-ghost btn-sm" style={{ padding: '0 6px', height: 22, fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setEditingEmailId(null); }}>Cancel</button>
+                        </div>
+                      ) : (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          {c.email}
+                          {!c.is_employee && (
+                            <button className="btn btn-ghost btn-sm" style={{ padding: 2, height: 'auto' }} title="Edit Email" onClick={(e) => { e.stopPropagation(); setEditingEmailId(c.id); setEditEmailVal(c.email || ''); }}>
+                              <Edit size={12} />
+                            </button>
+                          )}
+                        </span>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
                       {(c.skills || []).slice(0, 6).map((s, j) => (
@@ -653,10 +696,12 @@ export default function SourceDashboard() {
 
                   {/* Scores */}
                   <div style={{ display: 'flex', gap: 16, minWidth: 80, flexShrink: 0, justifyContent: 'flex-end', paddingRight: 16 }}>
-                    {(filters.role_id || c.ats_score != null) ? (
+                    {filters.role_id ? (
+                      <CircularScore score={c.ats_score} title="Fit Score" />
+                    ) : c.ats_score != null ? (
                       <CircularScore score={c.ats_score} title="Fit Score" />
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 44, opacity: 0.4 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 44, opacity: 0.35 }}>
                         <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Fit Score</div>
                         <div style={{ width: 44, height: 44, borderRadius: '50%', border: '3px dashed var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>—</div>
                       </div>
@@ -694,10 +739,10 @@ export default function SourceDashboard() {
 
       {/* ── Compare Modal ── */}
       {showCompare && (
-        <CompareModal 
-          candidates={selectedCandidates} 
+        <CompareModal
+          candidates={selectedCandidates}
           requiredSkills={jobRoles.find(r => r.id === parseInt(filters.role_id))?.required_skills || []}
-          onClose={() => setShowCompare(false)} 
+          onClose={() => setShowCompare(false)}
         />
       )}
 

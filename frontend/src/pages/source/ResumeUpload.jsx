@@ -1,7 +1,7 @@
 import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { sourceApi } from '../../api';
-import { Upload, File, CheckCircle, AlertCircle, Loader, X, Zap, Clock, Wifi } from 'lucide-react';
+import { Upload, File, CheckCircle, AlertCircle, Loader, X, Zap, Clock, Wifi, Folder } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const PDF_LIMIT_BYTES = 30 * 1024 * 1024;
@@ -239,6 +239,8 @@ export default function ResumeUpload() {
     onDrop,
     accept: {
       'application/pdf': ['.pdf'],
+      'application/msword': ['.doc'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
       'application/zip': ['.zip'],
       'application/x-zip-compressed': ['.zip'],
       'application/octet-stream': ['.zip'],
@@ -248,11 +250,52 @@ export default function ResumeUpload() {
       const name = (file.name || '').toLowerCase();
       if (name.endsWith('.zip') && file.size > ZIP_LIMIT_BYTES)
         return { code: 'zip-too-large', message: 'ZIP files must be 2GB or smaller' };
-      if (name.endsWith('.pdf') && file.size > PDF_LIMIT_BYTES)
-        return { code: 'pdf-too-large', message: 'PDF files must be 30MB or smaller' };
+      if ((name.endsWith('.pdf') || name.endsWith('.doc') || name.endsWith('.docx')) && file.size > PDF_LIMIT_BYTES)
+        return { code: 'pdf-too-large', message: 'Document files must be 30MB or smaller' };
       return null;
     },
   });
+
+  const handleFolderSelect = (e) => {
+    const selectedFiles = Array.from(e.target.files);
+    const validFiles = selectedFiles.filter(file => {
+      const name = (file.name || '').toLowerCase();
+      return name.endsWith('.pdf') || name.endsWith('.zip') || name.endsWith('.doc') || name.endsWith('.docx');
+    });
+    
+    if (validFiles.length === 0) {
+      toast.error('No valid PDF, DOCX, DOC or ZIP files found in the folder');
+      return;
+    }
+    
+    const validAndSized = [];
+    let hasSizeError = false;
+    for (const file of validFiles) {
+      const name = (file.name || '').toLowerCase();
+      if (name.endsWith('.zip') && file.size > ZIP_LIMIT_BYTES) hasSizeError = true;
+      else if ((name.endsWith('.pdf') || name.endsWith('.doc') || name.endsWith('.docx')) && file.size > PDF_LIMIT_BYTES) hasSizeError = true;
+      else validAndSized.push(file);
+    }
+    
+    if (hasSizeError) {
+      toast.error('Some files were skipped because they exceeded the size limit');
+    }
+    
+    const newFiles = validAndSized.slice(0, 50);
+    if (validAndSized.length > 50) {
+      toast.error('Only the first 50 files from the folder will be added');
+    }
+    
+    setFiles(prev => {
+      // Avoid adding duplicates by name
+      const existingNames = new Set(prev.map(f => f.name));
+      const uniqueNew = newFiles.filter(f => !existingNames.has(f.name));
+      return [...prev, ...uniqueNew];
+    });
+    
+    newFiles.forEach(f => setStatuses(s => ({ ...s, [f.name]: 'pending' })));
+    e.target.value = null;
+  };
 
   // ── Upload all pending files ─────────────────────────────────────────────────
   const uploadAll = async () => {
@@ -337,11 +380,28 @@ export default function ResumeUpload() {
           <div style={{ fontSize: '3.5rem', marginBottom: 12 }}>{isDragActive ? '📂' : '📄'}</div>
           <h3 style={{ marginBottom: 8 }}>{isDragActive ? 'Drop files here!' : 'Drag & drop resumes here'}</h3>
           <p style={{ color: 'var(--text-muted)', marginBottom: 20 }}>
-            or click to browse · PDF up to 30 MB · ZIP up to 2 GB · up to 50 files
+            or click to browse · PDF/DOCX up to 30 MB · ZIP up to 2 GB · up to 50 files
           </p>
-          <button type="button" className="btn btn-primary">
-            <Upload size={16} /> Choose Files
-          </button>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            <button type="button" className="btn btn-primary">
+              <Upload size={16} /> Choose Files
+            </button>
+            <label 
+              className="btn btn-secondary" 
+              style={{ margin: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
+              onClick={e => e.stopPropagation()}
+            >
+              <Folder size={16} /> Upload Folder
+              <input 
+                type="file" 
+                webkitdirectory="true" 
+                directory="true" 
+                multiple 
+                onChange={handleFolderSelect} 
+                style={{ display: 'none' }} 
+              />
+            </label>
+          </div>
         </div>
 
         {/* ── Selected Files ── */}

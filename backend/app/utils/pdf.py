@@ -1,5 +1,6 @@
 import io
 import re
+import os
 from typing import Optional
 
 try:
@@ -10,11 +11,10 @@ except ImportError:
 
 try:
     import pytesseract
-    from PIL import Image
+    from PIL import Image as PILImage
     HAS_OCR = True
 except ImportError:
     HAS_OCR = False
-
 
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     """Extract text from PDF bytes. Falls back to OCR if text extraction fails."""
@@ -30,94 +30,97 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
             if text.strip():
                 text_parts.append(text)
             elif HAS_OCR:
-                # Page is likely a scanned image — use OCR
-                pix = page.get_pixmap(dpi=300)
-                img_bytes = pix.tobytes("png")
-                image = Image.open(io.BytesIO(img_bytes))
-                ocr_text = pytesseract.image_to_string(image)
-                if ocr_text.strip():
-                    text_parts.append(ocr_text)
+                try:
+                    pix = page.get_pixmap(dpi=300)
+                    img_bytes = pix.tobytes("png")
+                    image = PILImage.open(io.BytesIO(img_bytes))
+                    ocr_text = pytesseract.image_to_string(image)
+                    if ocr_text.strip():
+                        text_parts.append(ocr_text)
+                except Exception as e:
+                    print(f"OCR failed for page {page_num}: {e}")
         doc.close()
     except Exception as e:
         raise Exception(f"PDF text extraction failed: {str(e)}")
 
     return "\n\n".join(text_parts)
 
-
 def clean_extracted_text(text: str) -> str:
     """Remove excessive whitespace and normalize text."""
-    # Remove non-printable characters
     text = re.sub(r'[^\x20-\x7E\n\r\t]', '', text)
-    # Collapse multiple blank lines
     text = re.sub(r'\n{3,}', '\n\n', text)
-    # Collapse multiple spaces
     text = re.sub(r' {2,}', ' ', text)
     return text.strip()
 
+def extract_text_from_docx(docx_bytes: bytes) -> str:
+    """Extract text from DOCX bytes using python-docx."""
+    try:
+        import docx
+        doc = docx.Document(io.BytesIO(docx_bytes))
+        full_text = []
+        for para in doc.paragraphs:
+            if para.text.strip():
+                full_text.append(para.text)
+        return "\n\n".join(full_text)
+    except Exception as e:
+        raise Exception(f"DOCX text extraction failed: {str(e)}")
+
 
 def generate_professional_pdf(content: dict, output_path: str):
-    """Generate a branded PDF using ReportLab with AI content and extracted assets."""
+    """Generate a branded PDF by overlaying text onto the EWANDZ 2026 offer letter template."""
+    import fitz
     import os
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import inch
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, HRFlowable
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
-    from reportlab.lib.colors import HexColor
-
-    BLUE_COLOR = HexColor("#0070C0") # Corporate Blue
-
-    doc = SimpleDocTemplate(output_path, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
-    styles = getSampleStyleSheet()
-    
-    # Custom Styles
-    styles.add(ParagraphStyle(name='OfferContent', parent=styles['Normal'], fontSize=11, leading=14, spaceAfter=12))
-    styles.add(ParagraphStyle(name='OfferTitle', parent=styles['Heading1'], fontSize=18, alignment=TA_CENTER, spaceAfter=24, color=BLUE_COLOR, underline=True))
-    styles.add(ParagraphStyle(name='OfferSignatory', parent=styles['Normal'], fontSize=12, leading=14, color=BLUE_COLOR, fontWeight='bold'))
-    styles.add(ParagraphStyle(name='OfferFooter', parent=styles['Normal'], fontSize=7, color="#6B7280", alignment=TA_LEFT, leading=9))
-
-    elements = []
-    base_dir = os.path.dirname(os.path.dirname(__file__)) # app/
-    logo_path = os.path.join(base_dir, "assets", "offer_img_0.png")
-    sign_path = os.path.join(base_dir, "assets", "offer_img_1.png")
-
-    # Logo
-    if os.path.exists(logo_path):
-        elements.append(Image(logo_path, width=2.5*inch, height=0.7*inch, hAlign='LEFT'))
-        elements.append(Spacer(1, 0.3*inch))
-
-    elements.append(Paragraph("OFFER LETTER", styles['OfferTitle']))
-    
-    # Date and Location
     from datetime import datetime
-    date_str = datetime.utcnow().strftime("%B %d, %Y")
-    elements.append(Paragraph(f"Date: {date_str}", styles['Normal']))
-    elements.append(Paragraph("Delhi,", styles['Normal']))
-    elements.append(Spacer(1, 0.4*inch))
 
-    # Salutation
-    elements.append(Paragraph(content.get("salutation", "Dear Candidate,"), styles['OfferContent']))
+    base_dir = os.path.dirname(os.path.dirname(__file__))  # app/
+    template_path = os.path.join(base_dir, "assets", "Offer_Letter_Template_2026.pdf")
 
-    # Body
+    if not os.path.exists(template_path):
+        raise Exception(f"Template not found at {template_path}")
+
+    doc = fitz.open(template_path)
+
+    # ── Page 0: Update Date ──────────────────────────────────────────────────────
+    p0 = doc[0]
+    # Redact the hardcoded date ("25 May, 2026")
+    p0.add_redact_annot(fitz.Rect(450, 650, 550, 675))
+    p0.apply_redactions()
+
+    try:
+        date_str = datetime.utcnow().strftime("%-d %B, %Y")
+    except ValueError:
+        date_str = datetime.utcnow().strftime("%d %B, %Y").lstrip("0")
+        
+    p0.insert_text((468, 665), date_str, fontsize=11, fontname="helv", color=(0,0,0))
+
+    # ── Page 1: Update Letter Body ───────────────────────────────────────────────
+    p1 = doc[1]
+    # Redact the body text from "Dear XYZ" down to "We look forward..."
+    # The signature and footer are left fully intact.
+    p1.add_redact_annot(fitz.Rect(70, 120, 550, 390))
+    p1.apply_redactions()
+
+    body_text = content.get("salutation", "Dear Candidate,") + "\n\n"
     for para in content.get("body_paragraphs", []):
-        elements.append(Paragraph(para, styles['OfferContent']))
-        elements.append(Spacer(1, 0.1*inch))
+        if para and para.strip():
+            body_text += para.strip() + "\n\n"
+            
+    body_text = body_text.strip()
 
-    elements.append(Paragraph(content.get("closing", "Sincerely,"), styles['OfferContent']))
-    elements.append(Spacer(1, 0.1*inch))
+    # Use insert_textbox to automatically wrap the text within the bounds.
+    # PyMuPDF fails silently if the text overflows the rect by even 1 pixel.
+    # We dynamically adjust font size downwards to ensure it always fits.
+    rect = fitz.Rect(72, 122, 540, 400)
+    inserted = False
+    for fs in [10.5, 10.0, 9.5, 9.0, 8.5]:
+        rc = p1.insert_textbox(rect, body_text, fontsize=fs, fontname="helv", color=(0,0,0), align=0)
+        if rc >= 0:
+            inserted = True
+            break
+            
+    if not inserted:
+        # Extreme fallback for unusually long text
+        rect_fallback = fitz.Rect(72, 122, 540, 430)
+        p1.insert_textbox(rect_fallback, body_text, fontsize=8.0, fontname="helv", color=(0,0,0), align=0)
 
-    # Signature
-    if os.path.exists(sign_path):
-        elements.append(Image(sign_path, width=1.6*inch, height=1.3*inch, hAlign='LEFT'))
-    
-    elements.append(Paragraph(f"{content.get('signatory_name', 'Zainab Ghazi')}", styles['OfferSignatory']))
-    elements.append(Paragraph(content.get('signatory_title', 'Manager - Global HR Operations'), styles['OfferSignatory']))
-    elements.append(Paragraph(f"Date: {date_str}", styles['Normal']))
-    
-    # Footer
-    elements.append(Spacer(1, 1*inch))
-    # Footer info left aligned as per original
-    elements.append(Paragraph("EWANDZDIGITAL SERVICES PVT LTD", styles['OfferFooter']))
-    elements.append(Paragraph("CIN:U72900DL2017PTC327055", styles['OfferFooter']))
-
-    doc.build(elements)
+    doc.save(output_path)

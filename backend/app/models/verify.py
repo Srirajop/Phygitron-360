@@ -94,11 +94,37 @@ class AssessmentQuestion(Base):
     marks = Column(DECIMAL(6, 2), default=1.0)
     order_index = Column(Integer, default=0)
     images = Column(JSON, nullable=True)
+    tags = Column(JSON, nullable=True)  # e.g. ["Java", "OOP", "Aptitude"]
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     assessment = relationship("Assessment", back_populates="questions")
     skill = relationship("SkillTaxonomy", foreign_keys=[skill_id])
+
+
+class QuestionBankItem(Base):
+    """Standalone reusable question pool for an organisation (the 'bucket')."""
+    __tablename__ = "question_bank_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organisations.id"), nullable=False)
+    question_text = Column(Text, nullable=False)
+    question_type = Column(Enum(QuestionType), nullable=False, default=QuestionType.mcq)
+    options = Column(JSON, nullable=True)
+    correct_answer = Column(Text, nullable=True)
+    model_answer = Column(Text, nullable=True)
+    starter_code = Column(Text, nullable=True)
+    test_cases = Column(JSON, nullable=True)
+    programming_language = Column(String(50), nullable=True)
+    marks = Column(DECIMAL(6, 2), default=1.0)
+    tags = Column(JSON, nullable=True)  # e.g. ["Java", "English", "Aptitude"]
+    images = Column(JSON, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    creator = relationship("User", foreign_keys=[created_by])
 
 
 class AssessmentAssignment(Base):
@@ -112,6 +138,9 @@ class AssessmentAssignment(Base):
     status = Column(Enum(AssignmentStatus), default=AssignmentStatus.pending)
     custom_questions = Column(JSON, nullable=True)
     started_at = Column(DateTime, nullable=True)
+    # Proctoring strike persistence — survives page reloads / reconnects
+    strike_count = Column(Integer, default=0, nullable=False)
+    terminated_by_proctor = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 

@@ -39,7 +39,12 @@ IN_PROCESS_PARSE_WORKERS = 8             # was 4 — more parallel AI workers
 DB_COMMIT_BATCH_SIZE = 50               # commit to DB every N resumes (not every 1)
 DB_DETAIL_WRITE_EVERY = 10              # persist processed_details every N resumes
 TEMP_UPLOAD_DIR = Path(tempfile.gettempdir()) / "phygitron360-source"
-ALLOWED_PDF_MIME_TYPES = {"application/pdf", "application/x-pdf"}
+ALLOWED_PDF_MIME_TYPES = {
+    "application/pdf", 
+    "application/x-pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+}
 ALLOWED_ZIP_MIME_TYPES = {
     "application/zip",
     "application/x-zip-compressed",
@@ -75,9 +80,8 @@ def success(data=None, message=""):
     return {"success": True, "data": data if data is not None else {}, "message": message}
 
 
-def _is_pdf_filename(filename: Optional[str]) -> bool:
-    return str(filename or "").lower().endswith(".pdf")
-
+def _is_valid_resume_filename(filename: Optional[str]) -> bool:
+    return str(filename or "").lower().endswith((".pdf", ".doc", ".docx"))
 
 def _is_zip_filename(filename: Optional[str]) -> bool:
     return str(filename or "").lower().endswith(".zip")
@@ -139,10 +143,19 @@ async def _create_candidate_from_pdf_bytes(
     existing_candidate = existing_candidate_res.scalar_one_or_none()
     if existing_candidate:
         logger.info("Skipping duplicate resume %s for org %s", filename, org_id)
-        return existing_candidate, False, ""
-
     try:
-        extracted_text = extract_text_from_pdf(pdf_bytes)
+        # Use magic bytes for robust format detection
+        if pdf_bytes.startswith(b'%PDF-'):
+            extracted_text = extract_text_from_pdf(pdf_bytes)
+        elif pdf_bytes.startswith(b'PK\x03\x04'):
+            from app.utils.pdf import extract_text_from_docx
+            extracted_text = extract_text_from_docx(pdf_bytes)
+        elif str(filename or "").lower().endswith((".docx", ".doc")):
+            from app.utils.pdf import extract_text_from_docx
+            extracted_text = extract_text_from_docx(pdf_bytes)
+        else:
+            extracted_text = extract_text_from_pdf(pdf_bytes)
+            
         extracted_text = clean_extracted_text(extracted_text)
     except Exception as e:
         logger.warning(f"PDF text extraction failed for {filename}: {e}")
@@ -296,13 +309,31 @@ async def _process_bulk_resume_zip(job_id: int, zip_path: str) -> None:
                     await db.commit()
                 return
 
-            try:
-                pdf_entries = [
-                    info for info in archive.infolist()
-                    if not info.is_dir() and _is_pdf_filename(info.filename)
-                ]
-            finally:
-                pass  # keep archive open for processing below
+            # ── Collect all resume entries, including those inside nested ZIPs ──
+            # Each entry is (archive_ref, ZipInfo) — archive_ref may be a nested archive
+            pdf_entries: list[tuple] = []
+            nested_archives: list = []  # track for cleanup
+
+            def _collect_entries(arc, parent_name=""):
+                """Recursively walk a ZipFile and collect valid resume entries."""
+                for info in arc.infolist():
+                    if info.is_dir():
+                        continue
+                    fname_lower = info.filename.lower()
+                    if _is_valid_resume_filename(info.filename):
+                        pdf_entries.append((arc, info))
+                    elif fname_lower.endswith(".zip") and info.file_size < 500 * 1024 * 1024:
+                        # Nested ZIP — read and recurse (up to 500 MB per nested ZIP)
+                        try:
+                            nested_bytes = arc.read(info)
+                            import io as _io
+                            nested_arc = zipfile.ZipFile(_io.BytesIO(nested_bytes), "r")
+                            nested_archives.append(nested_arc)
+                            _collect_entries(nested_arc, parent_name=info.filename)
+                        except Exception as _ne:
+                            logger.warning("Could not open nested ZIP %s: %s", info.filename, _ne)
+
+            _collect_entries(archive)
 
             job.total_files = len(pdf_entries)
             job.processed_files = 0
@@ -311,16 +342,19 @@ async def _process_bulk_resume_zip(job_id: int, zip_path: str) -> None:
 
             if not pdf_entries:
                 job.status = JobStatus.failed
-                job.error_message = "The ZIP archive does not contain any PDF resumes."
+                job.error_message = "The ZIP archive does not contain any PDF/DOCX resumes (checked all folders and nested ZIPs)."
                 await db.commit()
                 archive.close()
+                for na in nested_archives:
+                    try: na.close()
+                    except: pass
                 return
 
             failed_count = 0
             pending_details: list[dict] = []
             pending_commits = 0  # count files since last DB commit
 
-            for index, info in enumerate(pdf_entries):
+            for index, (entry_arc, info) in enumerate(pdf_entries):
                 # ── Instant cancellation check (no DB needed) ──────────────
                 if cancel_event.is_set():
                     job = await db.get(BulkUploadJob, job_id)
@@ -328,10 +362,15 @@ async def _process_bulk_resume_zip(job_id: int, zip_path: str) -> None:
                         job.status = JobStatus.cancelled
                         await db.commit()
                     archive.close()
+                    for na in nested_archives:
+                        try: na.close()
+                        except: pass
                     return
 
+                # Use just the filename (not full nested path) for display
+                display_name = Path(info.filename).name or info.filename
                 detail: dict = {
-                    "filename": Path(info.filename).name or info.filename,
+                    "filename": display_name,
                     "status": "done",
                 }
                 try:
@@ -339,14 +378,14 @@ async def _process_bulk_resume_zip(job_id: int, zip_path: str) -> None:
                         raise ValueError("PDF exceeds the 30MB per-file limit inside the ZIP")
 
                     # Read PDF bytes in thread pool (CPU/IO bound)
-                    def _read_pdf_bytes(arc=archive, entry=info):
+                    def _read_pdf_bytes(arc=entry_arc, entry=info):
                         with arc.open(entry, "r") as fh:
                             return fh.read()
 
                     pdf_bytes = await loop.run_in_executor(None, _read_pdf_bytes)
 
                     candidate, created, extracted_text = await _create_candidate_from_pdf_bytes(
-                        filename=info.filename,
+                        filename=display_name,
                         pdf_bytes=pdf_bytes,
                         org_id=job.org_id,
                         db=db,
@@ -387,6 +426,9 @@ async def _process_bulk_resume_zip(job_id: int, zip_path: str) -> None:
                 job.processed_details = _trim_job_details(all_details)
 
             archive.close()
+            for na in nested_archives:
+                try: na.close()
+                except: pass
 
             # Only mark completed if not cancelled
             if not cancel_event.is_set():
@@ -395,6 +437,7 @@ async def _process_bulk_resume_zip(job_id: int, zip_path: str) -> None:
                     job.error_message = "No resumes could be imported from the ZIP archive."
                 else:
                     job.status = JobStatus.completed
+                    job.total_files = len(pdf_entries)  # ensure final count is authoritative
                     if failed_count:
                         job.error_message = f"{failed_count} file(s) failed during import."
             else:
@@ -436,19 +479,37 @@ async def _parse_resume_inline(candidate_id: int, extracted_text: str, org_id: i
                 candidate.status = CandidateStatus.active
             return
 
+        # Truncate text to avoid LLM token limits (Groq Llama 3.1 8b has ~8k context limit)
+        # 1 token is ~4 chars. Limit to ~8000 chars to be safe.
+        if len(extracted_text) > 8000:
+            extracted_text = extracted_text[:8000] + "\n...[TRUNCATED]"
+
         # Run the AI agent in a thread pool — it's CPU-bound/synchronous and
         # MUST NOT block the async event loop (would freeze all other requests)
         loop = asyncio.get_event_loop()
         ai_result = await loop.run_in_executor(None, run_parse_resume_agent, extracted_text)
 
-        # Update candidate user with actual name if found
+        # Update candidate user with actual name and email if found
         extracted_name = ai_result.get("name")
-        if extracted_name and len(extracted_name.strip()) > 1:
+        extracted_email = ai_result.get("email", "").strip()
+        if (extracted_name and len(extracted_name.strip()) > 1) or extracted_email:
             candidate_res = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
             candidate_for_user = candidate_res.scalar_one_or_none()
             user_rec = await db.get(User, candidate_for_user.user_id) if candidate_for_user else None
             if user_rec:
-                user_rec.full_name = extracted_name.strip()
+                if extracted_name and len(extracted_name.strip()) > 1:
+                    user_rec.full_name = extracted_name.strip()
+                # Only replace dummy stub emails — never overwrite a real email an HR has already set
+                is_dummy_email = user_rec.email and ".phygitron.local" in user_rec.email
+                if extracted_email and "@" in extracted_email and is_dummy_email:
+                    # Check the extracted email isn't already taken by another user
+                    existing_email_res = await db.execute(
+                        select(User.id).where(User.email == extracted_email)
+                    )
+                    existing_user_id = existing_email_res.scalar_one_or_none()
+                    if existing_user_id is None or existing_user_id == user_rec.id:
+                        user_rec.email = extracted_email
+                        logger.info(f"Set real email '{extracted_email}' for candidate {candidate_id} (was dummy stub)")
 
         # Process skills
         for skill_data in ai_result.get("skills", []):
@@ -604,7 +665,7 @@ async def upload_resume(
             "ZIP upload received. Resume extraction is running in the background.",
         )
 
-    if content_type not in ALLOWED_PDF_MIME_TYPES and not _is_pdf_filename(filename):
+    if content_type not in ALLOWED_PDF_MIME_TYPES and not _is_valid_resume_filename(filename):
         raise HTTPException(status_code=400, detail="Only PDF resumes or ZIP archives are accepted")
 
     pdf_bytes = await file.read()
@@ -887,6 +948,12 @@ def _skill_similarity(required: str, candidate: str) -> float:
     if re.search(pattern, cand) or re.search(r'\b' + re.escape(cand) + r'\b', req):
         return 0.95
 
+    # 2.5 Fuzzy match for minor spelling/spacing differences (e.g. NodeJS vs Node JS)
+    from difflib import SequenceMatcher
+    ratio = SequenceMatcher(None, req, cand).ratio()
+    if ratio >= 0.75:
+        return 0.90
+
     # 3. Token-based overlap for multi-word phrases
     req_tokens = _skill_tokens(req)
     cand_tokens = _skill_tokens(cand)
@@ -939,7 +1006,22 @@ def calculate_role_fit(cand_skills: list, req_skills: list, exp_years: int = 0, 
             similarity = _skill_similarity(req_name, cand["name"])
             if similarity <= 0:
                 continue
-            level_ratio = min(LEVEL_WEIGHTS[cand["level"]] / req_weight, 1.0)
+            cand_weight = LEVEL_WEIGHTS[cand["level"]]
+            if cand_weight >= req_weight:
+                # Candidate meets or exceeds required level — full credit
+                level_ratio = 1.0
+            else:
+                diff = req_weight - cand_weight
+                if diff == 1:
+                    # One level below (e.g. intermediate vs advanced) — slight penalty
+                    level_ratio = 0.80
+                elif diff == 2:
+                    # Two levels below — significant penalty
+                    level_ratio = 0.55
+                else:
+                    # Three levels below (e.g. beginner vs expert) — heavy penalty
+                    level_ratio = 0.30
+
             points = req_weight * similarity * level_ratio
             if points > best_points:
                 best = cand
@@ -960,9 +1042,6 @@ def calculate_role_fit(cand_skills: list, req_skills: list, exp_years: int = 0, 
             })
 
     score = (earned / total_weight * 100.0) if total_weight else 0.0
-    if min_exp and exp_years < min_exp:
-        exp_ratio = max(exp_years, 0) / max(min_exp, 1)
-        score *= 0.75 + (0.25 * exp_ratio)
 
     return {
         "score": round(min(score, 100.0), 1),
@@ -977,6 +1056,24 @@ def compute_ats_score(cand_skills: list, req_skills: list, exp_years: int = 0, m
 
 
 # ── Candidate Search ───────────────────────────────────────────────────────────────────────────────────
+
+@router.get("/candidates/stats")
+async def candidate_stats(
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db)
+):
+    query = select(func.count()).select_from(Candidate)
+    if current_user.role.value != "super_admin":
+        query = query.where(Candidate.org_id == current_user.org_id)
+    # Total CVs is count of candidates where resume_url is not null
+    query = query.where(Candidate.resume_url.isnot(None))
+    
+    # Hide archived candidates from stats
+    query = query.where(Candidate.status != CandidateStatus.archived)
+    
+    count_res = await db.execute(query)
+    total_cvs = count_res.scalar() or 0
+    return success({"total_cvs": total_cvs})
 
 @router.get("/candidates/search")
 async def search_candidates(
@@ -1018,16 +1115,50 @@ async def search_candidates(
     min_years, max_years = exp_bounds()
 
     def apply_filters(q, model):
-        if min_years is not None and hasattr(model, 'exp_years'):
-            q = q.where(model.exp_years >= min_years)
-        if max_years is not None and hasattr(model, 'exp_years'):
-            q = q.where(model.exp_years <= max_years)
+        if hasattr(model, 'exp_years'):
+            if min_years is not None and min_years > 0:
+                q = q.where(or_(model.exp_years >= min_years, model.exp_years.is_(None)))
+            if max_years is not None:
+                q = q.where(or_(model.exp_years <= max_years, model.exp_years.is_(None)))
         if location:
             if hasattr(model, 'location'):
                 q = q.where(model.location.ilike(f"%{location}%"))
         if search:
+            from sqlalchemy import exists
             term = f"%{search.strip()}%"
-            q = q.where(or_(User.full_name.ilike(term), User.email.ilike(term)))
+            if model == Candidate:
+                from app.models.source import CandidateSkill
+                from app.models.skill_taxonomy import SkillTaxonomy
+                skill_exists = select(1).select_from(CandidateSkill).join(
+                    SkillTaxonomy, CandidateSkill.skill_id == SkillTaxonomy.id
+                ).where(
+                    CandidateSkill.candidate_id == Candidate.id,
+                    SkillTaxonomy.name.ilike(term)
+                )
+                q = q.where(or_(
+                    User.full_name.ilike(term), 
+                    User.email.ilike(term), 
+                    exists(skill_exists)
+                ))
+            elif model == Employee:
+                from app.models.deploy import EmployeeSkill
+                from app.models.skill_taxonomy import SkillTaxonomy
+                skill_exists = select(1).select_from(EmployeeSkill).join(
+                    SkillTaxonomy, EmployeeSkill.skill_id == SkillTaxonomy.id
+                ).where(
+                    EmployeeSkill.employee_id == Employee.id,
+                    SkillTaxonomy.name.ilike(term)
+                )
+                q = q.where(or_(
+                    User.full_name.ilike(term), 
+                    User.email.ilike(term), 
+                    exists(skill_exists)
+                ))
+            else:
+                q = q.where(or_(User.full_name.ilike(term), User.email.ilike(term)))
+        if hasattr(model, 'status') and model == Candidate:
+            from app.models.source import CandidateStatus
+            q = q.where(model.status != CandidateStatus.archived)
         return q
 
     results = []
@@ -1040,7 +1171,10 @@ async def search_candidates(
         # Performance: when no role scoring is needed, apply LIMIT at the
         # SQL level so the DB only reads `limit` rows instead of the full table.
         if not role_id:
-            q = q.order_by(Candidate.created_at.desc()).limit(limit)
+            if "experience" in [s.strip() for s in sort_by.split(",")]:
+                q = q.order_by(Candidate.exp_years.desc(), Candidate.created_at.desc()).limit(limit)
+            else:
+                q = q.order_by(Candidate.created_at.desc()).limit(limit)
         res = await db.execute(q)
         for c, u in res:
             ctype = "Candidate" if u.first_login else "Trainee"
@@ -1140,16 +1274,16 @@ async def search_candidates(
             item["created_at"] = item["created_at"].isoformat()
 
     # Apply sorting
-    # When a role is selected, ALWAYS rank by fit score first (highest match on top)
+    # When a role is selected: rank by fit score (desc), then exp, then newest.
+    # When NO role selected: use user's chosen sort — never sort by ats_score.
     sort_keys = [s.strip() for s in sort_by.split(",") if s.strip()]
     if role_id:
-        # Primary sort: role fit score (descending), secondary: experience, tertiary: newest
         output.sort(
             key=lambda x: (x.get("ats_score") or 0, x.get("exp_years") or 0, x.get("created_at") or ""),
             reverse=True
         )
     elif "experience" in sort_keys:
-        output.sort(key=lambda x: (x["exp_years"] or 0, x.get("created_at") or ""), reverse=True)
+        output.sort(key=lambda x: (x.get("exp_years") or 0, x.get("created_at") or ""), reverse=True)
     else:
         output.sort(key=lambda x: x.get("created_at") or "", reverse=True)
 
@@ -1656,6 +1790,56 @@ async def revert_employee_to_candidate(
     return success(message="Employee reverted back to Candidate successfully")
 
 
+class CandidateUpdate(BaseModel):
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+
+@router.put("/candidates/{candidate_id}")
+async def update_candidate(
+    candidate_id: int,
+    body: CandidateUpdate,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db)
+):
+    from sqlalchemy.exc import IntegrityError
+    # 1. Fetch Candidate
+    query = select(Candidate).where(Candidate.id == candidate_id)
+    if current_user.role.value != "super_admin":
+        query = query.where(Candidate.org_id == current_user.org_id)
+    cand_res = await db.execute(query)
+    candidate = cand_res.scalar_one_or_none()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    # 2. Fetch User and update fields
+    user_res = await db.execute(select(User).where(User.id == candidate.user_id))
+    user = user_res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user not found")
+
+    if body.email is not None:
+        new_email = body.email.strip()
+        if not new_email or "@" not in new_email:
+            raise HTTPException(status_code=422, detail="Please provide a valid email address")
+        # Check uniqueness before committing to avoid a 500 crash
+        existing_res = await db.execute(
+            select(User.id).where(User.email == new_email)
+        )
+        existing_id = existing_res.scalar_one_or_none()
+        if existing_id is not None and existing_id != user.id:
+            raise HTTPException(status_code=409, detail=f"Email '{new_email}' is already used by another user")
+        user.email = new_email
+
+    if body.full_name is not None:
+        user.full_name = body.full_name.strip() or user.full_name
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="This email is already taken by another user")
+    return success(message="Candidate profile updated successfully")
+
 @router.delete("/candidates/{candidate_id}")
 async def delete_candidate(
     candidate_id: int,
@@ -1724,7 +1908,7 @@ async def list_active_candidates(
         # Check if they are actually an employee in the deploy module
         from app.models.deploy import Employee
         emp_res = await db.execute(select(Employee).where(Employee.user_id == u.id))
-        emp = emp_res.scalar_one_or_none()
+        emp = emp_res.scalars().first()
 
         
         data.append({
@@ -1794,6 +1978,8 @@ async def update_offer(
     current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
+    from sqlalchemy.exc import IntegrityError
+
     query = select(OfferLetter).where(OfferLetter.id == offer_id)
     if current_user.role.value != "super_admin":
         query = query.where(OfferLetter.org_id == current_user.org_id)
@@ -1811,7 +1997,29 @@ async def update_offer(
     if "department" in body: offer.department = body["department"]
     if "location" in body: offer.location = body["location"]
     if "offer_content" in body: offer.offer_content = body["offer_content"]
-    
+
+    # ── Persist candidate email change to the User record ──────────────────────
+    # Previously this field was accepted in the payload but silently discarded.
+    new_email = (body.get("candidate_email") or "").strip()
+    if new_email and "@" in new_email:
+        cand_res = await db.execute(select(Candidate).where(Candidate.id == offer.candidate_id))
+        cand = cand_res.scalar_one_or_none()
+        if cand:
+            user_rec = await db.get(User, cand.user_id)
+            if user_rec and user_rec.email != new_email:
+                # Pre-check uniqueness — give a clean 409 instead of a 500 crash
+                existing_res = await db.execute(
+                    select(User.id).where(User.email == new_email)
+                )
+                existing_id = existing_res.scalar_one_or_none()
+                if existing_id is not None and existing_id != user_rec.id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Email '{new_email}' is already used by another account"
+                    )
+                user_rec.email = new_email
+                logger.info("Updated candidate email to '%s' via offer %s", new_email, offer_id)
+
     # Reset to pending if it was changes_requested
     if offer.status == OfferStatus.changes_requested:
         offer.status = OfferStatus.pending
@@ -1823,7 +2031,11 @@ async def update_offer(
         except:
             pass
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="That email is already taken by another user")
     return success(message="Offer updated successfully")
 
 
@@ -2001,5 +2213,22 @@ async def reject_offer(
         candidate.status = CandidateStatus.shortlisted
 
     await db.commit()
+
+    # Notification: Notify HR creator
+    try:
+        from app.utils.email import send_hr_alert_email
+        import asyncio
+        creator_res = await db.execute(select(User).where(User.id == offer.created_by))
+        creator = creator_res.scalar_one_or_none()
+        if creator:
+            admin_name = current_user.full_name or current_user.email
+            asyncio.create_task(send_hr_alert_email(
+                to_email=creator.email,
+                event_title="Offer Letter Rejected",
+                message=f"Your offer letter for {offer.role_title} has been rejected by {admin_name}. The candidate has been returned to the shortlist."
+            ))
+    except Exception as e:
+        logger.error(f"Failed to send HR notification: {e}")
+
     return success(message="Offer rejected and candidate returned to shortlist.")
 

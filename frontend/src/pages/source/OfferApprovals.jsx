@@ -43,11 +43,12 @@ export default function OfferApprovals() {
   const handleUpdate = async () => {
     try {
       await sourceApi.updateOffer(editingId, editForm);
-      toast.success('Offer updated');
+      toast.success('Offer details saved!');
       setEditingId(null);
       fetchOffers();
     } catch (err) {
-      toast.error('Update failed');
+      const msg = err?.response?.data?.detail || 'Failed to save changes';
+      toast.error(msg);
     }
   };
 
@@ -153,7 +154,17 @@ export default function OfferApprovals() {
                         <div>
                           <h4 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800 }}>{offer.candidate_name}</h4>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: 4 }}>
-                            <Mail size={14} /> {offer.candidate_email}
+                            <Mail size={14} /> 
+                            {isEditing ? (
+                              <input 
+                                className="form-control form-control-sm"
+                                style={{ width: 250, padding: '2px 8px', fontSize: '0.85rem' }}
+                                value={current.candidate_email || ''}
+                                onChange={(e) => setEditForm({...editForm, candidate_email: e.target.value})}
+                              />
+                            ) : (
+                              offer.candidate_email
+                            )}
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

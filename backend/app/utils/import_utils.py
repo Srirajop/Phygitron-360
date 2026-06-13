@@ -86,10 +86,11 @@ async def parse_questions_with_ai(text: str) -> List[Dict]:
     2. 'options' must be a list of strings.
     3. 'correct_answer' must be the text of the correct option.
     4. Provide 'marks' (default 5 for mcq, 15 for coding).
-    5. Return ONLY a JSON array of objects.
+    5. Return ONLY a JSON object containing a 'questions' array.
     
     JSON Schema:
-    [
+    {
+      "questions": [
       {
         "question_text": "string (The COMPLETE, detailed problem description WITH Examples and Constraints. DO NOT SUMMARIZE.)",
         "question_type": "mcq|written|coding|file_upload",
@@ -101,10 +102,10 @@ async def parse_questions_with_ai(text: str) -> List[Dict]:
         "test_cases": [{"input": "string", "expected_output": "string"}] (optional),
         "programming_language": "string (optional)"
       }
-    ]
+    ]}
     """
     
-    user_prompt = f"EXTRACT ALL QUESTIONS FROM THIS TEXT AND RETURN RAW JSON ARRAY. ENFORCE ACCURACY ON TEST CASES:\n\n{text[:12000]}"
+    user_prompt = f"EXTRACT ALL QUESTIONS FROM THIS TEXT AND RETURN A JSON OBJECT WITH A 'questions' ARRAY. ENFORCE ACCURACY ON TEST CASES:\n\n{text[:12000]}"
     
     try:
         data = call_llm(system_prompt, user_prompt)

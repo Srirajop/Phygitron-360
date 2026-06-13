@@ -15,7 +15,8 @@ from app.models.user import User
 from app.models.source import Candidate
 from app.models.verify import (
     Assessment, AssessmentQuestion, AssessmentAssignment,
-    AssessmentResult, ProctoringFlag, ProctoringFlagType, AssessmentStatus, AssignmentStatus, AssessmentQuery
+    AssessmentResult, ProctoringFlag, ProctoringFlagType, AssessmentStatus, AssignmentStatus, AssessmentQuery,
+    QuestionBankItem
 )
 from app.utils.auth import get_current_user, require_role, require_module
 from app.utils.email import send_assignment_notification_email
@@ -162,6 +163,7 @@ class QuestionCreate(BaseModel):
     marks: float = 1.0
     order_index: int = 0
     images: Optional[List[str]] = []
+    tags: Optional[List[str]] = []
 
 
 class AssessmentCreate(BaseModel):
@@ -245,6 +247,7 @@ async def create_assessment(
             marks=q.marks,
             order_index=q.order_index,
             images=q.images,
+            tags=q.tags or [],
         )
         db.add(question)
 
@@ -486,19 +489,37 @@ async def get_assessment(
     )
     questions = q_result.scalars().all()
     
+    is_candidate = current_user.role.value == "candidate"
+
     formatted_questions = [{
         "id": q.id, "question_text": q.question_text, "question_type": q.question_type.value if hasattr(q.question_type, 'value') else q.question_type,
         "options": q.options, "marks": float(q.marks), "skill_id": q.skill_id,
         "starter_code": q.starter_code, "test_cases": q.test_cases, "programming_language": q.programming_language,
         "order_index": q.order_index,
         "images": q.images or [],
+        "tags": q.tags or [],
+        # Only expose correct answers to HR/admin roles, never to candidates
+        **({}  if is_candidate else {"correct_answer": q.correct_answer, "model_answer": q.model_answer}),
     } for q in questions]
 
-    if current_user.role.value == "candidate":
+    # For candidates, also return their assignment id + current strike state
+    assignment_meta = {}
+    if is_candidate:
         assgn_res = await db.execute(select(AssessmentAssignment).where(AssessmentAssignment.assessment_id == assessment_id, AssessmentAssignment.user_id == current_user.id))
         assgn = assgn_res.scalar_one_or_none()
-        if assgn and assgn.custom_questions:
-            formatted_questions = assgn.custom_questions
+        if assgn:
+            assignment_meta = {
+                "assignment_id": assgn.id,
+                "strike_count": assgn.strike_count or 0,
+                "terminated_by_proctor": assgn.terminated_by_proctor or False,
+            }
+            if assgn.custom_questions:
+                # Strip correct_answer / model_answer from the stored custom question set
+                _CANDIDATE_STRIP = {"correct_answer", "model_answer"}
+                formatted_questions = [
+                    {k: v for k, v in cq.items() if k not in _CANDIDATE_STRIP}
+                    for cq in assgn.custom_questions
+                ]
 
     return success({
         "id": a.id, "title": a.title, "description": a.description,
@@ -507,6 +528,7 @@ async def get_assessment(
         "show_result_immediately": a.show_result_immediately,
         "status": a.status.value,
         "questions": formatted_questions,
+        **assignment_meta,
     })
 
 
@@ -523,6 +545,42 @@ async def publish_assessment(
     a.status = AssessmentStatus.active
     await db.commit()
     return success(message="Assessment published")
+
+
+class RecordStrikeRequest(BaseModel):
+    assignment_id: int
+    violation_name: str
+    is_terminal: bool = False  # True when MAX_STRIKES is reached
+
+
+@router.post("/record-strike")
+async def record_strike(
+    body: RecordStrikeRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Persist a proctoring strike to the database so it survives page reloads."""
+    assgn_res = await db.execute(
+        select(AssessmentAssignment).where(
+            AssessmentAssignment.id == body.assignment_id,
+            AssessmentAssignment.user_id == current_user.id,
+        )
+    )
+    assgn = assgn_res.scalar_one_or_none()
+    if not assgn:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    if assgn.terminated_by_proctor:
+        # Already terminated — return current state without incrementing
+        return success({"strike_count": assgn.strike_count, "terminated": True})
+
+    assgn.strike_count = (assgn.strike_count or 0) + 1
+    if body.is_terminal:
+        assgn.terminated_by_proctor = True
+        assgn.status = AssignmentStatus.in_progress  # keep it non-completed until submit
+
+    await db.commit()
+    return success({"strike_count": assgn.strike_count, "terminated": assgn.terminated_by_proctor})
 
 
 
@@ -562,6 +620,7 @@ async def delete_assessment(
 class AssignRequest(BaseModel):
     user_ids: List[int]
     deadline: Optional[str] = None
+    question_ids: Optional[List[int]] = None  # Subset selection; None = all questions
 
 async def generate_variants_bg(assessment_id: int, user_ids: list):
     from app.database import AsyncSessionLocal
@@ -606,20 +665,87 @@ async def assign_assessment(
     current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
+    import random as _random
     from datetime import datetime
     deadline = datetime.fromisoformat(body.deadline) if body.deadline else None
     assigned = 0
-    
+
     # Pre-fetch assessment metadata for email
     asmt_res = await db.execute(select(Assessment).where(Assessment.id == assessment_id))
     asmt_obj = asmt_res.scalar_one_or_none()
-    
-    q_count_res = await db.execute(select(func.count(AssessmentQuestion.id)).where(AssessmentQuestion.assessment_id == assessment_id))
-    q_count = q_count_res.scalar_one() or 0
-    
+
+    # Fetch all questions in this assessment
+    q_res = await db.execute(
+        select(AssessmentQuestion)
+        .where(AssessmentQuestion.assessment_id == assessment_id)
+        .order_by(AssessmentQuestion.order_index)
+    )
+    all_questions = q_res.scalars().all()
+
+    # Determine subset of questions to assign (if question_ids provided)
+    if body.question_ids:
+        id_set = set(body.question_ids)
+        pool = [q for q in all_questions if q.id in id_set]
+    else:
+        pool = list(all_questions)
+
+    q_count = len(pool)
     assessment_title = asmt_obj.title if asmt_obj else "New Assessment"
     time_limit = asmt_obj.time_limit_minutes if asmt_obj else None
     pass_score = asmt_obj.pass_score if asmt_obj else None
+
+    def _make_shuffled_question_set(questions):
+        """Return a shuffled copy of questions with shuffled MCQ options per question."""
+        shuffled = list(questions)
+        _random.shuffle(shuffled)
+        result = []
+        for q in shuffled:
+            qt = q.question_type.value if hasattr(q.question_type, 'value') else q.question_type
+            opts = list(q.options) if q.options else []
+            correct = q.correct_answer
+
+            if qt in ("mcq", "mcq_multi") and opts:
+                # Shuffle options and update correct_answer reference
+                try:
+                    if qt == "mcq_multi":
+                        import json as _json
+                        correct_list = _json.loads(correct or "[]")
+                        if not isinstance(correct_list, list):
+                            correct_list = []
+                    else:
+                        correct_list = None
+                except Exception:
+                    correct_list = None
+
+                _random.shuffle(opts)
+
+                if qt == "mcq":
+                    # correct_answer is a plain string value
+                    pass  # value unchanged, only positions changed
+                else:
+                    import json as _json
+                    # rebuild the JSON array (values unchanged, order of options changed)
+                    correct = _json.dumps(correct_list) if correct_list is not None else correct
+
+            result.append({
+                "id": q.id,
+                "question_text": q.question_text,
+                "question_type": qt,
+                "options": opts,
+                # correct_answer & model_answer are stored here for grading purposes
+                # but are stripped out before being returned to candidates in get_assessment
+                "correct_answer": correct,
+                "model_answer": q.model_answer,
+                "starter_code": q.starter_code,
+                "test_cases": q.test_cases,
+                "programming_language": q.programming_language,
+                "marks": float(q.marks),
+                "order_index": q.order_index,
+                "images": q.images or [],
+                "tags": q.tags or [],
+                "skill_id": q.skill_id,
+            })
+        return result
 
     new_assignments = []
     for uid in body.user_ids:
@@ -630,31 +756,33 @@ async def assign_assessment(
             )
         )
         existing_assgn = existing_res.scalar_one_or_none()
-        
+
+        # Build a per-user shuffled question set
+        custom_q = _make_shuffled_question_set(pool)
+
         if existing_assgn:
-            # Re-assign: Reset status and metadata
             existing_assgn.status = AssignmentStatus.pending
             existing_assgn.started_at = None
             existing_assgn.deadline = deadline
             existing_assgn.assigned_by = current_user.id
+            existing_assgn.custom_questions = custom_q
             new_assignments.append(uid)
             assigned += 1
         else:
-            # New assignment
             assgn = AssessmentAssignment(
                 assessment_id=assessment_id,
                 user_id=uid,
                 assigned_by=current_user.id,
                 deadline=deadline,
                 status=AssignmentStatus.pending,
+                custom_questions=custom_q,
             )
             db.add(assgn)
             new_assignments.append(uid)
             assigned += 1
-    
+
     await db.commit()
 
-    # Send notifications in background (best effort)
     if skipped := len(body.user_ids) - assigned:
         print(f"Skipped {skipped} existing assignments.")
 
@@ -664,7 +792,6 @@ async def assign_assessment(
         if user_obj and user_obj.email:
             try:
                 import asyncio
-                # Offload email to avoid blocking the main thread too much
                 asyncio.create_task(send_assignment_notification_email(
                     to_email=user_obj.email,
                     candidate_name=user_obj.full_name or user_obj.email.split('@')[0],
@@ -677,10 +804,323 @@ async def assign_assessment(
             except Exception as e:
                 print(f"Failed to trigger email for {user_obj.email}: {e}")
 
-    if new_assignments:
-        background_tasks.add_task(generate_variants_bg, assessment_id, new_assignments)
-
     return success({"assigned": assigned})
+
+
+# ── Question Bank (Bucket) ────────────────────────────────────────────────────
+
+class QuestionBankCreate(BaseModel):
+    question_text: str
+    question_type: str = "mcq"
+    options: Optional[list] = None
+    correct_answer: Optional[str] = None
+    model_answer: Optional[str] = None
+    starter_code: Optional[str] = None
+    test_cases: Optional[list] = None
+    programming_language: Optional[str] = None
+    marks: float = 1.0
+    tags: Optional[List[str]] = []
+    images: Optional[List[str]] = []
+
+
+class BulkAddToDraftRequest(BaseModel):
+    assessment_id: int
+    bank_item_ids: List[int]
+
+
+@router.post("/question-bank")
+async def create_bank_item(
+    body: QuestionBankCreate,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a new reusable question to the organisation's question bank."""
+    item = QuestionBankItem(
+        org_id=current_user.org_id,
+        question_text=body.question_text,
+        question_type=body.question_type,
+        options=body.options,
+        correct_answer=body.correct_answer,
+        model_answer=body.model_answer,
+        starter_code=body.starter_code,
+        test_cases=body.test_cases,
+        programming_language=body.programming_language,
+        marks=body.marks,
+        tags=body.tags or [],
+        images=body.images or [],
+        created_by=current_user.id,
+    )
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return success({"id": item.id})
+
+
+@router.put("/question-bank/{item_id}")
+async def update_bank_item(
+    item_id: int,
+    body: QuestionBankCreate,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update an existing question in the organisation's question bank."""
+    result = await db.execute(
+        select(QuestionBankItem).where(
+            QuestionBankItem.id == item_id,
+            QuestionBankItem.org_id == current_user.org_id,
+            QuestionBankItem.is_deleted == False
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    item.question_text = body.question_text
+    item.question_type = body.question_type
+    item.options = body.options
+    item.correct_answer = body.correct_answer
+    item.model_answer = body.model_answer
+    item.starter_code = body.starter_code
+    item.test_cases = body.test_cases
+    item.programming_language = body.programming_language
+    item.marks = body.marks
+    item.tags = body.tags or []
+    item.images = body.images or []
+
+    await db.commit()
+    return success({"message": "Question updated successfully"})
+
+
+@router.get("/question-bank")
+async def list_bank_items(
+    tag: Optional[str] = None,
+    q: Optional[str] = None,
+    question_type: Optional[str] = None,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all questions in the organisation's question bank, with optional tag/type/text filters."""
+    query = select(QuestionBankItem).where(
+        QuestionBankItem.org_id == current_user.org_id,
+        QuestionBankItem.is_deleted == False,
+    ).order_by(QuestionBankItem.created_at.desc())
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    # Apply in-memory filters (JSON column tag filtering is easier this way)
+    if tag:
+        tag_lower = tag.lower()
+        items = [i for i in items if i.tags and any(t.lower() == tag_lower for t in i.tags)]
+    if question_type:
+        items = [i for i in items if (i.question_type.value if hasattr(i.question_type, 'value') else i.question_type) == question_type]
+    if q:
+        q_lower = q.lower()
+        items = [i for i in items if q_lower in (i.question_text or '').lower()]
+
+    return success([{
+        "id": item.id,
+        "question_text": item.question_text,
+        "question_type": item.question_type.value if hasattr(item.question_type, 'value') else item.question_type,
+        "options": item.options,
+        "correct_answer": item.correct_answer,
+        "model_answer": item.model_answer,
+        "starter_code": item.starter_code,
+        "test_cases": item.test_cases,
+        "programming_language": item.programming_language,
+        "marks": float(item.marks),
+        "tags": item.tags or [],
+        "images": item.images or [],
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+    } for item in items])
+
+
+@router.delete("/question-bank/{item_id}")
+async def delete_bank_item(
+    item_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Soft-delete a question from the bank."""
+    result = await db.execute(
+        select(QuestionBankItem).where(
+            QuestionBankItem.id == item_id,
+            QuestionBankItem.org_id == current_user.org_id,
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Bank item not found")
+    item.is_deleted = True
+    await db.commit()
+    return success(message="Deleted from question bank")
+
+
+@router.post("/question-bank/bulk-add-to-assessment")
+async def bulk_add_bank_to_assessment(
+    body: BulkAddToDraftRequest,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add selected question bank items into an existing assessment draft."""
+    # Verify assessment belongs to this org
+    asmt_res = await db.execute(
+        select(Assessment).where(
+            Assessment.id == body.assessment_id,
+            Assessment.org_id == current_user.org_id,
+            Assessment.is_deleted == False,
+        )
+    )
+    assessment = asmt_res.scalar_one_or_none()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found or access denied")
+
+    # Get current max order_index
+    order_res = await db.execute(
+        select(func.max(AssessmentQuestion.order_index)).where(
+            AssessmentQuestion.assessment_id == body.assessment_id
+        )
+    )
+    max_order = order_res.scalar_one() or 0
+
+    # Fetch bank items
+    bank_res = await db.execute(
+        select(QuestionBankItem).where(
+            QuestionBankItem.id.in_(body.bank_item_ids),
+            QuestionBankItem.org_id == current_user.org_id,
+            QuestionBankItem.is_deleted == False,
+        )
+    )
+    bank_items = bank_res.scalars().all()
+
+    added = 0
+    for idx, item in enumerate(bank_items):
+        qt = item.question_type.value if hasattr(item.question_type, 'value') else item.question_type
+        q = AssessmentQuestion(
+            assessment_id=body.assessment_id,
+            question_text=item.question_text,
+            question_type=qt,
+            options=item.options,
+            correct_answer=item.correct_answer,
+            model_answer=item.model_answer,
+            starter_code=item.starter_code,
+            test_cases=item.test_cases,
+            programming_language=item.programming_language,
+            marks=item.marks,
+            tags=item.tags or [],
+            images=item.images or [],
+            order_index=max_order + idx + 1,
+        )
+        db.add(q)
+        added += 1
+
+    await db.commit()
+    return success({"added": added, "assessment_id": body.assessment_id})
+
+
+@router.post("/question-bank/import-file")
+async def import_file_to_bank(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Parse a CSV / JSON / PDF file and save all extracted questions into the Question Bank."""
+    try:
+        content = await file.read()
+        text = await extract_text_from_file(content, file.filename)
+        questions = await parse_questions_with_ai(text)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    added = 0
+    for q in questions:
+        qt = q.get("question_type", "written")
+        item = QuestionBankItem(
+            org_id=current_user.org_id,
+            created_by=current_user.id,
+            question_text=q.get("question_text", "").strip(),
+            question_type=qt,
+            options=q.get("options") or [],
+            correct_answer=q.get("correct_answer"),
+            model_answer=q.get("model_answer"),
+            starter_code=q.get("starter_code"),
+            test_cases=q.get("test_cases"),
+            programming_language=q.get("programming_language"),
+            marks=float(q.get("marks", 1)),
+            tags=q.get("tags") or [],
+            images=q.get("images") or [],
+        )
+        if item.question_text:
+            db.add(item)
+            added += 1
+
+    await db.commit()
+    return success({"added": added})
+
+
+class BankURLImportRequest(BaseModel):
+    url: str
+    tags: Optional[List[str]] = []
+
+
+@router.post("/question-bank/import-url")
+async def import_url_to_bank(
+    body: BankURLImportRequest,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Scrape a URL (e.g. LeetCode problem) and save the resulting question into the Question Bank."""
+    try:
+        import httpx
+        from bs4 import BeautifulSoup
+        import re
+
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            resp = await client.get(body.url, headers=headers)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            # Remove scripts/styles
+            for tag in soup(["script", "style", "nav", "footer", "header"]):
+                tag.decompose()
+            page_text = soup.get_text(separator="\n", strip=True)[:8000]
+
+        questions = await parse_questions_with_ai(page_text)
+        if not questions:
+            raise HTTPException(status_code=422, detail="Could not extract any questions from the URL content.")
+
+        added = 0
+        for q in questions:
+            item = QuestionBankItem(
+                org_id=current_user.org_id,
+                created_by=current_user.id,
+                question_text=q.get("question_text", "").strip(),
+                question_type=q.get("question_type", "written"),
+                options=q.get("options") or [],
+                correct_answer=q.get("correct_answer"),
+                model_answer=q.get("model_answer"),
+                starter_code=q.get("starter_code"),
+                test_cases=q.get("test_cases"),
+                programming_language=q.get("programming_language"),
+                marks=float(q.get("marks", 1)),
+                tags=(body.tags or []) + (q.get("tags") or []),
+                images=q.get("images") or [],
+            )
+            if item.question_text:
+                db.add(item)
+                added += 1
+
+        await db.commit()
+        return success({"added": added})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+
 
 
 @router.get("/my-assessments")

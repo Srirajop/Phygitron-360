@@ -23,6 +23,7 @@ def call_groq(system_prompt: str, user_prompt: str) -> dict:
         ],
         temperature=0.1,
         max_tokens=4096,
+        response_format={"type": "json_object"},
     )
     content = response.choices[0].message.content.strip()
     
@@ -62,9 +63,11 @@ CRITICAL: For `confidence_signals`, review ONLY skills that the resume explicitl
 Return at most 5 confidence signals. Prefer the highest-impact claims: senior-level skills, unusually broad stacks, claimed years, or tools listed without matching project/work-history evidence.
 For each signal, write a specific recruiter-facing reason. Avoid repeated boilerplate such as "No evidence of X usage in project descriptions or work history."
 Use `flag: true` only when a claimed skill has weak, vague, or missing work/project support. Use `flag: false` when the resume gives clear project, employer, metric, or deliverable evidence.
+IMPORTANT: Extract the candidate's real email address if visible in the resume. Leave `email` as empty string if not found.
 Return this exact structure:
 {
   "name": "",
+  "email": "",
   "skills": [{"name": "", "normalized_name": "", "level": "beginner|intermediate|advanced|expert", "evidence": "", "years_of_use": 0}],
   "relationships": [{"from": "", "to": "", "relation": "requires|leads_to|used_for|similar_to"}],
   "experience_years_total": 0,
@@ -157,26 +160,43 @@ def run_match_project_agent(project_requirements: dict, employee_profiles: list)
     return call_llm(MATCH_PROJECT_SYSTEM, f"Match employees to project:\n\n{prompt}")
 
 
-GENERATE_OFFER_LETTER_SYSTEM = """You are a professional HR assistant at eWandzDigital.
-Write a warm, personalized internship offer letter.
-The letter should be professional yet human-like, unique for each candidate.
-Incorporate these details naturally:
-- Candidate Name
-- Internship Role
-- Start Date
-- Monthly Stipend (INR)
-- Location
-- Company: eWandzDigital
+GENERATE_OFFER_LETTER_SYSTEM = """You are the HR system at EWANDZDIGITAL SERVICES PVT LTD.
+Generate an offer letter that follows the company's official 2026 template EXACTLY.
+Company address: 20, Okhla Phase III, Okhla Industrial Estate, New Delhi-110020, INDIA.
 
-Respond ONLY with valid JSON. Raw JSON only.
-Return this structure:
+STRICT TEMPLATE RULES — do NOT deviate from these:
+1. Subject must be exactly: "OFFER LETTER"
+2. Salutation: "Dear [CandidateName],"
+3. Body must contain EXACTLY these 4 paragraphs, filled with the candidate's real details:
+   - Para 1: Opening excitement line mentioning designation and joining date (format: "Month DD, YYYY")
+   - Para 2: Probation period (3–6 months typical), annual compensation in INR format (e.g. "INR 6,00,000 per annum"), notice period during probation (typically 30 days), notice period after probation (typically 60 days)
+   - Para 3: Standards of discipline, integrity, compliance with company policies (keep this paragraph VERBATIM from the template)
+   - Para 4: Confirmation request line (keep VERBATIM: "Kindly confirm your acceptance by replying to this email. Upon receiving your confirmation, we will initiate the next steps in the onboarding process.")
+4. Closing: "Sincerely,"
+5. Signatory name: "Zainab Ghazi"
+6. Signatory title: "Manager- Global HR Operations"
+7. Tone: warm yet formal. EWANDZ is a global tech company (USA | POLAND | INDIA | CANADA)
+
+VERBATIM paragraphs to use (fill in placeholders):
+- Para 3 (verbatim): "As an employee of the Company, you will be expected to maintain the highest standards of discipline, integrity, and commitment to your work. You will also be required to comply with all company policies, rules, and regulations. Relevant documentation and training will be provided upon joining."
+- Para 4 (verbatim): "Kindly confirm your acceptance by replying to this email. Upon receiving your confirmation, we will initiate the next steps in the onboarding process."
+- Closing line (verbatim): "We look forward to welcoming you to the team."
+
+Respond ONLY with valid JSON. Raw JSON only. No markdown.
+Return this EXACT structure:
 {
-  "subject": "Offer for Internship - [Candidate Name]",
-  "salutation": "Dear [Name],",
-  "body_paragraphs": ["paragraph 1", "paragraph 2", "paragraph 3"],
+  "subject": "OFFER LETTER",
+  "salutation": "Dear [CandidateName],",
+  "body_paragraphs": [
+    "EWANDZ is excited to bring you on board as a [Designation], with a joining date of [JoiningDate]. We are just a few formalities away from getting started. Please take some time to review our offer.",
+    "You will be on probation for [X] months from your date of joining. Your annual compensation will be INR [Amount] per annum. During the probation period, your notice period will be [X] days. Upon successful completion of probation, the notice period will be [X] days.",
+    "As an employee of the Company, you will be expected to maintain the highest standards of discipline, integrity, and commitment to your work. You will also be required to comply with all company policies, rules, and regulations. Relevant documentation and training will be provided upon joining.",
+    "Kindly confirm your acceptance by replying to this email. Upon receiving your confirmation, we will initiate the next steps in the onboarding process.",
+    "We look forward to welcoming you to the team."
+  ],
   "closing": "Sincerely,",
   "signatory_name": "Zainab Ghazi",
-  "signatory_title": "Manager - Global HR Operations"
+  "signatory_title": "Manager- Global HR Operations"
 }"""
 
 def run_generate_offer_letter_agent(candidate_name: str, details: dict) -> dict:

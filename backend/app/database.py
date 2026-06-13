@@ -45,6 +45,7 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_learning_progress_columns)
         await conn.run_sync(_ensure_source_columns)
+        await conn.run_sync(_ensure_verify_columns)
 
 
 def _ensure_learning_progress_columns(sync_conn):
@@ -106,3 +107,85 @@ def _ensure_source_columns(sync_conn):
         sync_conn.exec_driver_sql(
             "CREATE INDEX idx_candidate_skills_candidate_id ON candidate_skills (candidate_id)"
         )
+
+    # Performance index: fast status-filtered searches on candidates (org_id + status)
+    if "idx_candidates_org_status" not in cand_indexes:
+        try:
+            sync_conn.exec_driver_sql(
+                "CREATE INDEX idx_candidates_org_status ON candidates (org_id, status)"
+            )
+        except Exception:
+            pass
+
+    # Performance index: users email lookup for uniqueness checks
+    try:
+        user_indexes = {idx["name"] for idx in inspector.get_indexes("users")}
+    except Exception:
+        user_indexes = set()
+
+    if "idx_users_email" not in user_indexes:
+        try:
+            sync_conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)"
+            )
+        except Exception:
+            pass
+
+    # Performance index: ai_scores lookups on profile page
+    try:
+        ai_score_indexes = {idx["name"] for idx in inspector.get_indexes("ai_scores")}
+    except Exception:
+        ai_score_indexes = set()
+
+    if "idx_ai_scores_entity" not in ai_score_indexes:
+        try:
+            sync_conn.exec_driver_sql(
+                "CREATE INDEX idx_ai_scores_entity ON ai_scores (entity_type, entity_id)"
+            )
+        except Exception:
+            pass
+
+
+def _ensure_verify_columns(sync_conn):
+    """Backfill newer verify-module columns for existing databases."""
+    inspector = inspect(sync_conn)
+
+    # ── assessment_questions: tags + images ──────────────────────────────────
+    try:
+        aq_cols = {col["name"] for col in inspector.get_columns("assessment_questions")}
+    except Exception:
+        aq_cols = set()
+
+    if aq_cols:  # table exists
+        if "tags" not in aq_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE assessment_questions ADD COLUMN tags JSON NULL"
+            )
+        if "images" not in aq_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE assessment_questions ADD COLUMN images JSON NULL"
+            )
+
+    # ── assessment_assignments: custom_questions ─────────────────────────────
+    try:
+        aa_cols = {col["name"] for col in inspector.get_columns("assessment_assignments")}
+    except Exception:
+        aa_cols = set()
+
+    if aa_cols and "custom_questions" not in aa_cols:
+        sync_conn.exec_driver_sql(
+            "ALTER TABLE assessment_assignments ADD COLUMN custom_questions JSON NULL"
+        )
+
+    if aa_cols and "strike_count" not in aa_cols:
+        sync_conn.exec_driver_sql(
+            "ALTER TABLE assessment_assignments ADD COLUMN strike_count INT NOT NULL DEFAULT 0"
+        )
+
+    if aa_cols and "terminated_by_proctor" not in aa_cols:
+        sync_conn.exec_driver_sql(
+            "ALTER TABLE assessment_assignments ADD COLUMN terminated_by_proctor BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+
+    # ── question_bank_items: created by create_all above, but ensure ─────────
+    # (no extra columns needed — the table is fully new and create_all handles it)

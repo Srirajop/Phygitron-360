@@ -5,6 +5,7 @@ import traceback
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db
@@ -58,6 +59,9 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# GZip all responses >= 1 KB — cuts API payload size by 60-80% for candidate lists
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Serve locally stored uploads (S3 fallback)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
