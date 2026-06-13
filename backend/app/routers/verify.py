@@ -1457,8 +1457,8 @@ def _java_parse(t: str, var: str) -> str:
     if t == "long":          return f"Long.parseLong({var}.trim())"
     if t in ("double","float"): return f"Double.parseDouble({var}.trim())"
     if t == "boolean":       return f"Boolean.parseBoolean({var}.trim())"
-    if t == "char":          return f"{var}.trim().charAt(0)"
-    if t == "String":        return f"{var}.trim()"
+    if t == "char":          return var + '.trim().replaceAll("^\\"|\\"$", "").replaceAll("^\'|\'$", "").charAt(0)'
+    if t == "String":        return var + '.trim().replaceAll("^\\"|\\"$", "").replaceAll("^\'|\'$", "")'
     if t == "int[]":         return f"__intArr({var})"
     if t == "long[]":        return f"__longArr({var})"
     if t == "double[]":      return f"__dblArr({var})"
@@ -1555,8 +1555,8 @@ def _cpp_parse(t: str, var: str) -> str:
     if t in ("long","long long"): return f"stoll({var})"
     if t in ("double","float"): return f"stod({var})"
     if t == "bool":         return f"({var} == \"true\")"
-    if t == "char":         return f"{var}[0]"
-    if t == "string":       return var
+    if t == "char":         return f"__parseChar({var})"
+    if t == "string":       return f"__parseStr({var})"
     if "vector<int>" in t or "vector<long" in t: return f"__parseVecInt({var})"
     if "vector<string>" in t: return f"__parseVecStr({var})"
     if "vector<vector<int>>" in t: return f"__parseVecVecInt({var})"
@@ -1616,6 +1616,15 @@ vector<vector<int>> __parseVecVecInt(string s) {{
     vector<vector<int>> r; int d=0; string cur="";
     for(char c:s) {{ if(c=='['&&d++>0) cur+=c; else if(c==']'&&--d>0) cur+=c; else if(c==']'&&d==0) {{ r.push_back(__parseVecInt(cur)); cur=""; }} else if(c==','&&d==1) {{ }} else if(d>0) cur+=c; }}
     return r;
+}}
+string __parseStr(string s) {{
+    if(!s.empty() && (s.front()=='"' || s.front()=='\'')) s.erase(0, 1);
+    if(!s.empty() && (s.back()=='"' || s.back()=='\'')) s.pop_back();
+    return s;
+}}
+char __parseChar(string s) {{
+    string p = __parseStr(s);
+    return p.empty() ? ' ' : p[0];
 }}
 string __fmtVI(vector<int>& v) {{ string s="["; for(int i=0;i<(int)v.size();i++) {{ if(i) s+=","; s+=to_string(v[i]); }} return s+"]"; }}
 string __fmtVVI(vector<vector<int>>& v) {{ string s="["; for(int i=0;i<(int)v.size();i++) {{ if(i) s+=","; string t="["; for(int j=0;j<(int)v[i].size();j++) {{ if(j) t+=","; t+=to_string(v[i][j]); }} s+=t+"]"; }} return s+"]"; }}
