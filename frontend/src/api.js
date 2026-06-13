@@ -133,7 +133,7 @@ export const verifyApi = {
   importUrlToBank: (url, tags = []) => api.post('/api/v1/verify/question-bank/import-url', { url, tags }),
   // Proctoring strike persistence
   recordStrike: (data) => api.post('/api/v1/verify/record-strike', data),
-  // Session start — stamps started_at server-side (idempotent, never resets timer)
+  // Session start — stamps started_at server-side using assessment_id (idempotent, auto-creates assignment row)
   startSession: (data) => api.post('/api/v1/verify/start-session', data),
 };
 

@@ -101,6 +101,8 @@ export default function AssessmentTaker() {
   // Resume-session state: true if candidate previously started this assessment
   const [sessionAlreadyStarted, setSessionAlreadyStarted] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
+  // assignment_id is returned by startSession and needed for recordStrike
+  const assignmentIdRef = useRef(null);
 
   const submittingRef = useRef(false);
   const startTime = useRef(null);
@@ -153,27 +155,38 @@ export default function AssessmentTaker() {
       }
 
       // ── SERVER-AUTHORITATIVE TIMER ─────────────────────────────────────────
-      // If the candidate already started the test previously, the server returns
-      // time_remaining_seconds computed from the original wall-clock start time.
-      // We use that value directly so a page reload can never reset the countdown.
-      // If this is a fresh session (no started_at on server), fall back to the
-      // full time limit — the actual timer won't tick until requestFS() fires.
-      if (data.session_already_started && data.time_remaining_seconds !== undefined && data.time_remaining_seconds !== null) {
-        setTimeLeft(data.time_remaining_seconds);
+      // The server always returns session_already_started=true when started_at is
+      // stamped on the AssessmentAssignment row. If true, use the server-computed
+      // time_remaining_seconds as the timer — a page reload can NEVER extend it.
+      // The candidate must also re-enter fullscreen (start gate shown with Resume btn),
+      // but their strikes and time are preserved from the previous session.
+      if (data.session_already_started) {
         setSessionAlreadyStarted(true);
+        // Set the correct remaining time (may be null for unlimited assessments)
+        if (data.time_remaining_seconds !== null && data.time_remaining_seconds !== undefined) {
+          setTimeLeft(data.time_remaining_seconds);
+        }
+        // Do NOT auto-set hasStarted=true here — the candidate must re-enter
+        // fullscreen so proctoring can restart and strikes can continue to accumulate.
       } else if (data.time_limit_minutes) {
+        // Fresh session: pre-load the full timer value, but the timer effect will
+        // only start ticking once the user clicks Start (hasStarted guard below).
         setTimeLeft(data.time_limit_minutes * 60);
       }
+      // Also seed assignmentIdRef if assignment_id was returned (formally assigned candidate)
+      if (data.assignment_id) assignmentIdRef.current = data.assignment_id;
     }).finally(() => setLoading(false));
   }, [id, nav]);
 
-  // Timer
+  // Timer — ONLY ticks when the candidate has actually started (entered fullscreen).
+  // This prevents the pre-start gate from silently consuming time on reload.
   useEffect(() => {
+    if (!hasStarted) return;   // ← KEY GUARD: no ticking until user clicks Start
     if (timeLeft === null) return;
     if (timeLeft <= 0) { submitRef.current?.(); return; }
     const t = setTimeout(() => setTimeLeft(s => s - 1), 1000);
     return () => clearTimeout(t);
-  }, [timeLeft]);
+  }, [timeLeft, hasStarted]);
 
   // Webcam & Audio proctoring
   useEffect(() => {
@@ -625,39 +638,43 @@ export default function AssessmentTaker() {
   const requestFS = useCallback(async () => {
     if (!document.documentElement.requestFullscreen) return;
 
-    // ── Tell the server this session is starting (idempotent — safe to call on resume) ──
-    // The server stamps started_at once and never overwrites it, so the returned
-    // time_remaining_seconds is always the true remaining time regardless of how
-    // many times the candidate closes and reopens the page.
-    if (assessment?.assignment_id) {
-      setStartingSession(true);
-      try {
-        const res = await verifyApi.startSession({ assignment_id: assessment.assignment_id });
-        const sdata = res.data?.data;
-        if (sdata) {
-          // Sync strikes from server (may differ from client if network was lost)
-          if (sdata.strike_count !== undefined) {
-            strikes.current = sdata.strike_count;
-            setStrikeCount(sdata.strike_count);
-          }
-          // Override the timer with the server-authoritative remaining seconds
-          if (sdata.time_remaining_seconds !== null && sdata.time_remaining_seconds !== undefined) {
-            setTimeLeft(sdata.time_remaining_seconds);
-          }
+    // ── Tell the server this session is starting (idempotent — safe to call on resume)
+    // Passing assessment_id (not assignment_id) so the endpoint can auto-create
+    // an AssessmentAssignment row if the user doesn't have one yet.
+    const assessmentId = assessment?.id || parseInt(id);
+    setStartingSession(true);
+    try {
+      const res = await verifyApi.startSession({ assessment_id: assessmentId });
+      const sdata = res.data?.data;
+      if (sdata) {
+        // Store the canonical assignment_id for recordStrike calls
+        if (sdata.assignment_id) {
+          assignmentIdRef.current = sdata.assignment_id;
+          // Patch it into the assessment object so handleCheatAttempt can read it
+          setAssessment(prev => prev ? { ...prev, assignment_id: sdata.assignment_id } : prev);
         }
-      } catch (err) {
-        const detail = err?.response?.data?.detail;
-        if (err?.response?.status === 403) {
-          // Proctor-terminated — refuse entry
-          toast.error(detail || 'This assessment was terminated due to proctoring violations.', { duration: 8000 });
-          setStartingSession(false);
-          return;
+        // Sync strikes from server (may differ from client if network was lost)
+        if (sdata.strike_count !== undefined) {
+          strikes.current = sdata.strike_count;
+          setStrikeCount(sdata.strike_count);
         }
-        // Non-fatal: log and continue so the candidate isn't stuck
-        console.error('start-session failed', err);
-      } finally {
-        setStartingSession(false);
+        // Override the timer with the server-authoritative remaining seconds
+        if (sdata.time_remaining_seconds !== null && sdata.time_remaining_seconds !== undefined) {
+          setTimeLeft(sdata.time_remaining_seconds);
+        }
       }
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      if (err?.response?.status === 403) {
+        toast.error(detail || 'This assessment was terminated due to proctoring violations.', { duration: 8000 });
+        setStartingSession(false);
+        return;
+      }
+      // Non-fatal: log and continue so the candidate isn't stuck on the start gate
+      console.error('start-session failed:', err);
+      toast.error('Could not sync session with server. Timer may not be preserved.', { duration: 4000 });
+    } finally {
+      setStartingSession(false);
     }
 
     document.documentElement.requestFullscreen()
@@ -669,7 +686,7 @@ export default function AssessmentTaker() {
         setHasStarted(true);
       })
       .catch(() => toast.error('Fullscreen blocked. Please click again.'));
-  }, [assessment]);
+  }, [assessment, id]);
 
   // Check if clipboard event came from inside Monaco (avoid false cheat strikes)
   const isMonacoEvent = (e) => {

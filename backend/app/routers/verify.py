@@ -502,40 +502,38 @@ async def get_assessment(
         **({}  if is_candidate else {"correct_answer": q.correct_answer, "model_answer": q.model_answer}),
     } for q in questions]
 
-    # For candidates, also return their assignment id + current strike state + timer state
+    # For candidates (and any user taking the test), return assignment id + strike/timer state
     assignment_meta = {}
-    if is_candidate:
-        assgn_res = await db.execute(select(AssessmentAssignment).where(AssessmentAssignment.assessment_id == assessment_id, AssessmentAssignment.user_id == current_user.id))
-        assgn = assgn_res.scalar_one_or_none()
-        if assgn:
-            # ── Compute server-side time remaining ─────────────────────────────
-            # If the candidate has previously started the test, we compute how many
-            # seconds they have left based on the wall-clock time elapsed since
-            # started_at. This is the single source of truth — a page reload can
-            # never reset or extend the timer.
-            time_remaining_seconds = None
-            session_already_started = False
-            if assgn.started_at and a.time_limit_minutes:
-                elapsed = (datetime.utcnow() - assgn.started_at).total_seconds()
-                total = a.time_limit_minutes * 60
-                remaining = max(0, total - int(elapsed))
-                time_remaining_seconds = remaining
-                session_already_started = True
+    assgn_res = await db.execute(select(AssessmentAssignment).where(AssessmentAssignment.assessment_id == assessment_id, AssessmentAssignment.user_id == current_user.id))
+    assgn = assgn_res.scalar_one_or_none()
+    if assgn:
+        # ── session_already_started is true whenever started_at is set ─────────
+        # This is the single source of truth. It MUST NOT be gated on
+        # time_limit_minutes — a candidate who already started must always see
+        # the resume warning, even on unlimited assessments.
+        session_already_started = assgn.started_at is not None
 
-            assignment_meta = {
-                "assignment_id": assgn.id,
-                "strike_count": assgn.strike_count or 0,
-                "terminated_by_proctor": assgn.terminated_by_proctor or False,
-                "time_remaining_seconds": time_remaining_seconds,
-                "session_already_started": session_already_started,
-            }
-            if assgn.custom_questions:
-                # Strip correct_answer / model_answer from the stored custom question set
-                _CANDIDATE_STRIP = {"correct_answer", "model_answer"}
-                formatted_questions = [
-                    {k: v for k, v in cq.items() if k not in _CANDIDATE_STRIP}
-                    for cq in assgn.custom_questions
-                ]
+        # ── Compute server-side time remaining ────────────────────────────────
+        time_remaining_seconds = None
+        if assgn.started_at and a.time_limit_minutes:
+            elapsed = (datetime.utcnow() - assgn.started_at).total_seconds()
+            total = a.time_limit_minutes * 60
+            time_remaining_seconds = max(0, total - int(elapsed))
+
+        assignment_meta = {
+            "assignment_id": assgn.id,
+            "strike_count": assgn.strike_count or 0,
+            "terminated_by_proctor": assgn.terminated_by_proctor or False,
+            "time_remaining_seconds": time_remaining_seconds,
+            "session_already_started": session_already_started,
+        }
+        if is_candidate and assgn.custom_questions:
+            # Strip correct_answer / model_answer from the stored custom question set
+            _CANDIDATE_STRIP = {"correct_answer", "model_answer"}
+            formatted_questions = [
+                {k: v for k, v in cq.items() if k not in _CANDIDATE_STRIP}
+                for cq in assgn.custom_questions
+            ]
 
     return success({
         "id": a.id, "title": a.title, "description": a.description,
@@ -600,7 +598,7 @@ async def record_strike(
 
 
 class StartSessionRequest(BaseModel):
-    assignment_id: int
+    assessment_id: int
 
 
 @router.post("/start-session")
@@ -610,20 +608,40 @@ async def start_session(
     db: AsyncSession = Depends(get_db),
 ):
     """Record the wall-clock timestamp when a candidate first opens the assessment.
-    
-    This is an idempotent operation — calling it again on a re-visit will NOT
-    overwrite the original started_at, so the server-side timer cannot be reset
-    by closing and re-opening the assessment page.
+
+    Idempotent — calling it again on a re-visit does NOT overwrite started_at,
+    so the timer cannot be reset by closing and reopening the page.
+
+    Auto-creates an AssessmentAssignment row if one doesn't exist, making
+    session tracking work for any user who accesses the assessment URL.
     """
+    # Verify assessment exists and belongs to user's org
+    asmt_res = await db.execute(
+        select(Assessment).where(Assessment.id == body.assessment_id, Assessment.org_id == current_user.org_id)
+    )
+    asmt = asmt_res.scalar_one_or_none()
+    if not asmt:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+
+    # Fetch or create the assignment row for this user
     assgn_res = await db.execute(
         select(AssessmentAssignment).where(
-            AssessmentAssignment.id == body.assignment_id,
+            AssessmentAssignment.assessment_id == body.assessment_id,
             AssessmentAssignment.user_id == current_user.id,
         )
     )
     assgn = assgn_res.scalar_one_or_none()
+
     if not assgn:
-        raise HTTPException(status_code=404, detail="Assignment not found")
+        # No formal assignment — create one now so session state can be tracked
+        assgn = AssessmentAssignment(
+            assessment_id=body.assessment_id,
+            user_id=current_user.id,
+            assigned_by=current_user.id,  # self-assigned (direct access)
+            status=AssignmentStatus.pending,
+        )
+        db.add(assgn)
+        await db.flush()  # get assgn.id without full commit
 
     if assgn.terminated_by_proctor:
         raise HTTPException(status_code=403, detail="Assessment has been terminated by proctoring system.")
@@ -631,23 +649,21 @@ async def start_session(
     is_resume = assgn.started_at is not None
 
     if not is_resume:
-        # First time — stamp the start time and mark as in-progress
+        # First time — stamp the start time
         assgn.started_at = datetime.utcnow()
         assgn.status = AssignmentStatus.started
-        await db.commit()
 
-    # Recompute remaining time for both first-start and resume paths
-    from app.models.verify import Assessment as Asmt
-    asmt_res = await db.execute(select(Asmt).where(Asmt.id == assgn.assessment_id))
-    asmt = asmt_res.scalar_one_or_none()
+    await db.commit()
+    await db.refresh(assgn)
 
     time_remaining_seconds = None
-    if asmt and asmt.time_limit_minutes and assgn.started_at:
+    if asmt.time_limit_minutes and assgn.started_at:
         elapsed = (datetime.utcnow() - assgn.started_at).total_seconds()
         total = asmt.time_limit_minutes * 60
         time_remaining_seconds = max(0, total - int(elapsed))
 
     return success({
+        "assignment_id": assgn.id,
         "is_resume": is_resume,
         "time_remaining_seconds": time_remaining_seconds,
         "strike_count": assgn.strike_count or 0,
