@@ -502,16 +502,32 @@ async def get_assessment(
         **({}  if is_candidate else {"correct_answer": q.correct_answer, "model_answer": q.model_answer}),
     } for q in questions]
 
-    # For candidates, also return their assignment id + current strike state
+    # For candidates, also return their assignment id + current strike state + timer state
     assignment_meta = {}
     if is_candidate:
         assgn_res = await db.execute(select(AssessmentAssignment).where(AssessmentAssignment.assessment_id == assessment_id, AssessmentAssignment.user_id == current_user.id))
         assgn = assgn_res.scalar_one_or_none()
         if assgn:
+            # ── Compute server-side time remaining ─────────────────────────────
+            # If the candidate has previously started the test, we compute how many
+            # seconds they have left based on the wall-clock time elapsed since
+            # started_at. This is the single source of truth — a page reload can
+            # never reset or extend the timer.
+            time_remaining_seconds = None
+            session_already_started = False
+            if assgn.started_at and a.time_limit_minutes:
+                elapsed = (datetime.utcnow() - assgn.started_at).total_seconds()
+                total = a.time_limit_minutes * 60
+                remaining = max(0, total - int(elapsed))
+                time_remaining_seconds = remaining
+                session_already_started = True
+
             assignment_meta = {
                 "assignment_id": assgn.id,
                 "strike_count": assgn.strike_count or 0,
                 "terminated_by_proctor": assgn.terminated_by_proctor or False,
+                "time_remaining_seconds": time_remaining_seconds,
+                "session_already_started": session_already_started,
             }
             if assgn.custom_questions:
                 # Strip correct_answer / model_answer from the stored custom question set
@@ -577,11 +593,65 @@ async def record_strike(
     assgn.strike_count = (assgn.strike_count or 0) + 1
     if body.is_terminal:
         assgn.terminated_by_proctor = True
-        assgn.status = AssignmentStatus.in_progress  # keep it non-completed until submit
+        assgn.status = AssignmentStatus.started  # keep it non-completed until submit
 
     await db.commit()
     return success({"strike_count": assgn.strike_count, "terminated": assgn.terminated_by_proctor})
 
+
+class StartSessionRequest(BaseModel):
+    assignment_id: int
+
+
+@router.post("/start-session")
+async def start_session(
+    body: StartSessionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Record the wall-clock timestamp when a candidate first opens the assessment.
+    
+    This is an idempotent operation — calling it again on a re-visit will NOT
+    overwrite the original started_at, so the server-side timer cannot be reset
+    by closing and re-opening the assessment page.
+    """
+    assgn_res = await db.execute(
+        select(AssessmentAssignment).where(
+            AssessmentAssignment.id == body.assignment_id,
+            AssessmentAssignment.user_id == current_user.id,
+        )
+    )
+    assgn = assgn_res.scalar_one_or_none()
+    if not assgn:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    if assgn.terminated_by_proctor:
+        raise HTTPException(status_code=403, detail="Assessment has been terminated by proctoring system.")
+
+    is_resume = assgn.started_at is not None
+
+    if not is_resume:
+        # First time — stamp the start time and mark as in-progress
+        assgn.started_at = datetime.utcnow()
+        assgn.status = AssignmentStatus.started
+        await db.commit()
+
+    # Recompute remaining time for both first-start and resume paths
+    from app.models.verify import Assessment as Asmt
+    asmt_res = await db.execute(select(Asmt).where(Asmt.id == assgn.assessment_id))
+    asmt = asmt_res.scalar_one_or_none()
+
+    time_remaining_seconds = None
+    if asmt and asmt.time_limit_minutes and assgn.started_at:
+        elapsed = (datetime.utcnow() - assgn.started_at).total_seconds()
+        total = asmt.time_limit_minutes * 60
+        time_remaining_seconds = max(0, total - int(elapsed))
+
+    return success({
+        "is_resume": is_resume,
+        "time_remaining_seconds": time_remaining_seconds,
+        "strike_count": assgn.strike_count or 0,
+    })
 
 
 @router.patch("/assessments/{assessment_id}/status")

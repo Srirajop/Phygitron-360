@@ -98,6 +98,9 @@ export default function AssessmentTaker() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
   const [strikeCount, setStrikeCount] = useState(0);
+  // Resume-session state: true if candidate previously started this assessment
+  const [sessionAlreadyStarted, setSessionAlreadyStarted] = useState(false);
+  const [startingSession, setStartingSession] = useState(false);
 
   const submittingRef = useRef(false);
   const startTime = useRef(null);
@@ -138,7 +141,7 @@ export default function AssessmentTaker() {
       const data = r.data.data;
       if (data.terminated_by_proctor) {
         toast.error('This assessment was previously terminated by a proctor due to rules violations.', { duration: 10000 });
-        nav('/verify/dashboard'); // Or navigate to some error page
+        nav('/verify/dashboard');
         return;
       }
       setAssessment(data);
@@ -148,8 +151,19 @@ export default function AssessmentTaker() {
         strikes.current = data.strike_count;
         setStrikeCount(data.strike_count);
       }
-      
-      if (data.time_limit_minutes) setTimeLeft(data.time_limit_minutes * 60);
+
+      // ── SERVER-AUTHORITATIVE TIMER ─────────────────────────────────────────
+      // If the candidate already started the test previously, the server returns
+      // time_remaining_seconds computed from the original wall-clock start time.
+      // We use that value directly so a page reload can never reset the countdown.
+      // If this is a fresh session (no started_at on server), fall back to the
+      // full time limit — the actual timer won't tick until requestFS() fires.
+      if (data.session_already_started && data.time_remaining_seconds !== undefined && data.time_remaining_seconds !== null) {
+        setTimeLeft(data.time_remaining_seconds);
+        setSessionAlreadyStarted(true);
+      } else if (data.time_limit_minutes) {
+        setTimeLeft(data.time_limit_minutes * 60);
+      }
     }).finally(() => setLoading(false));
   }, [id, nav]);
 
@@ -608,19 +622,54 @@ export default function AssessmentTaker() {
   // Keep the cheat-attempt ref always pointing to the latest callback
   useEffect(() => { handleCheatAttemptRef.current = handleCheatAttempt; }, [handleCheatAttempt]);
 
-  const requestFS = () => {
-    if (document.documentElement.requestFullscreen) {
-      document.documentElement.requestFullscreen()
-        .then(() => {
-          const now = Date.now();
-          sessionStartedAtRef.current = now;
-          if (!startTime.current) startTime.current = now;
-          setIsFullscreen(true);
-          setHasStarted(true);
-        })
-        .catch(() => toast.error('Fullscreen blocked. Please click again.'));
+  const requestFS = useCallback(async () => {
+    if (!document.documentElement.requestFullscreen) return;
+
+    // ── Tell the server this session is starting (idempotent — safe to call on resume) ──
+    // The server stamps started_at once and never overwrites it, so the returned
+    // time_remaining_seconds is always the true remaining time regardless of how
+    // many times the candidate closes and reopens the page.
+    if (assessment?.assignment_id) {
+      setStartingSession(true);
+      try {
+        const res = await verifyApi.startSession({ assignment_id: assessment.assignment_id });
+        const sdata = res.data?.data;
+        if (sdata) {
+          // Sync strikes from server (may differ from client if network was lost)
+          if (sdata.strike_count !== undefined) {
+            strikes.current = sdata.strike_count;
+            setStrikeCount(sdata.strike_count);
+          }
+          // Override the timer with the server-authoritative remaining seconds
+          if (sdata.time_remaining_seconds !== null && sdata.time_remaining_seconds !== undefined) {
+            setTimeLeft(sdata.time_remaining_seconds);
+          }
+        }
+      } catch (err) {
+        const detail = err?.response?.data?.detail;
+        if (err?.response?.status === 403) {
+          // Proctor-terminated — refuse entry
+          toast.error(detail || 'This assessment was terminated due to proctoring violations.', { duration: 8000 });
+          setStartingSession(false);
+          return;
+        }
+        // Non-fatal: log and continue so the candidate isn't stuck
+        console.error('start-session failed', err);
+      } finally {
+        setStartingSession(false);
+      }
     }
-  };
+
+    document.documentElement.requestFullscreen()
+      .then(() => {
+        const now = Date.now();
+        sessionStartedAtRef.current = now;
+        if (!startTime.current) startTime.current = now;
+        setIsFullscreen(true);
+        setHasStarted(true);
+      })
+      .catch(() => toast.error('Fullscreen blocked. Please click again.'));
+  }, [assessment]);
 
   // Check if clipboard event came from inside Monaco (avoid false cheat strikes)
   const isMonacoEvent = (e) => {
@@ -637,9 +686,29 @@ export default function AssessmentTaker() {
 
   // ── Mandatory Start Gate ───────────────────────────────────────────────────
   if (!hasStarted) {
+    const resumeTimeStr = timeLeft !== null ? `${String(Math.floor(timeLeft / 60)).padStart(2, '0')}:${String(timeLeft % 60).padStart(2, '0')}` : null;
     return (
       <div style={{ position: 'fixed', inset: 0, background: 'linear-gradient(135deg, #020108 0%, #1E1B4B 50%, #020108 100%)', zIndex: 9999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 24 }}>
-        <div className="animate-scale-in" style={{ maxWidth: 520 }}>
+        <div className="animate-scale-in" style={{ maxWidth: 540 }}>
+
+          {/* ── RESUME WARNING BANNER ─────────────────────────────────────── */}
+          {sessionAlreadyStarted && (
+            <div style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.5)', borderRadius: 12, padding: '16px 20px', marginBottom: 24, textAlign: 'left', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+              <AlertOctagon size={22} color="#ef4444" style={{ flexShrink: 0, marginTop: 2 }} />
+              <div>
+                <div style={{ color: '#ef4444', fontWeight: 800, fontSize: '0.95rem', marginBottom: 6 }}>⚠️ Resuming a Previous Session</div>
+                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.85rem', lineHeight: 1.6 }}>
+                  You have already started this assessment. Your previous session is still active.
+                  Closing and reopening the page does <strong style={{ color: '#ef4444' }}>not reset your timer or strikes</strong>.
+                </div>
+                <div style={{ marginTop: 10, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  {resumeTimeStr && <span style={{ background: 'rgba(239,68,68,0.2)', color: '#fca5a5', padding: '4px 12px', borderRadius: 8, fontSize: '0.8rem', fontWeight: 700, fontFamily: 'monospace' }}>⏱ {resumeTimeStr} remaining</span>}
+                  <span style={{ background: 'rgba(239,68,68,0.2)', color: '#fca5a5', padding: '4px 12px', borderRadius: 8, fontSize: '0.8rem', fontWeight: 700 }}>⚡ {strikeCount}/{MAX_STRIKES} strikes carried over</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg, #7C3AED, #A855F7)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 28px', boxShadow: '0 0 40px rgba(124,58,237,0.3)' }}>
             <Maximize size={36} color="#fff" />
           </div>
@@ -657,10 +726,22 @@ export default function AssessmentTaker() {
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>📝</span> {(assessment.questions || []).length} questions</div>
             </div>
           </div>
-          <button className="btn btn-primary btn-lg btn-block" onClick={requestFS} style={{ padding: '16px 32px', fontSize: '1.1rem', fontWeight: 700 }}>
-            <Maximize size={20} /> Enter Fullscreen &amp; Start Assessment
+          <button
+            className="btn btn-primary btn-lg btn-block"
+            onClick={requestFS}
+            disabled={startingSession}
+            style={{ padding: '16px 32px', fontSize: '1.1rem', fontWeight: 700 }}
+          >
+            {startingSession
+              ? <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2, marginRight: 8 }} /> Connecting...</>
+              : <><Maximize size={20} /> {sessionAlreadyStarted ? 'Resume Assessment' : 'Enter Fullscreen \u0026 Start Assessment'}</>
+            }
           </button>
-          <p style={{ marginTop: 20, color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem' }}>By starting, you agree to the proctoring terms above.</p>
+          <p style={{ marginTop: 20, color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem' }}>
+            {sessionAlreadyStarted
+              ? 'Your session data is preserved on our servers. You cannot reset your timer or strikes.'
+              : 'By starting, you agree to the proctoring terms above.'}
+          </p>
         </div>
       </div>
     );
