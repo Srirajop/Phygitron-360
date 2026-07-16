@@ -77,10 +77,6 @@ const roleNavItems = {
     { section: 'Verify', module: 'verify', items: [
       { to: '/verify/dashboard', label: 'My Assessments', icon: CheckSquare },
     ]},
-    { section: 'Learning', module: 'forge', items: [
-      { to: '/forge', label: 'Dashboard', icon: BookOpen },
-      { to: '/forge/transcript', label: 'My Transcript', icon: Award },
-    ]},
   ],
   employee: [
     { section: 'Employees', module: 'deploy', items: [
@@ -89,10 +85,6 @@ const roleNavItems = {
     ]},
     { section: 'Verify', module: 'verify', items: [
       { to: '/verify/dashboard', label: 'My Assessments', icon: CheckSquare },
-    ]},
-    { section: 'Learning', module: 'forge', items: [
-      { to: '/forge', label: 'Dashboard', icon: BookOpen },
-      { to: '/forge/transcript', label: 'My Transcript', icon: Award },
     ]},
   ],
   manager: [
