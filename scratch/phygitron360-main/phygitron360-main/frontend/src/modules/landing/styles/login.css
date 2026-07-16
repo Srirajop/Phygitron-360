@@ -1,0 +1,108 @@
+/* ===== LOGIN PAGE ===== */
+.login-page {
+  display: flex;
+  height: 100vh;
+  background: #f5f5f5;
+}
+
+/* LEFT SIDE */
+.login-left {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.login-left img {
+  width: 100%;
+  max-width: 520px;
+  border-radius: 12px;
+}
+
+/* RIGHT SIDE */
+.login-right {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* BOX */
+.login-box {
+  width: 100%;
+  max-width: 400px;
+}
+
+/* BACK ARROW */
+.back {
+  color: #000000;
+  
+  font-size: 22px;
+  margin-bottom: 20px;
+  cursor: pointer;
+}
+
+/* TITLE */
+.login-box h2 {
+   color: #000000; 
+  font-size: 28px;
+  margin-bottom: 30px;
+  font-weight: 500;
+}
+
+/* FORM */
+.login-box label {
+  font-size: 13px;
+  margin-bottom: 6px;
+  display: block;
+  color: #000000;
+}
+
+.login-box input {
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 20px;
+  border: 1px solid #000000;
+  border-radius: 6px;
+  outline: none;
+}
+
+/* PASSWORD ROW */
+.password-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.password-row span {
+  font-size: 14px;
+  font-weight: 600;
+  color: #7B1EFF;
+  cursor: pointer;
+}
+
+/* BUTTON */
+.login-box button {
+  width: 100%;
+  padding: 12px;
+  background: #7B1EFF;
+  border: none;
+  color: rgb(255, 248, 248);
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.error-box {
+  background: #ffe5e5;
+  color: #d00000;
+  padding: 10px;
+  margin-bottom: 20px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+input {
+  color: black;
+}

@@ -1,0 +1,72 @@
+.card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 24px;
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 18px;
+}
+
+.add-btn {
+  font-size: 13px;
+  color: #7c5cff;
+  border: 1px solid #7c5cff;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.add-btn:hover {
+  background: #f3f0ff;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 24px;
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.add-btn {
+  font-size: 13px;
+  color: #7c5cff;
+  border: 1px solid #7c5cff;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.add-btn:hover {
+  background: #f3f0ff;
+}
+
+.delete-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.input {
+  width: 100%;
+  border: 1px solid #ddd;
+  padding: 12px;
+  border-radius: 8px;
+  color: black;
+}
+
+.label {
+  font-size: 13px;
+  margin-bottom: 6px;
+  display: block;
+}

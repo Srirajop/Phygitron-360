@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+
+<html class="scroll-smooth" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>PHYGITRON 360 | The Digital Curator for Talent Intelligence</title>
+<meta content="A premium B2B SaaS HR platform for talent intelligence, sourcing, and verification." name="description"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=Inter:wght@300;400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-bright": "#f9f9f9",
+                        "tertiary-fixed-dim": "#c8c4d4",
+                        "on-primary": "#ffffff",
+                        "inverse-on-surface": "#f0f1f1",
+                        "surface-container-low": "#f3f3f4",
+                        "on-secondary-container": "#656464",
+                        "on-error-container": "#93000a",
+                        "on-error": "#ffffff",
+                        "surface-variant": "#e2e2e2",
+                        "on-surface-variant": "#494457",
+                        "on-secondary-fixed-variant": "#474646",
+                        "on-tertiary": "#ffffff",
+                        "inverse-surface": "#2f3131",
+                        "on-background": "#1a1c1c",
+                        "on-surface": "#1a1c1c",
+                        "surface": "#f9f9f9",
+                        "on-primary-fixed": "#20005e",
+                        "on-tertiary-fixed-variant": "#474552",
+                        "error-container": "#ffdad6",
+                        "on-tertiary-fixed": "#1b1a25",
+                        "error": "#ba1a1a",
+                        "primary": "#5300d5",
+                        "secondary-fixed-dim": "#c8c6c5",
+                        "surface-container-high": "#e8e8e8",
+                        "surface-container-highest": "#e2e2e2",
+                        "surface-dim": "#dadada",
+                        "on-secondary": "#ffffff",
+                        "on-primary-container": "#e2d6ff",
+                        "outline-variant": "#cbc3da",
+                        "on-secondary-fixed": "#1c1b1b",
+                        "secondary": "#5f5e5e",
+                        "tertiary-fixed": "#e4e0f0",
+                        "background": "#f9f9f9",
+                        "secondary-container": "#e5e2e1",
+                        "inverse-primary": "#cdbdff",
+                        "on-primary-fixed-variant": "#5000cf",
+                        "secondary-fixed": "#e5e2e1",
+                        "surface-tint": "#6a22fd",
+                        "primary-fixed-dim": "#cdbdff",
+                        "tertiary-container": "#615f6c",
+                        "tertiary": "#494754",
+                        "outline": "#7a7488",
+                        "surface-container-lowest": "#ffffff",
+                        "on-tertiary-container": "#dedaea",
+                        "primary-fixed": "#e8ddff",
+                        "primary-container": "#6c27ff",
+                        "surface-container": "#eeeeee"
+                    },
+                    fontFamily: {
+                        "headline": ["Manrope", "sans-serif"],
+                        "body": ["Inter", "sans-serif"],
+                        "label": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .bg-primary-gradient {
+            background: linear-gradient(135deg, #5300d5 0%, #6c27ff 100%);
+        }
+        .hero-floating {
+            box-shadow: 0px 10px 40px rgba(108, 39, 255, 0.12);
+            transform: perspective(1000px) rotateY(-5deg) rotateX(2deg);
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body selection:bg-primary-fixed selection:text-on-primary-fixed">
+<!-- TopNavBar -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl shadow-[0_4px_20px_rgba(108,39,255,0.04)]">
+<div class="flex justify-between items-center max-w-7xl mx-auto px-6 h-20">
+<div class="flex items-center gap-2 text-xl font-bold text-slate-900 font-headline tracking-tight">
+<span class="w-8 h-8 rounded-lg bg-primary-gradient flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-lg" data-icon="hub">hub</span>
+</span>
+                PHYGITRON 360
+            </div>
+<div class="hidden md:flex items-center gap-10 font-headline font-medium text-sm tracking-tight text-slate-600">
+<a class="hover:text-primary transition-colors duration-200" href="#">Features</a>
+<a class="hover:text-primary transition-colors duration-200" href="#">How it Works</a>
+<a class="hover:text-primary transition-colors duration-200" href="#">Modules</a>
+<a class="hover:text-primary transition-colors duration-200" href="#">Pricing</a>
+</div>
+<div class="flex items-center gap-6">
+<button class="text-sm font-semibold text-slate-600 hover:text-primary transition-colors">Login</button>
+<button class="bg-primary-gradient text-on-primary px-6 py-2.5 rounded-lg text-sm font-semibold shadow-lg shadow-primary/20 active:scale-95 transition-all">Get Started</button>
+</div>
+</div>
+</nav>
+<!-- Hero Section -->
+<section class="pt-40 pb-24 px-6 overflow-hidden">
+<div class="max-w-7xl mx-auto grid lg:grid-cols-2 gap-16 items-center">
+<div class="space-y-8">
+<div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary-fixed text-on-primary-fixed-variant text-xs font-semibold tracking-wider uppercase">
+<span class="material-symbols-outlined text-sm" data-icon="auto_awesome">auto_awesome</span>
+                    Next-Gen Talent Intelligence
+                </div>
+<h1 class="text-6xl md:text-7xl font-headline font-extrabold text-on-background leading-[1.1] tracking-tighter">
+                    The Complete Talent <br/>
+<span class="text-primary-container">Intelligence</span> Platform
+                </h1>
+<p class="text-lg text-on-surface-variant max-w-lg leading-relaxed">
+                    Unify sourcing, learning, and verification into a single editorialized workspace designed for high-stakes enterprise HR.
+                </p>
+<div class="flex flex-wrap gap-4 pt-4">
+<button class="bg-primary-gradient text-on-primary px-8 py-4 rounded-lg font-bold shadow-xl shadow-primary/25 hover:opacity-90 transition-opacity">Get Started Free</button>
+<button class="border-2 border-primary text-primary px-8 py-4 rounded-lg font-bold flex items-center gap-2 hover:bg-primary/5 transition-colors">
+<span class="material-symbols-outlined" data-icon="play_circle">play_circle</span>
+                        Watch Demo
+                    </button>
+</div>
+<div class="pt-12">
+<p class="text-xs font-semibold text-on-surface-variant/60 uppercase tracking-widest mb-6">Trusted by 200+ organizations</p>
+<div class="flex flex-wrap gap-8 opacity-40 grayscale contrast-125">
+<img class="h-6" data-alt="minimalist corporate logo for global enterprise company" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDAJQjc8u4irB6CCXSU6-efd50OnMpqckLEf93tEwppJ3h1-ONqAgV_DKG1ZYmVTD22Sr2fQfkJdt0GV1o5G31V3_XenKgSx5UiviQcqztS3fnZI7pxiC53sLLmIugYJmRb86FLCN4ox8c56a54A_jk5rfxP6Jo8cyPrqM4XHZQePgQf2TIaIxvPDgkGOsaLh69XcnmlpWZVcHuHsi5Y7rid62JuzbJ5_hpV4ixdhbsGqFP-VLuihP0lTPy34UTrhp2477ca0PamRAb"/>
+<img class="h-6" data-alt="clean tech startup brand mark with geometric shapes" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB6YN5o258PRp5z0aek4u-LDUWLivyljiLFFroBOXUBwJK-mCs0wQra83MVh0KUVYX6zyVUzFW7fStsJIdh_8tS4pl_IST6OhJ1eYTK6qEB8JOmYjqMOhHpIPkR80OTaRa3bi2HkcD-1X5rGFnMAkTCy49JGB2o_5quW2ET1itPXVvaLPhrUYvksGttMjMi9M_59R8rzXTdROQQKc3JuffWxThdK0EN95g9M-wPDk7Z6kFhnk4RkRjS-6pQzqypKnbFQDv0E3ame6gx"/>
+<img class="h-6" data-alt="modern financial services firm logo typeface" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCD41WPryQ173rAiGXo-07gR5o6M9zJqY0Cgy19_MRwsBEKup5UNjh_gOrOhSvvfVJCZQOgzCTULeY7qNSZ0UH1-j46ddm6V1029evx7lXkCkbkXwT9GK2VntIO0TYpYK9AKO8mmykA-h2vrJfkrzxoEAd5s0-EPqypWh901RHKaPjQyuue_dlfieLk9RE6O0z8ueYgDpnwj2DkPtzvA1mfOk1wa8ZYbJjC1vNd2nNVPDyFqlbxyJrTN7ZrefXYLF58yu4ZWwf3H-SD"/>
+<img class="h-6" data-alt="sleek professional healthcare organization emblem" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDCHIZz2C9yyPBxbRUweHHIOhSXSqh-PBGh2nPfluP1FNaPoysRUMkknfGd9AXIyJJ-yY3bNd_kAv0d1AxdOaap49naJSPdCpGGYgKYHrGbIaRYH0DwrMb2vshXFk3cS1loz35avPlSEIjbIN5jrE4FiJszZyy1zhS-rZ8ASQZ-h9s6WeEv6akWcAup59OsXoBsFStew49ieNgREFW_te7SKtNRSJGfkLQFLIwr0rg2V4Ukqdts-iFASLEKw1mf2Uh9W3Lo4kwdTACD"/>
+<img class="h-6" data-alt="abstract manufacturing conglomerate corporate identity" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD4k_IRoOOfeG9ncbFCjMh3SHZpA-2wtCbR4LjeTGngdsgZAApmJmLGIqU7FOxQSr9yZoBdnM1SNp6kyjmazN72OiJKI_CrF8foSjw46z9cjCZHrz76P-b6qMn7CUPF5l2lPit_y6-SK2e-pZwy4_nL2HkjSvzUmGrO2OrGAMcxSvU8bKK7QTIfz497LVjUYRPgdeQltl4laIovjao3RINbRopIVvZ9ER_TEcLe_Ssgz5VB9h0BXzfbgjTrzJgpLoXmxSxk2fLrdub7"/>
+</div>
+</div>
+</div>
+<div class="relative group">
+<div class="absolute -inset-4 bg-primary/10 rounded-full blur-3xl opacity-20 group-hover:opacity-30 transition-opacity"></div>
+<img class="relative w-full rounded-xl hero-floating border border-white/20" data-alt="sleek modern SaaS dashboard showing talent metrics, candidate profiles and purple skill graphs with floating glass cards" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDB2ub8pYFh3x4ysKRdurItsJ3QuRJ2KJWDvUvi1XNn2aDgZgJ22zoXso7DKgKKaXOD1dvYwVVEGwa4CE64T4F9u52UNVuWH_7NzihulRTkiZgs3jUJe-ncSAgmAeIrUFAtWzaO47vs0zasu_Phe_8fc3NgB9fs8aQqPY0Rrj8fgVluPGrIFxNMyldcXJweb1AJwufbTbauMnf2pD1OESoKRco08dYZsH86yd3UEngGSx8KBrUzt5djl7BzzFBXhiZVvRzDul5GzVaQ"/>
+</div>
+</div>
+</section>
+<!-- Stats Bar -->
+<section class="bg-[#F3EFFF] py-16">
+<div class="max-w-7xl mx-auto px-6">
+<div class="grid grid-cols-2 md:grid-cols-4 gap-8">
+<div class="text-center">
+<p class="text-4xl font-headline font-extrabold text-primary mb-2">12,000+</p>
+<p class="text-sm font-medium text-on-surface-variant">Candidates Sourced</p>
+</div>
+<div class="text-center">
+<p class="text-4xl font-headline font-extrabold text-primary mb-2">98%</p>
+<p class="text-sm font-medium text-on-surface-variant">Verification Accuracy</p>
+</div>
+<div class="text-center">
+<p class="text-4xl font-headline font-extrabold text-primary mb-2">340+</p>
+<p class="text-sm font-medium text-on-surface-variant">Courses Delivered</p>
+</div>
+<div class="text-center">
+<p class="text-4xl font-headline font-extrabold text-primary mb-2">60%</p>
+<p class="text-sm font-medium text-on-surface-variant">Faster Hiring</p>
+</div>
+</div>
+</div>
+</section>
+<!-- Problem Section -->
+<section class="py-24 px-6 bg-white">
+<div class="max-w-7xl mx-auto grid lg:grid-cols-2 gap-20 items-center">
+<div class="space-y-10">
+<div class="space-y-4">
+<h2 class="text-4xl font-headline font-bold text-on-background leading-tight">Your talent tools are scattered.<br/>Your data is not.</h2>
+<p class="text-on-surface-variant">Traditional HR tech creates silos. We create visibility.</p>
+</div>
+<div class="space-y-6">
+<div class="flex gap-4 items-start">
+<span class="material-symbols-outlined text-error" data-icon="close">close</span>
+<div>
+<p class="font-bold text-on-background">Disconnected Sourcing</p>
+<p class="text-sm text-on-surface-variant">Data lost between LinkedIn, job boards, and internal ATS.</p>
+</div>
+</div>
+<div class="flex gap-4 items-start">
+<span class="material-symbols-outlined text-error" data-icon="close">close</span>
+<div>
+<p class="font-bold text-on-background">Unverified Skills</p>
+<p class="text-sm text-on-surface-variant">Relying on "claimed" skills rather than proven capability.</p>
+</div>
+</div>
+<div class="flex gap-4 items-start">
+<span class="material-symbols-outlined text-error" data-icon="close">close</span>
+<div>
+<p class="font-bold text-on-background">Friction in Learning</p>
+<p class="text-sm text-on-surface-variant">Generic training modules that don't translate to performance.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="p-12 bg-surface-container-low rounded-2xl relative">
+<!-- Abstract Diagram Placeholder -->
+<div class="aspect-video flex items-center justify-center">
+<div class="relative w-full h-full flex items-center justify-center">
+<div class="absolute top-10 left-10 w-20 h-20 bg-white rounded-lg shadow-md flex items-center justify-center border-l-4 border-error/30">
+<span class="material-symbols-outlined text-error/40" data-icon="database">database</span>
+</div>
+<div class="absolute bottom-10 right-10 w-20 h-20 bg-white rounded-lg shadow-md flex items-center justify-center border-l-4 border-error/30">
+<span class="material-symbols-outlined text-error/40" data-icon="school">school</span>
+</div>
+<div class="absolute top-10 right-20 w-16 h-16 bg-white rounded-lg shadow-md flex items-center justify-center border-l-4 border-error/30">
+<span class="material-symbols-outlined text-error/40" data-icon="group">group</span>
+</div>
+<div class="w-1 h-1 bg-error/20 absolute top-1/2 left-1/4 animate-ping"></div>
+<svg class="absolute inset-0 w-full h-full pointer-events-none opacity-20" viewbox="0 0 400 300">
+<path class="text-error" d="M100 80 L300 220" stroke="currentColor" stroke-dasharray="8 8" stroke-width="2"></path>
+<path class="text-error" d="M100 220 L300 80" stroke="currentColor" stroke-dasharray="8 8" stroke-width="2"></path>
+</svg>
+<p class="text-xs font-bold text-error/60 uppercase tracking-widest bg-error/5 px-4 py-2 rounded-full border border-error/10">Inefficient Fragmentation</p>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Solution Section -->
+<section class="py-24 px-6 bg-[#F3EFFF]">
+<div class="max-w-7xl mx-auto text-center space-y-16">
+<div class="max-w-2xl mx-auto space-y-4">
+<h2 class="text-4xl font-headline font-bold text-on-background">One platform. One profile. One truth.</h2>
+<p class="text-on-surface-variant">PHYGITRON 360 acts as the nervous system for your entire talent strategy.</p>
+</div>
+<div class="relative h-[400px] flex items-center justify-center">
+<div class="z-10 bg-white p-10 rounded-full shadow-2xl shadow-primary/20 border-4 border-primary/10">
+<div class="w-32 h-32 bg-primary-gradient rounded-full flex flex-col items-center justify-center text-white text-center p-4">
+<span class="material-symbols-outlined text-4xl" data-icon="all_inclusive">all_inclusive</span>
+<p class="text-[10px] font-bold uppercase tracking-tighter mt-2 leading-none">360° Profile</p>
+</div>
+</div>
+<!-- Connecting Nodes -->
+<div class="absolute top-0 left-1/4 bg-white p-6 rounded-xl shadow-lg border-l-4 border-primary">
+<span class="material-symbols-outlined text-primary mb-2" data-icon="search">search</span>
+<p class="text-xs font-bold">Source</p>
+</div>
+<div class="absolute bottom-0 left-1/4 bg-white p-6 rounded-xl shadow-lg border-l-4 border-primary">
+<span class="material-symbols-outlined text-primary mb-2" data-icon="psychology">psychology</span>
+<p class="text-xs font-bold">Forge</p>
+</div>
+<div class="absolute top-0 right-1/4 bg-white p-6 rounded-xl shadow-lg border-l-4 border-primary">
+<span class="material-symbols-outlined text-primary mb-2" data-icon="verified">verified</span>
+<p class="text-xs font-bold">Verify</p>
+</div>
+<div class="absolute bottom-0 right-1/4 bg-white p-6 rounded-xl shadow-lg border-l-4 border-primary">
+<span class="material-symbols-outlined text-primary mb-2" data-icon="rocket_launch">rocket_launch</span>
+<p class="text-xs font-bold">Deploy</p>
+</div>
+<svg class="absolute inset-0 w-full h-full -z-0" viewbox="0 0 1000 400">
+<path d="M300 100 L500 200 M300 300 L500 200 M700 100 L500 200 M700 300 L500 200" stroke="#5300d5" stroke-dasharray="0" stroke-linecap="round" stroke-width="2"></path>
+</svg>
+</div>
+</div>
+</section>
+<!-- Four Modules Section -->
+<section class="py-24 px-6 bg-white">
+<div class="max-w-7xl mx-auto">
+<div class="grid md:grid-cols-2 gap-8">
+<!-- Source -->
+<div class="group p-10 bg-surface-container-lowest rounded-2xl border-l-4 border-blue-500 hover:-translate-y-2 transition-transform shadow-sm hover:shadow-xl">
+<div class="w-12 h-12 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center mb-6">
+<span class="material-symbols-outlined" data-icon="search">search</span>
+</div>
+<h3 class="text-2xl font-headline font-bold mb-4">Source</h3>
+<p class="text-on-surface-variant leading-relaxed">Find and profile talent from any channel. Aggregate fragmented data into a unified candidate vision instantly.</p>
+</div>
+<!-- Forge -->
+<div class="group p-10 bg-surface-container-lowest rounded-2xl border-l-4 border-amber-500 hover:-translate-y-2 transition-transform shadow-sm hover:shadow-xl">
+<div class="w-12 h-12 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center mb-6">
+<span class="material-symbols-outlined" data-icon="bolt">bolt</span>
+</div>
+<h3 class="text-2xl font-headline font-bold mb-4">Forge</h3>
+<p class="text-on-surface-variant leading-relaxed">Train with personalized AI-driven learning paths. Upskill your workforce at scale with zero friction.</p>
+</div>
+<!-- Verify -->
+<div class="group p-10 bg-surface-container-lowest rounded-2xl border-l-4 border-violet-500 hover:-translate-y-2 transition-transform shadow-sm hover:shadow-xl">
+<div class="w-12 h-12 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center mb-6">
+<span class="material-symbols-outlined" data-icon="verified_user">verified_user</span>
+</div>
+<h3 class="text-2xl font-headline font-bold mb-4">Verify</h3>
+<p class="text-on-surface-variant leading-relaxed">Assess and certify with proof-based verification. Eliminate credential fraud with cryptographic truth.</p>
+</div>
+<!-- Deploy -->
+<div class="group p-10 bg-surface-container-lowest rounded-2xl border-l-4 border-emerald-500 hover:-translate-y-2 transition-transform shadow-sm hover:shadow-xl">
+<div class="w-12 h-12 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center mb-6">
+<span class="material-symbols-outlined" data-icon="near_me">near_me</span>
+</div>
+<h3 class="text-2xl font-headline font-bold mb-4">Deploy</h3>
+<p class="text-on-surface-variant leading-relaxed">Place the right person in the right role, every time. Predictive matching that minimizes turnover.</p>
+</div>
+</div>
+</div>
+</section>
+<!-- How it Works Section -->
+<section class="py-24 px-6 bg-white overflow-hidden">
+<div class="max-w-7xl mx-auto text-center space-y-16">
+<h2 class="text-4xl font-headline font-bold">From resume to deployment in one flow.</h2>
+<div class="relative flex flex-col md:flex-row justify-between items-center gap-12">
+<!-- Connector Line -->
+<div class="absolute top-1/2 left-0 w-full h-0.5 border-t-2 border-dashed border-primary/30 hidden md:block -translate-y-1/2 z-0"></div>
+<div class="relative z-10 flex flex-col items-center gap-4 w-40">
+<div class="w-14 h-14 rounded-full bg-primary text-white flex items-center justify-center font-bold text-xl ring-8 ring-white">1</div>
+<p class="font-bold">Source</p>
+</div>
+<div class="relative z-10 flex flex-col items-center gap-4 w-40">
+<div class="w-14 h-14 rounded-full bg-primary text-white flex items-center justify-center font-bold text-xl ring-8 ring-white">2</div>
+<p class="font-bold text-center">AI Screening</p>
+</div>
+<div class="relative z-10 flex flex-col items-center gap-4 w-40">
+<div class="w-14 h-14 rounded-full bg-primary text-white flex items-center justify-center font-bold text-xl ring-8 ring-white">3</div>
+<p class="font-bold">Training</p>
+</div>
+<div class="relative z-10 flex flex-col items-center gap-4 w-40">
+<div class="w-14 h-14 rounded-full bg-primary text-white flex items-center justify-center font-bold text-xl ring-8 ring-white">4</div>
+<p class="font-bold text-center">Skill Verification</p>
+</div>
+<div class="relative z-10 flex flex-col items-center gap-4 w-40">
+<div class="w-14 h-14 rounded-full bg-primary text-white flex items-center justify-center font-bold text-xl ring-8 ring-white">5</div>
+<p class="font-bold">Deployment</p>
+</div>
+</div>
+</div>
+</section>
+<!-- Feature Highlight Section -->
+<section class="py-24 space-y-32">
+<!-- Row 1 -->
+<div class="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-20 items-center">
+<div class="space-y-6">
+<h3 class="text-4xl font-headline font-bold text-on-background">AI-powered skill graph that maps the future.</h3>
+<p class="text-on-surface-variant text-lg leading-relaxed">Go beyond job titles. Our skill graph understands the semantic relationship between experiences, predicting a candidate's future potential with 90% accuracy.</p>
+<ul class="space-y-4">
+<li class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary" data-icon="check_circle">check_circle</span>
+                        Semantic matching engine
+                    </li>
+<li class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary" data-icon="check_circle">check_circle</span>
+                        Real-time industry benchmaring
+                    </li>
+</ul>
+</div>
+<div class="bg-surface-container-low p-8 rounded-2xl">
+<img class="rounded-xl shadow-lg w-full" data-alt="high-end UI visualization of a radial skill graph with glowing purple nodes connecting diverse technical competencies" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCSnq0wCdMWOnlX0QH16HklDhHAptK1wtNytSTud_9WjT9dZaeWOckZeK0T8CZsvesVqFH2k7aFNCqK1CW3rcvwZW9VLUuMLzalvM4zz1pYArqKDT0BC11fDLZ-AupvrfGbEyMQsCAPG8fkjuW6AQOTAxlHb2FprhduJNdsKu9ZCQ9giTisF2gOxPq-kU4IqacnWTjcHh5afKQDjV1bEgshjtyKa7pCo6YvQfeYgmiiWIib_eg91fPMoiR4BNfesNeV4ZQOGUGNKBUg"/>
+</div>
+</div>
+<!-- Row 2 -->
+<div class="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-20 items-center">
+<div class="lg:order-2 space-y-6">
+<h3 class="text-4xl font-headline font-bold text-on-background">Custom journey builder for tailored learning.</h3>
+<p class="text-on-surface-variant text-lg leading-relaxed">Every career is unique. Create hyper-personalized training paths that automatically adjust based on assessment performance and organizational needs.</p>
+<div class="p-6 bg-primary-fixed rounded-xl border border-primary/10">
+<p class="italic text-on-primary-fixed">"The journey builder reduced our onboarding time from 6 weeks to 10 days."</p>
+<p class="mt-4 font-bold text-primary">— HR Lead, Global Logistics</p>
+</div>
+</div>
+<div class="lg:order-1 bg-surface-container-low p-8 rounded-2xl">
+<img class="rounded-xl shadow-lg w-full" data-alt="interface showing a drag and drop workflow builder with colorful learning modules and progress connectors" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDtuKOVWdK4m2S1igZiOokS9lUNhDqI6PNDR6N7dB0Eqbsuv0Lf5EQ9eLJpP43LPMkaiQ9-2HXOZ94ARa1vvV3WaLgJrGogfgvdja93Wln9CTwwEoHGvGKXz4rU0ui5TMxjsHxpeO5ybZu0IVUq9EpWmTjQG7A7OWuf00Si8NLkr2Tzej0A8hD53ob0fV2cD5uTTa61PK-SeypGsjcwkhYEgt6Tr8GkEOJxurauoaZuAWIjyYxx1ynbJZeGtviDKbkdIUXt7xP-0SCS"/>
+</div>
+</div>
+<!-- Row 3 -->
+<div class="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-20 items-center">
+<div class="space-y-6">
+<h3 class="text-4xl font-headline font-bold text-on-background">Live trust dashboard for verifiable proof.</h3>
+<p class="text-on-surface-variant text-lg leading-relaxed">Total transparency for every placement. Access immutable records of training completion, skill assessments, and background checks in one view.</p>
+<button class="text-primary font-bold flex items-center gap-2 group">
+                    Explore the Trust Center 
+                    <span class="material-symbols-outlined group-hover:translate-x-1 transition-transform" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+<div class="bg-surface-container-low p-8 rounded-2xl">
+<img class="rounded-xl shadow-lg w-full" data-alt="dashboard showing a real-time activity feed of verified credentials and security badges in a clean minimalist grid" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA0XGOH73TlQNp6_Y76BBGAr8f3ebQ3Plza19qNfLrayjZoudGw3RnFfWWLp45kJMns9tFF3W4u4Nbu-Nf9FvVGK8j7hZDMmBD2zZGQLYe_HQUTRiyefu3LtjCPicBcyaAZK4wGKuUSwjApPufPwXYYUE0vBaymbSPHgY3y9HQANAlmWiVfRoPJxWAYNJkHM3vt6FGv6mo03drvWhzOMw3ClkTZUM6mU4iilR6JEmTKYh26Ay4l0_jM_9YIhLzKc3WECZraPneut595"/>
+</div>
+</div>
+</section>
+<!-- Testimonial Section -->
+<section class="py-24 px-6 bg-[#F3EFFF]">
+<div class="max-w-7xl mx-auto">
+<div class="text-center mb-16">
+<h2 class="text-3xl font-headline font-bold">Trusted by the best in the business.</h2>
+</div>
+<div class="grid md:grid-cols-3 gap-8">
+<div class="bg-white p-8 rounded-2xl shadow-sm border-l-4 border-primary">
+<p class="italic text-on-surface-variant mb-8">"PHYGITRON 360 has completely transformed how we evaluate talent. We no longer guess; we know."</p>
+<div class="flex items-center gap-4">
+<img class="w-12 h-12 rounded-full object-cover" data-alt="professional portrait of a corporate woman executive" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAOMKjmYjOq9I63FB73Ql9RhNf-GqWRNW-PM7ZP4LpWplXzXFdzDnAskuRB_dLRnNPwQ7vGMPepwsxvpD5oHpjVQdSo_V7ytL-zy7mddHQ88rYYu8bMiFQtGPG1yHVvEOAXw3JqollkXPMqSW9b6MK20C10QbkCGF4Go3vR2nStiabsXrRgtqgHv1YHI-YYZ232vGTx_zeItajQHBjXOU2wlln-ce7iRBVDc8lJwJmxlEW8xjSOAr5BlL-Ym1TvM5oWblDnYtsAqVWa"/>
+<div>
+<p class="font-bold text-sm">Sarah Jenkins</p>
+<p class="text-xs text-on-surface-variant">VP of People, FinTech Global</p>
+</div>
+</div>
+</div>
+<div class="bg-white p-8 rounded-2xl shadow-sm border-l-4 border-primary">
+<p class="italic text-on-surface-variant mb-8">"The skill verification module is a game changer. It's the first time we've seen actual data-backed proof of technical ability."</p>
+<div class="flex items-center gap-4">
+<img class="w-12 h-12 rounded-full object-cover" data-alt="headshot of a confident male tech recruiter" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBy-yKJQUWQCcY-lvp8O9d1xAWHHC166XG9sAWosFOjMsdh5DmMkrK_mxOUrfnBee36dJ5jDylUNtAunTDAsBxtM5OtDx7UymgdaPlDBrwle-JkWT1AMzBh8ibWN49lT2qw2jhVGCaf9jsJxZ09ZrdKk4cHav1m-IjpXbfSDp1VOo_Wol1NW9z0wVtOkAzQVYgQn8B5FG0XsQKpwK__ijh541zupvue0B72jwHU1KSTKmOQVvNej0PP67gt3NF0uKS81HLE6Sr7t8zO"/>
+<div>
+<p class="font-bold text-sm">Marcus Chen</p>
+<p class="text-xs text-on-surface-variant">Director of Talent, Innovate Corp</p>
+</div>
+</div>
+</div>
+<div class="bg-white p-8 rounded-2xl shadow-sm border-l-4 border-primary">
+<p class="italic text-on-surface-variant mb-8">"Finally, a tool that respects the complexity of HR data while making it editorial and easy to act upon."</p>
+<div class="flex items-center gap-4">
+<img class="w-12 h-12 rounded-full object-cover" data-alt="professional photo of a smiling HR director" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAL_Ycn6izrFj0jMZ1zI8FAwCmlprNllxln7WLWkQN2Jod2AZ0hGcQHUjWErFnz5dB7FXoZUwWujD0p-jqeAIFd9Su5-gIExDX_S1339PdzVLpMQUC_SGxQY-IpZwp-fI2CuMFXtRevx-4NLKG8YW3sWbEm2jp46jTS_AY-KYwL3HNO7jCoVPg9wQXTkH69xP4OY4ZJ2prbaBTqsuwHNZAokv3P6NuA0hjAoWoI04C1-bKpf3eqp9wPAwZSPjVrm5Ejgm8YEZKWgDv3"/>
+<div>
+<p class="font-bold text-sm">Elena Rodriguez</p>
+<p class="text-xs text-on-surface-variant">Chief Human Resources Officer</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- CTA Section -->
+<section class="py-20 px-6">
+<div class="max-w-7xl mx-auto bg-primary-gradient rounded-3xl p-12 md:p-20 text-center space-y-8 relative overflow-hidden">
+<div class="absolute top-0 right-0 w-96 h-96 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+<div class="relative z-10 space-y-6">
+<h2 class="text-4xl md:text-5xl font-headline font-extrabold text-white">Ready to unify your talent pipeline?</h2>
+<p class="text-primary-fixed max-w-xl mx-auto text-lg">Join 200+ organizations building the future of work with PHYGITRON 360.</p>
+<div class="pt-6">
+<button class="bg-white text-primary px-10 py-4 rounded-lg font-bold text-lg shadow-xl hover:bg-surface transition-colors active:scale-95">Start for Free</button>
+</div>
+</div>
+</div>
+</section>
+<!-- Footer -->
+<footer class="bg-white border-t border-slate-100 py-16 px-6">
+<div class="max-w-7xl mx-auto grid md:grid-cols-5 gap-12 font-['Inter'] text-sm leading-relaxed">
+<div class="md:col-span-2 space-y-6">
+<div class="text-lg font-bold text-slate-900 font-headline flex items-center gap-2">
+<span class="w-6 h-6 rounded bg-primary flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-[14px]" data-icon="hub">hub</span>
+</span>
+                    PHYGITRON 360
+                </div>
+<p class="text-slate-500 max-w-xs">Leading the transition to data-first talent intelligence for global enterprises.</p>
+<div class="flex gap-4">
+<button class="border border-slate-200 px-4 py-2 rounded-lg font-semibold hover:border-primary transition-colors">Book a Demo</button>
+</div>
+</div>
+<div class="space-y-4">
+<p class="font-bold text-slate-900">Platform</p>
+<ul class="space-y-2 text-slate-500">
+<li><a class="hover:text-primary transition-colors" href="#">Source</a></li>
+<li><a class="hover:text-primary transition-colors" href="#">Forge</a></li>
+<li><a class="hover:text-primary transition-colors" href="#">Verify</a></li>
+<li><a class="hover:text-primary transition-colors" href="#">Deploy</a></li>
+</ul>
+</div>
+<div class="space-y-4">
+<p class="font-bold text-slate-900">Company</p>
+<ul class="space-y-2 text-slate-500">
+<li><a class="hover:text-primary transition-colors" href="#">About Us</a></li>
+<li><a class="hover:text-primary transition-colors" href="#">Careers</a></li>
+<li><a class="hover:text-primary transition-colors" href="#">Partners</a></li>
+<li><a class="hover:text-primary transition-colors" href="#">Contact</a></li>
+</ul>
+</div>
+<div class="space-y-4">
+<p class="font-bold text-slate-900">Legal</p>
+<ul class="space-y-2 text-slate-500">
+<li><a class="hover:text-primary transition-colors" href="#">Privacy Policy</a></li>
+<li><a class="hover:text-primary transition-colors" href="#">Terms of Service</a></li>
+<li><a class="hover:text-primary transition-colors" href="#">Security</a></li>
+</ul>
+</div>
+</div>
+<div class="max-w-7xl mx-auto mt-16 pt-8 border-t border-slate-50 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-slate-400">
+<p>© 2024 PHYGITRON 360. All rights reserved.</p>
+<div class="flex gap-8">
+<a class="hover:text-primary" href="#">LinkedIn</a>
+<a class="hover:text-primary" href="#">Twitter</a>
+<a class="hover:text-primary" href="#">GitHub</a>
+</div>
+</div>
+</footer>
+</body></html>

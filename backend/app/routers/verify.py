@@ -591,7 +591,6 @@ async def record_strike(
     assgn.strike_count = (assgn.strike_count or 0) + 1
     if body.is_terminal:
         assgn.terminated_by_proctor = True
-        assgn.status = AssignmentStatus.started  # keep it non-completed until submit
 
     await db.commit()
     return success({"strike_count": assgn.strike_count, "terminated": assgn.terminated_by_proctor})
@@ -1230,6 +1229,7 @@ async def my_assessments(
         "time_limit_minutes": asmt.time_limit_minutes,
         "deadline": assgn.deadline.isoformat() if assgn.deadline else None,
         "status": assgn.status.value,
+        "terminated_by_proctor": assgn.terminated_by_proctor,
         "show_result_immediately": asmt.show_result_immediately,
     } for assgn, asmt in rows])
 

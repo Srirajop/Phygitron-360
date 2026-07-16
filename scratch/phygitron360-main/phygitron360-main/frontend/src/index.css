@@ -1,0 +1,108 @@
+/* Fonts loaded via <link> in index.html for non-blocking render */
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #CC97FF;
+  --color-secondary: #10B981;
+  --color-surface: #040812;
+  --color-surface-bright: #0B1326;
+  --color-surface-container: #131B2E;
+  --color-on-surface: #DAE2FD;
+  --color-on-surface-variant: #CFC2D6;
+  --color-indigo: #6366F1;
+  --color-error: #FFB4AB;
+
+  --font-family-display: 'Manrope', sans-serif;
+  --font-family-body: 'Inter', sans-serif;
+
+  --animate-fade-in-up: fade-in-up 0.6s ease-out forwards;
+  --animate-pulse-glow: pulse-glow 4s ease-in-out infinite;
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.1; transform: scale(1); }
+  50%       { opacity: 0.3; transform: scale(1.1); }
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background-color: #040812;
+  color: #DAE2FD;
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.glass-panel {
+  background: rgba(11, 19, 38, 0.4);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 24px;
+  /* Only transition safe compositor properties, never 'all' */
+  transition: border-color 0.2s ease, opacity 0.2s ease;
+  will-change: auto;
+}
+
+.btn-primary {
+  background: #CC97FF;
+  color: #040812;
+  font-weight: 800;
+  padding: 14px 28px;
+  border-radius: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-size: 11px;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-primary:hover {
+  background: #fff;
+}
+
+.btn-primary:active {
+  transform: scale(0.98);
+}
+
+.form-input {
+  width: 100%;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  padding: 10px 16px;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.form-input:focus {
+  border-color: rgba(204,151,255,0.4);
+}
+
+.form-input option {
+  background: #0B1326;
+  color: #fff;
+}
+
+.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+

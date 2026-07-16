@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>PHYGITRON 360 - Talent Vault</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Manrope:wght@700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "tertiary-fixed-dim": "#c8c4d4",
+              "on-tertiary-fixed": "#1b1a25",
+              "primary-fixed": "#e8ddff",
+              "outline": "#7a7488",
+              "on-primary-fixed-variant": "#5000cf",
+              "surface-container-low": "#f3f3f4",
+              "surface-container-highest": "#e2e2e2",
+              "error": "#ba1a1a",
+              "secondary-container": "#e5e2e1",
+              "background": "#f9f9f9",
+              "tertiary-container": "#615f6c",
+              "surface-bright": "#f9f9f9",
+              "tertiary-fixed": "#e4e0f0",
+              "on-surface": "#1a1c1c",
+              "on-error": "#ffffff",
+              "on-secondary": "#ffffff",
+              "on-error-container": "#93000a",
+              "primary-fixed-dim": "#cdbdff",
+              "inverse-surface": "#2f3131",
+              "primary": "#5300d5",
+              "surface-dim": "#dadada",
+              "secondary-fixed": "#e5e2e1",
+              "on-tertiary-fixed-variant": "#474552",
+              "surface-container": "#eeeeee",
+              "on-secondary-container": "#656464",
+              "surface-tint": "#6a22fd",
+              "on-secondary-fixed-variant": "#474646",
+              "primary-container": "#6c27ff",
+              "outline-variant": "#cbc3da",
+              "on-surface-variant": "#494457",
+              "surface-container-lowest": "#ffffff",
+              "on-tertiary-container": "#dedaea",
+              "inverse-primary": "#cdbdff",
+              "on-secondary-fixed": "#1c1b1b",
+              "on-primary-container": "#e2d6ff",
+              "inverse-on-surface": "#f0f1f1",
+              "error-container": "#ffdad6",
+              "surface": "#f9f9f9",
+              "surface-container-high": "#e8e8e8",
+              "surface-variant": "#e2e2e2",
+              "on-background": "#1a1c1c",
+              "tertiary": "#494754",
+              "on-primary": "#ffffff",
+              "secondary-fixed-dim": "#c8c6c5",
+              "secondary": "#5f5e5e",
+              "on-tertiary": "#ffffff",
+              "on-primary-fixed": "#20005e"
+            },
+            fontFamily: {
+              "headline": ["Manrope"],
+              "body": ["Inter"],
+              "label": ["Inter"]
+            },
+            borderRadius: {"DEFAULT": "0.375rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        h1, h2, .brand-font { font-family: 'Manrope', sans-serif; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+    </style>
+</head>
+<body class="bg-background text-on-surface min-h-screen">
+<!-- SideNavBar Anchor -->
+<aside class="fixed left-0 top-0 h-full w-[240px] z-40 bg-[#f3f3f4] dark:bg-slate-800/50 flex flex-col border-r border-slate-100 dark:border-slate-800">
+<div class="text-xl font-black tracking-tighter text-[#1a1c1c] dark:text-white px-6 py-8">
+            PHYGITRON 360
+            <p class="text-[10px] font-bold tracking-widest text-on-surface-variant/60 uppercase mt-1">Intelligent Workspace</p>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="text-slate-500 dark:text-slate-400 mx-3 px-3 py-2 flex items-center gap-3 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-manrope font-bold text-sm tracking-tight" href="#">
+<span class="material-symbols-outlined">dashboard</span> Dashboard
+            </a>
+<a class="bg-[#e8ddff] dark:bg-[#6C27FF]/20 text-[#6C27FF] dark:text-[#A78BFF] rounded-md mx-3 px-3 py-2 flex items-center gap-3 font-manrope font-bold text-sm tracking-tight scale-[0.98] transition-transform" href="#">
+<span class="material-symbols-outlined">work</span> Source
+            </a>
+<a class="text-slate-500 dark:text-slate-400 mx-3 px-3 py-2 flex items-center gap-3 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-manrope font-bold text-sm tracking-tight" href="#">
+<span class="material-symbols-outlined">factory</span> Forge
+            </a>
+<a class="text-slate-500 dark:text-slate-400 mx-3 px-3 py-2 flex items-center gap-3 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-manrope font-bold text-sm tracking-tight" href="#">
+<span class="material-symbols-outlined">verified_user</span> Verify
+            </a>
+<a class="text-slate-500 dark:text-slate-400 mx-3 px-3 py-2 flex items-center gap-3 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-manrope font-bold text-sm tracking-tight" href="#">
+<span class="material-symbols-outlined">rocket_launch</span> Deploy
+            </a>
+<a class="text-slate-500 dark:text-slate-400 mx-3 px-3 py-2 flex items-center gap-3 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-manrope font-bold text-sm tracking-tight" href="#">
+<span class="material-symbols-outlined">map</span> Journey Builder
+            </a>
+<a class="text-slate-500 dark:text-slate-400 mx-3 px-3 py-2 flex items-center gap-3 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-manrope font-bold text-sm tracking-tight" href="#">
+<span class="material-symbols-outlined">settings</span> Settings
+            </a>
+</nav>
+<div class="mt-auto border-t border-slate-200 dark:border-slate-700/50 p-4">
+<a class="text-slate-500 dark:text-slate-400 px-3 py-2 flex items-center gap-3 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-manrope font-bold text-sm tracking-tight" href="#">
+<span class="material-symbols-outlined">account_circle</span> Profile
+            </a>
+</div>
+</aside>
+<!-- TopNavBar Anchor -->
+<header class="fixed top-0 right-0 left-[240px] h-16 z-30 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl flex justify-between items-center px-8 border-b border-slate-100 dark:border-slate-800">
+<div class="flex items-center gap-4 flex-1">
+<div class="relative w-full max-w-md">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
+<input class="w-full bg-surface-container-low border-none rounded-lg pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-primary-fixed outline-none transition-all" placeholder="Search talent, skills, or projects..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4 ml-8">
+<button class="text-on-surface-variant hover:text-primary transition-colors focus:ring-2 focus:ring-primary-fixed outline-none rounded-full p-2">
+<span class="material-symbols-outlined">filter_list</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors focus:ring-2 focus:ring-primary-fixed outline-none rounded-full p-2">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<div class="h-8 w-8 rounded-full bg-primary-container overflow-hidden ring-2 ring-primary-fixed">
+<img alt="User Avatar" class="h-full w-full object-cover" data-alt="professional headshot of a modern HR manager in a bright office setting with soft natural light" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBKSmHoc_LymYdx9y7-e4zH9S4FImD5baBBnRGnV_w_kGrDI8_8yuZDLDhZnoIejTvFxHzTWiFgr1xxumE8zcCHxulr64jlxzDad_HjRbBWxAEXxD3nA2Pflyd91--MtwwhSsoeTA5if_b7FDJJwHnCn9lSc90hijwVyXOiCpdhLrTCu9XdQO974f17b4EXQsxXNpIioHV7_rUO96Li38srI7LD2kEIAjDwcTzs2YU2GmZU4ysae6uFKUR4tdO6NwMDrKavshBDXTiq"/>
+</div>
+</div>
+</header>
+<!-- Main Canvas -->
+<main class="ml-[240px] pt-16 p-8 min-h-screen">
+<!-- Page Heading & Quick Stats -->
+<section class="mb-8">
+<div class="flex justify-between items-end mb-6">
+<div>
+<h1 class="text-[2.5rem] font-bold tracking-tight text-on-background leading-tight">Talent Vault</h1>
+<p class="text-on-surface-variant font-medium text-lg">342 candidates in the ecosystem</p>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+<!-- Stat Card 1 -->
+<div class="bg-surface-container-lowest p-6 rounded-xl hover:shadow-[0px_10px_40px_rgba(0,0,0,0.04)] transition-all group">
+<div class="flex items-center gap-3 mb-4">
+<div class="p-2 bg-primary-fixed rounded-lg text-primary">
+<span class="material-symbols-outlined">group</span>
+</div>
+<span class="text-label-sm font-semibold tracking-wider text-on-surface-variant uppercase text-xs">Total Sourced</span>
+</div>
+<div class="text-4xl font-bold text-primary mb-1">342</div>
+<div class="h-1 w-full bg-surface-container-low rounded-full overflow-hidden">
+<div class="h-full bg-primary w-full"></div>
+</div>
+</div>
+<!-- Stat Card 2 -->
+<div class="bg-surface-container-lowest p-6 rounded-xl hover:shadow-[0px_10px_40px_rgba(0,0,0,0.04)] transition-all group">
+<div class="flex items-center gap-3 mb-4">
+<div class="p-2 bg-blue-100 rounded-lg text-blue-600">
+<span class="material-symbols-outlined">rule</span>
+</div>
+<span class="text-label-sm font-semibold tracking-wider text-on-surface-variant uppercase text-xs">In Screening</span>
+</div>
+<div class="text-4xl font-bold text-primary mb-1">87</div>
+<div class="h-1 w-full bg-surface-container-low rounded-full overflow-hidden">
+<div class="h-full bg-blue-500 w-[25%]"></div>
+</div>
+</div>
+<!-- Stat Card 3 -->
+<div class="bg-surface-container-lowest p-6 rounded-xl hover:shadow-[0px_10px_40px_rgba(0,0,0,0.04)] transition-all group">
+<div class="flex items-center gap-3 mb-4">
+<div class="p-2 bg-amber-100 rounded-lg text-amber-600">
+<span class="material-symbols-outlined">school</span>
+</div>
+<span class="text-label-sm font-semibold tracking-wider text-on-surface-variant uppercase text-xs">In Training</span>
+</div>
+<div class="text-4xl font-bold text-primary mb-1">54</div>
+<div class="h-1 w-full bg-surface-container-low rounded-full overflow-hidden">
+<div class="h-full bg-amber-500 w-[15%]"></div>
+</div>
+</div>
+<!-- Stat Card 4 -->
+<div class="bg-surface-container-lowest p-6 rounded-xl hover:shadow-[0px_10px_40px_rgba(0,0,0,0.04)] transition-all group">
+<div class="flex items-center gap-3 mb-4">
+<div class="p-2 bg-emerald-100 rounded-lg text-emerald-600">
+<span class="material-symbols-outlined">check_circle</span>
+</div>
+<span class="text-label-sm font-semibold tracking-wider text-on-surface-variant uppercase text-xs">Deployed</span>
+</div>
+<div class="text-4xl font-bold text-primary mb-1">120</div>
+<div class="h-1 w-full bg-surface-container-low rounded-full overflow-hidden">
+<div class="h-full bg-emerald-500 w-[35%]"></div>
+</div>
+</div>
+</div>
+</section>
+<!-- Action Bar -->
+<section class="mb-6 flex flex-wrap items-center justify-between gap-4">
+<div class="flex items-center gap-3 overflow-x-auto no-scrollbar pb-2 lg:pb-0">
+<div class="flex items-center px-3 py-2 bg-surface-container-lowest rounded-lg text-xs font-semibold text-on-surface-variant cursor-pointer hover:bg-surface-container transition-colors">
+                    Status <span class="material-symbols-outlined text-sm ml-2">expand_more</span>
+</div>
+<div class="flex items-center px-3 py-2 bg-surface-container-lowest rounded-lg text-xs font-semibold text-on-surface-variant cursor-pointer hover:bg-surface-container transition-colors">
+                    Skills <span class="material-symbols-outlined text-sm ml-2">expand_more</span>
+</div>
+<div class="flex items-center px-3 py-2 bg-surface-container-lowest rounded-lg text-xs font-semibold text-on-surface-variant cursor-pointer hover:bg-surface-container transition-colors">
+                    Experience <span class="material-symbols-outlined text-sm ml-2">expand_more</span>
+</div>
+<div class="flex items-center px-3 py-2 bg-surface-container-lowest rounded-lg text-xs font-semibold text-on-surface-variant cursor-pointer hover:bg-surface-container transition-colors">
+                    Source <span class="material-symbols-outlined text-sm ml-2">expand_more</span>
+</div>
+<div class="flex items-center px-3 py-2 bg-surface-container-lowest rounded-lg text-xs font-semibold text-on-surface-variant cursor-pointer hover:bg-surface-container transition-colors">
+                    Date Added <span class="material-symbols-outlined text-sm ml-2">expand_more</span>
+</div>
+<a class="text-primary font-bold text-xs ml-2 hover:underline" href="#">Save View</a>
+</div>
+<div class="flex items-center gap-3">
+<button class="px-4 py-2 bg-white border border-primary text-primary font-bold text-sm rounded-lg hover:bg-primary-fixed transition-all flex items-center gap-2">
+<span class="material-symbols-outlined text-lg">upload</span>
+                    Bulk Upload
+                </button>
+<button class="px-4 py-2 bg-gradient-to-br from-primary to-primary-container text-white font-bold text-sm rounded-lg hover:shadow-lg transition-all flex items-center gap-2">
+<span class="material-symbols-outlined text-lg">add</span>
+                    Add Candidate
+                </button>
+</div>
+</section>
+<!-- Candidate Table -->
+<section class="bg-surface-container-lowest rounded-xl shadow-sm overflow-hidden mb-6">
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead class="bg-surface-container-low border-b border-outline-variant/10">
+<tr>
+<th class="px-6 py-4 w-10">
+<input class="rounded border-outline-variant text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+</th>
+<th class="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Candidate</th>
+<th class="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Current Role</th>
+<th class="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Skills</th>
+<th class="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Status</th>
+<th class="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Source</th>
+<th class="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">360° Score</th>
+<th class="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Date Added</th>
+<th class="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-surface-container-low">
+<!-- Row 1 -->
+<tr class="hover:bg-primary-fixed/30 transition-colors group">
+<td class="px-6 py-4">
+<input class="rounded border-outline-variant text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="h-10 w-10 rounded-full bg-tertiary-fixed-dim overflow-hidden ring-1 ring-outline-variant/20">
+<img alt="Candidate 1" class="h-full w-full object-cover" data-alt="close-up portrait of a professional woman with glasses smiling confidently in a modern studio environment" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD2wB9jf3-133tcw0iESvMcH_AqiQXGQg6YL6jXv0cheikPYYSL-z1XtXjwJPsQXSVbCLnE9vee6_xfoXs3tZYoPzRgLZF2KMEPrAAeLAQ-dzl0mb15Vef8-XYGXyLw0tg-CFyXkedl_cpnjLM6ciJT_ZTHBNV9pqxT4vlwVa2034p-0jO0Tn5T25GWrigq9ENnpJnqxKSagR6Vx2gqCOHqdfOaaf4YrP0GAgEpm32AKumEbGa4M2dx7cdxVqSJLXBy_vKfJ-QBeupr"/>
+</div>
+<div>
+<div class="font-bold text-on-surface text-sm">Elena Sorokin</div>
+<div class="text-xs text-on-surface-variant">e.sorokin@example.com</div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4 text-sm font-medium">Senior UX Architect</td>
+<td class="px-6 py-4">
+<div class="flex gap-1">
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Figma</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">React</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">UI</span>
+<span class="px-2 py-0.5 bg-surface-container-low text-on-surface-variant rounded-full text-[10px] font-bold">+4</span>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-100 text-emerald-700">Deployed</span>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">LinkedIn</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<div class="w-16 h-1.5 bg-surface-container rounded-full overflow-hidden">
+<div class="h-full bg-primary-container w-[92%]"></div>
+</div>
+<span class="text-xs font-bold text-primary">92</span>
+</div>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">Oct 12, 2023</td>
+<td class="px-6 py-4 text-right">
+<button class="px-3 py-1.5 text-xs font-bold text-primary hover:bg-primary-fixed rounded transition-colors">View</button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-primary-fixed/30 transition-colors group">
+<td class="px-6 py-4">
+<input class="rounded border-outline-variant text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="h-10 w-10 rounded-full bg-tertiary-fixed-dim overflow-hidden ring-1 ring-outline-variant/20">
+<img alt="Candidate 2" class="h-full w-full object-cover" data-alt="man in business casual attire smiling in a collaborative coworking space with blurred background greenery" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDYMhsMRxEF3f2ubbixMQuqaHBgCM8PjoBF2BH6muI_2lH_MwKqX5lJzIqmnDN8IYqEsUoUQbiFobOqLworwa8MF_dDvuxJIy6EqTLW0U0d7vfv5CmtjlxOCoBTnGkdW1Q_0y_WIvCyqX1qH_Vjb1Z9XnJoZNfidpNYljPlcNOdHchWguJnV0j20lxmx05iQsRf-tL5829sIeeMBLzMK_G8hGc1TiqgPwnWvzbZFCNsbFCqnrs3vAmTzj-ogFwiDIGzKjo4PpzAUcqU"/>
+</div>
+<div>
+<div class="font-bold text-on-surface text-sm">Marcus Chen</div>
+<div class="text-xs text-on-surface-variant">m.chen@dev.io</div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4 text-sm font-medium">Cloud Engineer</td>
+<td class="px-6 py-4">
+<div class="flex gap-1">
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">AWS</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Docker</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Go</span>
+<span class="px-2 py-0.5 bg-surface-container-low text-on-surface-variant rounded-full text-[10px] font-bold">+2</span>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-blue-100 text-blue-700">Screening</span>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">Referral</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<div class="w-16 h-1.5 bg-surface-container rounded-full overflow-hidden">
+<div class="h-full bg-primary-container w-[78%]"></div>
+</div>
+<span class="text-xs font-bold text-primary">78</span>
+</div>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">Nov 05, 2023</td>
+<td class="px-6 py-4 text-right">
+<button class="px-3 py-1.5 text-xs font-bold text-primary hover:bg-primary-fixed rounded transition-colors">View</button>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-primary-fixed/30 transition-colors group">
+<td class="px-6 py-4">
+<input class="rounded border-outline-variant text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="h-10 w-10 rounded-full bg-tertiary-fixed-dim overflow-hidden ring-1 ring-outline-variant/20">
+<img alt="Candidate 3" class="h-full w-full object-cover" data-alt="professional headshot of a young creative professional with a vibrant background of abstract geometric art" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCCTDCrGoaVZ2AJoT93stBz_0ODP6Tc-AFC7ou4P_emAN-77D00kL3OPIBIJnx-B59AgGRwHiBzQ_ZGEAYNJybcfLiCKytt0xCahbh6AHfVWj03Bb9-Ri05C9bCpwurcl6zMKLCSlXb-7PUx3YkLYryhZBlu-FgdnN_QkLjgzUza1PD_4Hyn8QkRuqnU937K4ekrNAx0bJbZV8bHfrHJQeNP0q-45LSbxi229Pr_aJqek-GRFIbgH-Y140gqkn9xb4EpbL8lVWbBd9k"/>
+</div>
+<div>
+<div class="font-bold text-on-surface text-sm">Jordan Daley</div>
+<div class="text-xs text-on-surface-variant">jordan.d@creative.net</div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4 text-sm font-medium">Data Scientist</td>
+<td class="px-6 py-4">
+<div class="flex gap-1">
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Python</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">ML</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">SQL</span>
+<span class="px-2 py-0.5 bg-surface-container-low text-on-surface-variant rounded-full text-[10px] font-bold">+5</span>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-amber-100 text-amber-700">Training</span>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">Indeed</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<div class="w-16 h-1.5 bg-surface-container rounded-full overflow-hidden">
+<div class="h-full bg-primary-container w-[85%]"></div>
+</div>
+<span class="text-xs font-bold text-primary">85</span>
+</div>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">Oct 28, 2023</td>
+<td class="px-6 py-4 text-right">
+<button class="px-3 py-1.5 text-xs font-bold text-primary hover:bg-primary-fixed rounded transition-colors">View</button>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="hover:bg-primary-fixed/30 transition-colors group">
+<td class="px-6 py-4">
+<input class="rounded border-outline-variant text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="h-10 w-10 rounded-full bg-tertiary-fixed-dim overflow-hidden ring-1 ring-outline-variant/20">
+<img alt="Candidate 4" class="h-full w-full object-cover" data-alt="diverse professional in a bright minimalist office with soft lighting and architectural shadows" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDx78siF-8WzSbyR2sV5okJG4KpAkz_pdXJv_oyApZ5n8DSRp6tRr-5dj5ur22Vjpq2GMZFj41WVrX94sWnycMQcL2Aky210894Tgta6mpSUavv_LOjtCizWedrUy3eRcivFwTb0PRZqEScdY77QePrCqXUY-rFXvtf2rcri_biHoYNJ6pEn9aTb5_s1Lneozm5ddLSxQlgMlEnh7UvSvF0ZcaLwzEG_d3fghvJ-6YeS1TzZ2ZWGtIoSqHP-SHJ-rDnGxImclIlCS-f"/>
+</div>
+<div>
+<div class="font-bold text-on-surface text-sm">Amara Miller</div>
+<div class="text-xs text-on-surface-variant">amara.m@tech.com</div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4 text-sm font-medium">Project Manager</td>
+<td class="px-6 py-4">
+<div class="flex gap-1">
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Agile</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Jira</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Scrum</span>
+<span class="px-2 py-0.5 bg-surface-container-low text-on-surface-variant rounded-full text-[10px] font-bold">+1</span>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-slate-100 text-slate-600">Sourced</span>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">Hired.com</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<div class="w-16 h-1.5 bg-surface-container rounded-full overflow-hidden">
+<div class="h-full bg-primary-container w-[65%]"></div>
+</div>
+<span class="text-xs font-bold text-primary">65</span>
+</div>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">Nov 12, 2023</td>
+<td class="px-6 py-4 text-right">
+<button class="px-3 py-1.5 text-xs font-bold text-primary hover:bg-primary-fixed rounded transition-colors">View</button>
+</td>
+</tr>
+<!-- Row 5 -->
+<tr class="hover:bg-primary-fixed/30 transition-colors group">
+<td class="px-6 py-4">
+<input class="rounded border-outline-variant text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="h-10 w-10 rounded-full bg-tertiary-fixed-dim overflow-hidden ring-1 ring-outline-variant/20">
+<img alt="Candidate 5" class="h-full w-full object-cover" data-alt="man in sharp corporate attire standing in front of glass building at dusk with city lights bokeh" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC_haMODVl84JjJ3grFgA3_oWBdl-IWLoRf54X4tMhd3rtBTQqwrKDGTcOSLSdObx8vjGgnKCg3xWxEZO5f6JihsCz1Iuykhoer43pruCO-vw-SlnorPCEOEfiJpbCbZk0tCeSGKCkxXVCWSBVDcmO7Dv1pKNTtB5_bPZVRRHRnyeWspGmtpuus51lTHgcIM82k-C_d2dExJYZN2PyWpXwYVArgAzTNJ0s3frptOnjfRLVnuU9Wg8ttf0xXl3IlnI4qrmXTjtcuCNCm"/>
+</div>
+<div>
+<div class="font-bold text-on-surface text-sm">Raul Vasquez</div>
+<div class="text-xs text-on-surface-variant">r.vasquez@global.co</div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4 text-sm font-medium">Backend Developer</td>
+<td class="px-6 py-4">
+<div class="flex gap-1">
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Java</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Spring</span>
+<span class="px-2 py-0.5 bg-primary-fixed text-on-primary-fixed-variant rounded-full text-[10px] font-bold">Kafka</span>
+<span class="px-2 py-0.5 bg-surface-container-low text-on-surface-variant rounded-full text-[10px] font-bold">+3</span>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-violet-100 text-violet-700">Verified</span>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">Direct</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<div class="w-16 h-1.5 bg-surface-container rounded-full overflow-hidden">
+<div class="h-full bg-primary-container w-[89%]"></div>
+</div>
+<span class="text-xs font-bold text-primary">89</span>
+</div>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">Oct 15, 2023</td>
+<td class="px-6 py-4 text-right">
+<button class="px-3 py-1.5 text-xs font-bold text-primary hover:bg-primary-fixed rounded transition-colors">View</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<!-- Pagination -->
+<footer class="flex items-center justify-between">
+<div class="text-xs font-bold text-on-surface-variant">
+                Showing <span class="text-on-surface">1–20</span> of <span class="text-on-surface">342</span> candidates
+            </div>
+<div class="flex items-center gap-2">
+<button class="p-2 hover:bg-surface-container rounded-lg transition-colors text-on-surface-variant">
+<span class="material-symbols-outlined">chevron_left</span>
+</button>
+<button class="h-8 w-8 flex items-center justify-center bg-primary text-white font-bold text-xs rounded-lg">1</button>
+<button class="h-8 w-8 flex items-center justify-center hover:bg-surface-container font-bold text-xs rounded-lg">2</button>
+<button class="h-8 w-8 flex items-center justify-center hover:bg-surface-container font-bold text-xs rounded-lg">3</button>
+<span class="px-2 text-on-surface-variant">...</span>
+<button class="h-8 w-8 flex items-center justify-center hover:bg-surface-container font-bold text-xs rounded-lg">18</button>
+<button class="p-2 hover:bg-surface-container rounded-lg transition-colors text-on-surface-variant">
+<span class="material-symbols-outlined">chevron_right</span>
+</button>
+</div>
+</footer>
+</main>
+</body></html>

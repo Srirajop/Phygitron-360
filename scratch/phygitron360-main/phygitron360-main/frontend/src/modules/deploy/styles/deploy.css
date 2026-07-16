@@ -1,0 +1,121 @@
+/* =========================
+   DEPLOY MODULE
+========================= */
+
+.deploy-hero {
+  margin-bottom: 24px;
+}
+
+.deploy-sub {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: #6b7280;
+}
+
+.deploy-hero h1 {
+  font-size: 42px;
+  font-weight: 800;
+}
+
+/* STATS */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.stat-card {
+  background: linear-gradient(
+    135deg,
+    #8b5cf6,
+    #a78bfa
+  );
+
+  border-radius: 20px;
+  padding: 24px;
+
+  color: white;
+
+  min-height: 120px;
+
+  box-shadow:
+    0 10px 30px rgba(139, 92, 246, 0.18);
+
+  transition: 0.25s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-3px);
+}
+
+.stat-title {
+  font-size: 14px;
+  opacity: 0.9;
+  margin-bottom: 16px;
+}
+
+.stat-value {
+  font-size: 38px;
+  font-weight: 700;
+}
+
+.stat-card p {
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.stat-card h2 {
+  margin-top: 10px;
+  font-size: 28px;
+}
+
+/* PANELS */
+
+.section-card {
+  background: white;
+
+  border: 1px solid #e5e7eb;
+  border-radius: 20px;
+
+  padding: 24px;
+
+  margin-bottom: 24px;
+}
+
+/* VIEW TOGGLE */
+
+.view-toggle {
+  display: flex;
+  gap: 6px;
+
+  background: #ececec;
+
+  padding: 6px;
+
+  border-radius: 18px;
+
+  width: fit-content;
+
+  margin-bottom: 20px;
+}
+
+.view-toggle button {
+  border: none;
+  background: transparent;
+
+  padding: 10px 18px;
+
+  border-radius: 12px;
+
+  cursor: pointer;
+
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.view-toggle button.active {
+  background: black;
+  color: white;
+}

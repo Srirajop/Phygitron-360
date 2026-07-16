@@ -54,6 +54,40 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
     if not user.is_active:
         raise HTTPException(status_code=401, detail="Account is disabled")
 
+    if user.role.value in ["candidate", "trainee"]:
+        from app.models.source import Candidate, OfferLetter, OfferStatus, CandidateInvite, InviteStatus
+        from datetime import datetime
+        cand_res = await db.execute(select(Candidate).where(Candidate.user_id == user.id))
+        candidate = cand_res.scalar_one_or_none()
+        if candidate:
+            offer_res = await db.execute(
+                select(OfferLetter).where(OfferLetter.candidate_id == candidate.id).order_by(OfferLetter.created_at.desc())
+            )
+            offer = offer_res.scalars().first()
+            if offer:
+                if offer.deadline and offer.deadline < datetime.utcnow() and offer.status in [OfferStatus.pending, OfferStatus.sent, OfferStatus.changes_requested]:
+                    offer.status = OfferStatus.revoked
+                    await db.commit()
+                if offer.status == OfferStatus.revoked:
+                    increment_failed_login(ip)
+                    raise HTTPException(status_code=403, detail="Your offer has been revoked or expired.")
+            else:
+                invite_res = await db.execute(
+                    select(CandidateInvite).where(CandidateInvite.candidate_id == candidate.id).order_by(CandidateInvite.created_at.desc())
+                )
+                invite = invite_res.scalars().first()
+                if invite:
+                    if invite.deadline and invite.deadline < datetime.utcnow() and invite.status in [InviteStatus.sent, InviteStatus.opened, InviteStatus.logged_in]:
+                        invite.status = InviteStatus.expired
+                        await db.commit()
+                    if invite.status == InviteStatus.expired:
+                        increment_failed_login(ip)
+                        raise HTTPException(status_code=403, detail="Your assessment invitation has expired.")
+                    if invite.status == InviteStatus.sent:
+                        invite.status = InviteStatus.logged_in
+                        invite.logged_in_at = datetime.utcnow()
+                        await db.commit()
+
     clear_failed_login(ip)
 
     from app.utils.auth import get_role_level

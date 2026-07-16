@@ -255,15 +255,103 @@ async def start_resume_parse_workers() -> None:
 
 async def stop_resume_parse_workers() -> None:
     global _resume_parse_queue, _resume_parse_workers
-    if _resume_parse_queue is None:
+    if not _resume_parse_workers:
         return
 
-    for _ in _resume_parse_workers:
-        await _resume_parse_queue.put(None)
+    if _resume_parse_queue:
+        for _ in _resume_parse_workers:
+            await _resume_parse_queue.put(None)
 
     await asyncio.gather(*_resume_parse_workers, return_exceptions=True)
-    _resume_parse_workers = []
+    _resume_parse_workers.clear()
     _resume_parse_queue = None
+
+_deadline_worker_task: Optional[asyncio.Task] = None
+
+async def _deadline_worker():
+    from app.utils.email import send_offer_reminder_email, send_invite_reminder_email
+    while True:
+        try:
+            await asyncio.sleep(1800)  # Check every 30 minutes
+            async with AsyncSessionLocal() as db:
+                now = datetime.utcnow()
+                from datetime import timedelta
+                reminder_threshold = now + timedelta(hours=24)
+                
+                # Check Offers
+                offers_res = await db.execute(
+                    select(OfferLetter, Candidate, User, Organisation, JobRole)
+                    .join(Candidate, Candidate.id == OfferLetter.candidate_id)
+                    .join(User, User.id == Candidate.user_id)
+                    .join(Organisation, Organisation.id == OfferLetter.org_id)
+                    .outerjoin(JobRole, JobRole.title == OfferLetter.role_title) # Optional join
+                    .where(OfferLetter.status.in_([OfferStatus.pending, OfferStatus.sent, OfferStatus.changes_requested]))
+                    .where(OfferLetter.deadline.isnot(None))
+                )
+                for offer, cand, user, org, role in offers_res:
+                    if offer.deadline < now:
+                        offer.status = OfferStatus.revoked
+                        cand.status = CandidateStatus.archived
+                    elif offer.deadline <= reminder_threshold and not offer.reminder_sent:
+                        try:
+                            await send_offer_reminder_email(
+                                to_email=user.email,
+                                candidate_name=user.full_name or user.email,
+                                role_title=offer.role_title,
+                                company_name=org.name,
+                                deadline=offer.deadline.isoformat(),
+                            )
+                            offer.reminder_sent = True
+                        except Exception as e:
+                            logger.error(f"Failed to send offer reminder to {user.email}: {e}")
+
+                # Check Invites
+                invites_res = await db.execute(
+                    select(CandidateInvite, Candidate, User, Organisation, JobRole)
+                    .join(Candidate, Candidate.id == CandidateInvite.candidate_id)
+                    .join(User, User.id == Candidate.user_id)
+                    .join(JobRole, JobRole.id == CandidateInvite.job_role_id)
+                    .join(Organisation, Organisation.id == JobRole.org_id)
+                    .where(CandidateInvite.status.in_([InviteStatus.sent, InviteStatus.opened]))
+                    .where(CandidateInvite.deadline.isnot(None))
+                )
+                for invite, cand, user, org, role in invites_res:
+                    if invite.deadline < now:
+                        invite.status = InviteStatus.expired
+                    elif invite.deadline <= reminder_threshold and not invite.reminder_sent:
+                        try:
+                            await send_invite_reminder_email(
+                                to_email=user.email,
+                                candidate_name=user.full_name or user.email,
+                                role_title=role.title,
+                                company_name=org.name,
+                                deadline=invite.deadline.isoformat(),
+                                temp_password="(previously sent)",
+                            )
+                            invite.reminder_sent = True
+                        except Exception as e:
+                            logger.error(f"Failed to send invite reminder to {user.email}: {e}")
+
+                await db.commit()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Deadline worker encountered an error: {e}")
+
+async def start_deadline_workers() -> None:
+    global _deadline_worker_task
+    if _deadline_worker_task is None:
+        _deadline_worker_task = asyncio.create_task(_deadline_worker(), name="deadline-worker")
+
+async def stop_deadline_workers() -> None:
+    global _deadline_worker_task
+    if _deadline_worker_task:
+        _deadline_worker_task.cancel()
+        try:
+            await _deadline_worker_task
+        except asyncio.CancelledError:
+            pass
+        _deadline_worker_task = None
 
 
 async def enqueue_resume_parse(candidate_id: int, extracted_text: str, org_id: int) -> None:
@@ -1086,6 +1174,8 @@ async def search_candidates(
     location: Optional[str] = None,
     sort_by: str = "newest",
     limit: int = 20,
+    lifecycle_phase: Optional[str] = "all",
+    upload_time: Optional[str] = None,
     current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1098,6 +1188,41 @@ async def search_candidates(
     cand_query = select(Candidate, User).join(User, Candidate.user_id == User.id)
     if current_user.role.value != "super_admin":
         cand_query = cand_query.where(Candidate.org_id == current_user.org_id)
+        
+    if lifecycle_phase and lifecycle_phase != "all":
+        from sqlalchemy import text
+        if lifecycle_phase == "invite_pending":
+            cand_query = cand_query.where(Candidate.id.in_(
+                select(CandidateInvite.candidate_id).where(CandidateInvite.status == InviteStatus.pending)
+            ))
+        elif lifecycle_phase == "invite_sent":
+            cand_query = cand_query.where(Candidate.id.in_(
+                select(CandidateInvite.candidate_id).where(CandidateInvite.status == InviteStatus.sent)
+            ))
+        elif lifecycle_phase == "invite_accepted":
+            cand_query = cand_query.where(Candidate.id.in_(
+                select(CandidateInvite.candidate_id).where(CandidateInvite.status.in_([InviteStatus.opened, InviteStatus.logged_in, InviteStatus.completed]))
+            ))
+        elif lifecycle_phase == "invite_declined":
+            cand_query = cand_query.where(Candidate.id.in_(
+                select(CandidateInvite.candidate_id).where(CandidateInvite.status == InviteStatus.expired)
+            ))
+        elif lifecycle_phase == "offer_sent":
+            cand_query = cand_query.where(Candidate.id.in_(
+                select(OfferLetter.candidate_id).where(OfferLetter.status == OfferStatus.sent)
+            ))
+        elif lifecycle_phase == "offer_accepted":
+            cand_query = cand_query.where(Candidate.id.in_(
+                select(OfferLetter.candidate_id).where(OfferLetter.status == OfferStatus.accepted)
+            ))
+        elif lifecycle_phase == "offer_declined":
+            cand_query = cand_query.where(Candidate.id.in_(
+                select(OfferLetter.candidate_id).where(OfferLetter.status == OfferStatus.declined)
+            ))
+        elif lifecycle_phase == "offer_revoked":
+            cand_query = cand_query.where(Candidate.id.in_(
+                select(OfferLetter.candidate_id).where(OfferLetter.status == OfferStatus.revoked)
+            ))
 
     emp_query = select(Employee, User).join(User, User.id == Employee.user_id).where(Employee.org_id == current_user.org_id)
 
@@ -1123,6 +1248,14 @@ async def search_candidates(
         if location:
             if hasattr(model, 'location'):
                 q = q.where(model.location.ilike(f"%{location}%"))
+        
+        if upload_time and hasattr(model, 'created_at'):
+            from sqlalchemy import extract
+            parts = upload_time.split('-')
+            q = q.where(extract('year', model.created_at) == int(parts[0]))
+            if len(parts) > 1:
+                q = q.where(extract('month', model.created_at) == int(parts[1]))
+
         if search:
             from sqlalchemy import exists
             term = f"%{search.strip()}%"
@@ -1186,7 +1319,7 @@ async def search_candidates(
             })
 
     # Employees
-    if pool in ["all", "employee"]:
+    if pool in ["all", "employee"] and lifecycle_phase in ["all", "offer_accepted"]:
         q = apply_filters(emp_query, Employee)
         if not role_id:
             q = q.order_by(Employee.created_at.desc()).limit(limit)
@@ -1290,6 +1423,51 @@ async def search_candidates(
     output = output[:limit]
 
     return success(output)
+
+
+@router.get("/candidates/repository/folders")
+async def get_repository_folders(
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns an array of folders grouped by month of candidate creation.
+    e.g. [{"id": "2024-05", "year": 2024, "month": 5, "count": 10, "label": "May 2024"}]
+    """
+    from sqlalchemy import func, extract, text
+    
+    # Query Candidate table to count candidates per year and month
+    query = select(
+        extract('year', Candidate.created_at).label('year'),
+        extract('month', Candidate.created_at).label('month'),
+        func.count(Candidate.id).label('count')
+    )
+    
+    if current_user.role.value != "super_admin":
+        query = query.where(Candidate.org_id == current_user.org_id)
+        
+    query = query.group_by('year', 'month').order_by(text('year DESC'), text('month DESC'))
+    
+    result = await db.execute(query)
+    
+    months_map = {
+        1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
+        7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December"
+    }
+    
+    folders = []
+    for row in result:
+        y, m, c = int(row.year), int(row.month), row.count
+        month_str = f"{m:02d}"
+        folders.append({
+            "id": f"{y}-{month_str}",
+            "year": y,
+            "month": m,
+            "count": c,
+            "label": f"{months_map.get(m, 'Unknown')} {y}"
+        })
+        
+    return success(folders)
 
 
 @router.get("/candidates/{candidate_id}")
@@ -1566,7 +1744,20 @@ async def send_invite(
     org = org_res.scalar_one_or_none()
 
     sent = 0
+    skipped = 0
+    first_invite_id = None
     for idx, cand_id in enumerate(body.candidate_ids):
+        # Check for duplicate invite
+        existing_res = await db.execute(select(CandidateInvite).where(
+            CandidateInvite.candidate_id == cand_id,
+            CandidateInvite.job_role_id == body.job_role_id
+        ))
+        if existing_res.scalars().first():
+            if len(body.candidate_ids) == 1:
+                raise HTTPException(status_code=409, detail="This candidate has already been invited to this job role.")
+            skipped += 1
+            continue
+
         cand_res = await db.execute(select(Candidate).where(Candidate.id == cand_id))
         candidate = cand_res.scalar_one_or_none()
         if not candidate:
@@ -1588,28 +1779,115 @@ async def send_invite(
             job_role_id=body.job_role_id,
             hr_user_id=current_user.id,
             temp_password_hash=hash_password(temp_pwd),
-            email_sent_at=datetime.utcnow(),
-            status=InviteStatus.sent,
+            email_sent_at=None,
+            deadline=datetime.strptime(body.deadline, "%Y-%m-%d") if body.deadline else None,
+            status=InviteStatus.pending,
+            invite_content={
+                "subject": f"Assessment Invitation - {job_role.title}",
+                "body_paragraphs": [
+                    f"You have been invited to complete a technical assessment for the role of {job_role.title} at {org.name if org else 'our organisation'}.",
+                    "Please log in to your portal using the credentials provided below to begin.",
+                    "We look forward to reviewing your application."
+                ]
+            }
         )
         db.add(invite)
-
-        # Send invite email (best-effort, don't fail if email not configured)
-        try:
-            from app.utils.email import send_invite_email
-            await send_invite_email(
-                to_email=user.email,
-                candidate_name=user.full_name or user.email,
-                role_name=job_role.title,
-                company_name=org.name if org else "Organisation",
-                temp_password=temp_pwd,
-                deadline=body.deadline or "No deadline set",
-            )
-        except Exception as e:
-            logger.warning(f"Email send failed for {user.email}: {e}")
+        await db.flush()
+        if not first_invite_id:
+            first_invite_id = invite.id
         sent += 1
 
     await db.commit()
-    return success({"sent": sent}, f"Invites sent to {sent} candidates")
+    msg = f"Drafted {sent} invites pending review"
+    if skipped > 0:
+        msg += f" ({skipped} candidates were already invited to this role)"
+        
+    return success({
+        "drafted": sent, 
+        "skipped": skipped,
+        "invite_id": first_invite_id if len(body.candidate_ids) == 1 else None
+    }, msg)
+
+
+class UpdateInviteRequest(BaseModel):
+    subject: str
+    body_paragraphs: List[str]
+
+@router.put("/update-invite/{invite_id}")
+async def update_invite(
+    invite_id: int,
+    body: UpdateInviteRequest,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db)
+):
+    invite_res = await db.execute(select(CandidateInvite).where(CandidateInvite.id == invite_id))
+    invite = invite_res.scalar_one_or_none()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+        
+    invite.invite_content = {
+        "subject": body.subject,
+        "body_paragraphs": body.body_paragraphs
+    }
+    await db.commit()
+    return success({"id": invite.id}, "Invite updated successfully")
+
+@router.post("/dispatch-invite/{invite_id}")
+async def dispatch_invite(
+    invite_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db)
+):
+    from datetime import datetime
+    invite_res = await db.execute(select(CandidateInvite).where(CandidateInvite.id == invite_id))
+    invite = invite_res.scalar_one_or_none()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+        
+    cand_res = await db.execute(select(Candidate).where(Candidate.id == invite.candidate_id))
+    candidate = cand_res.scalar_one_or_none()
+    
+    user_res = await db.execute(select(User).where(User.id == candidate.user_id))
+    user = user_res.scalar_one_or_none()
+    
+    role_res = await db.execute(select(JobRole).where(JobRole.id == invite.job_role_id))
+    role = role_res.scalar_one_or_none()
+    
+    org_res = await db.execute(select(Organisation).where(Organisation.id == role.org_id))
+    org = org_res.scalar_one_or_none()
+
+    try:
+        from app.utils.auth import generate_temp_password, hash_password
+        
+        # Only generate a new password if they haven't started yet
+        if not user.password_hash or user.first_login:
+            temp_pwd = generate_temp_password()
+            user.password_hash = hash_password(temp_pwd)
+            user.first_login = True
+            invite.temp_password_hash = user.password_hash
+        else:
+            # Note: If they already have a password and have logged in before, 
+            # we can't send it in plaintext again. We'll send a placeholder.
+            temp_pwd = "(Use your existing password)"
+            
+        body_paras = invite.invite_content.get("body_paragraphs", [])
+        custom_html = "".join([f"<p>{p}</p>" for p in body_paras])
+
+        from app.utils.email import send_invite_email
+        await send_invite_email(
+            to_email=user.email,
+            candidate_name=user.full_name or user.email,
+            subject=invite.invite_content.get("subject", "Assessment Invitation"),
+            custom_body_html=custom_html,
+            temp_password=temp_pwd,
+        )
+    except Exception as e:
+        logger.warning(f"Email send failed for {user.email}: {e}")
+        
+    invite.status = InviteStatus.sent
+    invite.email_sent_at = datetime.utcnow()
+    await db.commit()
+    return success({"id": invite.id}, "Invite dispatched successfully")
 
 
 # ── Invite Status Tracking ────────────────────────────────────────────────────
@@ -1645,6 +1923,7 @@ class ConvertRequest(BaseModel):
     department: str
     location: Optional[str] = "Office"
     start_date: Optional[str] = None
+    deadline: Optional[str] = None
     offer_content: Optional[dict] = None
     recipient_email: Optional[EmailStr] = None
 
@@ -1722,6 +2001,7 @@ async def convert_to_employee(
         department=body.department,
         location=body.location,
         start_date=datetime.strptime(body.start_date, "%Y-%m-%d") if body.start_date else None,
+        deadline=datetime.strptime(body.deadline, "%Y-%m-%d") if body.deadline else None,
         offer_content=body.offer_content or {},
         status=OfferStatus.pending
     )
@@ -1749,6 +2029,89 @@ async def convert_to_employee(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
     return success({"offer_id": offer.id}, "Offer letter created and submitted for approval.")
+
+
+@router.post("/offers/{offer_id}/revoke")
+async def revoke_offer(
+    offer_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(OfferLetter).where(OfferLetter.id == offer_id)
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    if role_val != "super_admin":
+        query = query.where(OfferLetter.org_id == current_user.org_id)
+    
+    result = await db.execute(query)
+    offer = result.scalar_one_or_none()
+    
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+        
+    if offer.status in [OfferStatus.accepted, OfferStatus.declined, OfferStatus.revoked]:
+        raise HTTPException(status_code=400, detail=f"Cannot revoke an offer that is already {offer.status.value}")
+        
+    offer.status = OfferStatus.revoked
+    
+    cand_res = await db.execute(select(Candidate).where(Candidate.id == offer.candidate_id))
+    candidate = cand_res.scalar_one_or_none()
+    if candidate:
+        candidate.status = CandidateStatus.archived
+
+    await db.commit()
+    return success(message="Offer has been manually revoked.")
+
+
+@router.post("/offers/{offer_id}/accept")
+async def accept_offer(
+    offer_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(OfferLetter).where(OfferLetter.id == offer_id)
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    if role_val != "super_admin":
+        query = query.where(OfferLetter.org_id == current_user.org_id)
+    
+    result = await db.execute(query)
+    offer = result.scalar_one_or_none()
+    
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+        
+    if offer.status in [OfferStatus.accepted, OfferStatus.revoked]:
+        raise HTTPException(status_code=400, detail=f"Offer is already {offer.status.value}")
+        
+    offer.status = OfferStatus.accepted
+    
+    cand_res = await db.execute(select(Candidate).where(Candidate.id == offer.candidate_id))
+    candidate = cand_res.scalar_one_or_none()
+    
+    if candidate:
+        user_res = await db.execute(select(User).where(User.id == candidate.user_id))
+        user = user_res.scalar_one_or_none()
+        
+        if user:
+            # Change user role to employee
+            user.role = UserRole.employee
+            
+            # Create Employee record
+            from app.models.deploy import Employee, EmployeeStatus
+            from datetime import datetime
+            
+            emp = Employee(
+                user_id=user.id,
+                org_id=offer.org_id,
+                department=offer.department,
+                job_title=offer.role_title,
+                location=offer.location,
+                start_date=offer.start_date or datetime.utcnow(),
+                status=EmployeeStatus.active
+            )
+            db.add(emp)
+
+    await db.commit()
+    return success(message="Offer has been accepted and candidate converted to Employee.")
 
 
 @router.post("/employees/{employee_id}/revert")
@@ -1840,6 +2203,31 @@ async def update_candidate(
         raise HTTPException(status_code=409, detail="This email is already taken by another user")
     return success(message="Candidate profile updated successfully")
 
+@router.get("/candidates/{candidate_id}/invite")
+async def get_candidate_invite(
+    candidate_id: int,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db)
+):
+    # Fetch the latest invite for the candidate
+    invite_res = await db.execute(
+        select(CandidateInvite)
+        .where(CandidateInvite.candidate_id == candidate_id)
+        .order_by(CandidateInvite.created_at.desc())
+        .limit(1)
+    )
+    invite = invite_res.scalar_one_or_none()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+        
+    return success({
+        "id": invite.id,
+        "status": invite.status.value,
+        "invite_content": invite.invite_content,
+        "deadline": invite.deadline.isoformat() if invite.deadline else None,
+        "email_sent_at": invite.email_sent_at.isoformat() if invite.email_sent_at else None
+    })
+
 @router.delete("/candidates/{candidate_id}")
 async def delete_candidate(
     candidate_id: int,
@@ -1853,7 +2241,6 @@ async def delete_candidate(
     role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
     if role_val != "super_admin":
         query = query.where(Candidate.org_id == current_user.org_id)
-    
     result = await db.execute(query)
     candidate = result.scalar_one_or_none()
     if not candidate:

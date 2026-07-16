@@ -1,0 +1,122 @@
+.admin-panel {
+  padding: 20px;
+}
+
+.admin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+
+  margin-bottom: 30px;
+}
+
+.admin-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+
+  color: #8b5cf6;
+
+  margin-bottom: 10px;
+}
+
+.admin-title {
+  font-size: 52px;
+  font-weight: 900;
+
+  line-height: 1;
+
+  color: #111827;
+}
+
+.admin-subtitle {
+  margin-top: 12px;
+
+  color: #6b7280;
+
+  font-size: 14px;
+}
+
+.admin-tabs {
+  display: flex;
+  gap: 10px;
+
+  background: #e5e7eb;
+
+  padding: 8px;
+
+  border-radius: 20px;
+}
+
+.admin-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  border: none;
+
+  background: transparent;
+
+  padding: 14px 20px;
+
+  border-radius: 14px;
+
+  font-size: 12px;
+  font-weight: 700;
+
+  cursor: pointer;
+
+  transition: 0.25s;
+}
+
+.admin-tab.active {
+  background: linear-gradient(
+    135deg,
+    #8b5cf6,
+    #a78bfa
+  );
+
+  color: white;
+
+  box-shadow:
+    0 8px 20px rgba(139,92,246,0.25);
+}
+.light-table {
+  background: white;
+
+  border-radius: 28px;
+
+  overflow: hidden;
+
+  border: 1px solid #e5e7eb;
+
+  margin-top: 24px;
+}
+
+.light-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.light-table thead {
+  background: #f3f4f6;
+}
+
+.light-table th {
+  padding: 22px;
+
+  text-align: left;
+
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+
+  color: #6b7280;
+}
+
+.light-table td {
+  padding: 24px;
+
+  border-top: 1px solid #f3f4f6;
+}

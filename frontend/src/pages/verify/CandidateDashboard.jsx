@@ -22,8 +22,8 @@ export default function CandidateDashboard() {
       .finally(() => setLoading(false));
   }, []);
 
-  const pending = assessments.filter(a => ['pending', 'started'].includes(a.status));
   const done = results.filter(r => r.score != null || r.is_malpractice);
+  const pending = assessments.filter(a => ['pending', 'started'].includes(a.status) && !a.terminated_by_proctor);
 
   return (
     <div>

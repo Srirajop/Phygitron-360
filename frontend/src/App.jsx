@@ -43,6 +43,9 @@ import CandidateProfile from './pages/source/CandidateProfile';
 import InviteStatus from './pages/source/InviteStatus';
 import OfferApprovals from './pages/source/OfferApprovals';
 
+import ResumeRepo from './pages/source/ResumeRepo';
+import JobRoles from './pages/source/JobRoles';
+
 // Verify
 import CandidateDashboard from './pages/verify/CandidateDashboard';
 import AssessmentTaker from './pages/verify/AssessmentTaker';
@@ -173,6 +176,8 @@ export default function App() {
             <Route path="/source" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><SourceDashboard /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/active" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><ActiveCandidates /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/upload" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><ResumeUpload /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/source/repo" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><ResumeRepo /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/source/roles" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><JobRoles /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/candidates/:id" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><CandidateProfile /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/invite-status/:roleId" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin']}><AppLayout><InviteStatus /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/source/offers" element={<ModuleGate module="source"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><OfferApprovals /></AppLayout></PrivateRoute></ModuleGate>} />

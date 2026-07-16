@@ -21,6 +21,7 @@ class OfferStatus(str, enum.Enum):
     sent = "sent"
     accepted = "accepted"
     declined = "declined"
+    revoked = "revoked"
     
 class JobStatus(str, enum.Enum):
     pending = "pending"
@@ -51,10 +52,12 @@ class SkillRelation(str, enum.Enum):
 
 
 class InviteStatus(str, enum.Enum):
+    pending = "pending"
     sent = "sent"
     opened = "opened"
     logged_in = "logged_in"
     completed = "completed"
+    expired = "expired"
 
 
 class Candidate(Base):
@@ -137,7 +140,10 @@ class CandidateInvite(Base):
     email_sent_at = Column(DateTime, nullable=True)
     opened_at = Column(DateTime, nullable=True)
     logged_in_at = Column(DateTime, nullable=True)
-    status = Column(Enum(InviteStatus), default=InviteStatus.sent)
+    deadline = Column(DateTime, nullable=True)
+    reminder_sent = Column(Boolean, default=False)
+    status = Column(Enum(InviteStatus), default=InviteStatus.pending)
+    invite_content = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -182,6 +188,8 @@ class OfferLetter(Base):
     offer_content = Column(JSON, nullable=False)
     status = Column(Enum(OfferStatus), default=OfferStatus.pending)
     feedback = Column(Text, nullable=True)
+    deadline = Column(DateTime, nullable=True)
+    reminder_sent = Column(Boolean, default=False)
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

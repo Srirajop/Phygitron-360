@@ -45,10 +45,11 @@ export const authApi = {
 
 // ── Source ────────────────────────────────────────────────────────────────
 export const sourceApi = {
-  uploadResume: (file, jobRoleId, onProgress, signal) => {
+  uploadResume: (file, jobRoleId, onProgress, signal, overrideDate) => {
     const fd = new FormData();
     fd.append('file', file);
     if (jobRoleId) fd.append('job_role_id', jobRoleId);
+    if (overrideDate) fd.append('override_date', overrideDate);
     return api.post('/api/v1/source/upload-resume', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress: onProgress,   // real-time bytes-sent feedback
@@ -59,6 +60,7 @@ export const sourceApi = {
   searchCandidates: ({ signal, ...params }) => api.get('/api/v1/source/candidates/search', { params, signal }),
   candidateStats: () => api.get('/api/v1/source/candidates/stats'),
   getCandidate: (id, params) => api.get(`/api/v1/source/candidates/${id}`, { params }),
+  getRepositoryFolders: () => api.get('/api/v1/source/candidates/repository/folders'),
 
   listJobRoles: () => api.get('/api/v1/source/job-roles'),
   createJobRole: (data) => api.post('/api/v1/source/job-roles', data),
@@ -66,6 +68,9 @@ export const sourceApi = {
   deleteJobRole: (id) => api.delete(`/api/v1/source/job-roles/${id}`),
   deleteAllJobRoles: () => api.delete('/api/v1/source/job-roles'),
   sendInvite: (data) => api.post('/api/v1/source/send-invite', data),
+  updateInvite: (id, data) => api.put(`/api/v1/source/update-invite/${id}`, data),
+  dispatchInvite: (id) => api.post(`/api/v1/source/dispatch-invite/${id}`),
+  getCandidateInvite: (id) => api.get(`/api/v1/source/candidates/${id}/invite`),
   inviteStatus: (jobRoleId) => api.get(`/api/v1/source/invite-status/${jobRoleId}`),
   previewOfferLetter: (id, data) => api.post(`/api/v1/source/candidates/${id}/offer-preview`, data),
   convertCandidate: (id, data) => api.post(`/api/v1/source/candidates/${id}/convert`, data),
@@ -73,6 +78,7 @@ export const sourceApi = {
   scoreCandidates: (data) => api.post('/api/v1/source/score-candidates', data),
   updateCandidate: (id, data) => api.put(`/api/v1/source/candidates/${id}`, data),
   deleteCandidate: (id) => api.delete(`/api/v1/source/candidates/${id}`),
+  bulkDeleteCandidates: (data) => api.post('/api/v1/source/candidates/bulk-delete', data),
   activeCandidates: () => api.get('/api/v1/source/active-candidates'),
   revertToCandidate: (id) => api.post(`/api/v1/source/employees/${id}/revert`),
   getBulkUploads: () => api.get('/api/v1/source/bulk-uploads'),
@@ -84,6 +90,8 @@ export const sourceApi = {
   rejectOffer: (id) => api.post(`/api/v1/source/offers/${id}/reject`),
   requestChangesOffer: (id, feedback) => api.post(`/api/v1/source/offers/${id}/request-changes`, { feedback }),
   sendOffer: (id) => api.post(`/api/v1/source/offers/${id}/send`),
+  revokeOffer: (id) => api.post(`/api/v1/source/offers/${id}/revoke`),
+  acceptOffer: (id) => api.post(`/api/v1/source/offers/${id}/accept`),
 };
 
 // ── Verify ────────────────────────────────────────────────────────────────

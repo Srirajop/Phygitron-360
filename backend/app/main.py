@@ -21,11 +21,17 @@ async def lifespan(app: FastAPI):
     await init_db()
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     await source.start_resume_parse_workers()
+    await source.start_deadline_workers()
     try:
         yield
     finally:
+        await source.stop_deadline_workers()
         await source.stop_resume_parse_workers()
 
+
+
+from fastapi import Request
+import time
 
 app = FastAPI(
     title="PHYGITRON 360 API",

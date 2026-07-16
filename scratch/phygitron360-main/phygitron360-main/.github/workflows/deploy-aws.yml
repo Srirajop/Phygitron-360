@@ -1,0 +1,104 @@
+name: Deploy to AWS ECS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY_BACKEND: phygitron-backend
+  ECR_REPOSITORY_FRONTEND: phygitron-frontend
+  ECS_CLUSTER: phygitron-cluster
+  ECS_SERVICE_BACKEND: backend-service
+  ECS_SERVICE_FRONTEND: frontend-service
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, tag, and push Backend Image to ECR
+      id: build-backend
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        cd backend
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND:latest .
+        docker push -a $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND
+        echo "backend_image=$ECR_REGISTRY/$ECR_REPOSITORY_BACKEND:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    - name: Build, tag, and push Frontend Image to ECR
+      id: build-frontend
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        cd frontend
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest .
+        docker push -a $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND
+        echo "frontend_image=$ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    # -------------------------------------------------------------
+    # BACKEND DEPLOYMENT (SHA Pinning)
+    # -------------------------------------------------------------
+    - name: Download current task definition for Backend
+      run: |
+        aws ecs describe-task-definition --task-definition phygitron-backend-task --query taskDefinition > task-def-backend.json
+
+    - name: Fill in the new image ID in the Amazon ECS task definition (Backend)
+      id: task-def-backend
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-def-backend.json
+        container-name: backend-container
+        image: ${{ steps.build-backend.outputs.backend_image }}
+
+    - name: Deploy Amazon ECS task definition (Backend)
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+      with:
+        task-definition: ${{ steps.task-def-backend.outputs.task-definition }}
+        service: ${{ env.ECS_SERVICE_BACKEND }}
+        cluster: ${{ env.ECS_CLUSTER }}
+        wait-for-service-stability: true
+
+    # -------------------------------------------------------------
+    # FRONTEND DEPLOYMENT (SHA Pinning)
+    # -------------------------------------------------------------
+    - name: Download current task definition for Frontend
+      run: |
+        aws ecs describe-task-definition --task-definition phygitron-frontend-task --query taskDefinition > task-def-frontend.json
+
+    - name: Fill in the new image ID in the Amazon ECS task definition (Frontend)
+      id: task-def-frontend
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-def-frontend.json
+        container-name: frontend-container
+        image: ${{ steps.build-frontend.outputs.frontend_image }}
+
+    - name: Deploy Amazon ECS task definition (Frontend)
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+      with:
+        task-definition: ${{ steps.task-def-frontend.outputs.task-definition }}
+        service: ${{ env.ECS_SERVICE_FRONTEND }}
+        cluster: ${{ env.ECS_CLUSTER }}
+        wait-for-service-stability: true

@@ -120,6 +120,8 @@ export default function AssessmentTaker() {
   const audioCtxRef = useRef(null);          // Web Audio API — catches murmurs
   const analyserRef = useRef(null);
   const audioCalibrationRef = useRef({ samples: [], baseline: null });
+  const audioStateRef = useRef({ quietSamples: 0, lockedUntil: 0 });
+  const lastSpeechStrikeRef = useRef({ transcript: '', time: 0 });
   const lastFrameRef = useRef(null);
   const audioViolationTimer = useRef(null);
   const cameraViolationTimer = useRef(null);
@@ -336,13 +338,21 @@ export default function AssessmentTaker() {
       recognition.maxAlternatives = 1;
       recognition.onresult = (event) => {
         const last = event.results[event.results.length - 1];
-        const transcript = (last[0]?.transcript || '').trim();
+        const transcript = (last[0]?.transcript || '').trim().replace(/\s+/g, ' ');
         if (!transcript) return;
-        // Fire on any final result, or interim results with high confidence (≥ 0.85)
-        const highConfidenceInterim = !last.isFinal && (last[0]?.confidence || 0) >= 0.85 && transcript.length >= 3;
-        if (last.isFinal || highConfidenceInterim) {
-          handleCheatAttemptRef.current?.('Speaking Detected During Assessment', 'audio_detected', 8000);
-        }
+
+        const confidence = last[0]?.confidence || 0;
+        const meaningfulFinal = last.isFinal && transcript.length >= 4;
+        const highConfidenceInterim = !last.isFinal && confidence >= 0.9 && transcript.length >= 5;
+        if (!meaningfulFinal && !highConfidenceInterim) return;
+
+        const normalized = transcript.toLowerCase();
+        const now = Date.now();
+        const lastSpeech = lastSpeechStrikeRef.current;
+        if (lastSpeech.transcript === normalized && now - lastSpeech.time < 45000) return;
+
+        const fired = handleCheatAttemptRef.current?.('Speaking Detected During Assessment', 'audio_detected', 30000);
+        if (fired) lastSpeechStrikeRef.current = { transcript: normalized, time: now };
       };
       recognition.onerror = (e) => {
         if (e.error !== 'no-speech' && e.error !== 'aborted') console.warn('SR error:', e.error);
@@ -380,22 +390,48 @@ export default function AssessmentTaker() {
         return;
       }
       const baseline = cal.baseline || 0;
-      // Voice: clear spike above room noise with harmonic spread
-      const energeticVoice = voiceAvg > Math.max(baseline + 18, 24) && voiceRatio > 0.25;
-      // Loud mic: RMS spike (covers talking, shouting nearby)
-      const loudMicActivity = voiceAvg > Math.max(baseline + 14, 20) && rms > 0.07;
-      const isVoiceLike = energeticVoice || loudMicActivity;
+      const audioState = audioStateRef.current;
+      if (audioState.quietSamples === 0 && !audioState.lockedUntil) audioState.quietSamples = 6;
+      const now = Date.now();
+
+      // Treat generic loudness as evidence only when the spectrum looks voice-like.
+      // This avoids repeated unfair strikes from fan noise, keyboard taps, mic AGC,
+      // or one residual audio spike after the candidate has stopped speaking.
+      const voiceFloor = Math.max(baseline + 22, 30);
+      const voiceSpreadLooksHuman = voiceRatio >= 0.18 && voiceRatio <= 0.72;
+      const energeticVoice = voiceAvg > voiceFloor && voiceSpreadLooksHuman && rms > 0.035;
+      const veryLoudVoiceBand = voiceAvg > Math.max(baseline + 32, 42) && voiceSpreadLooksHuman && rms > 0.055;
+      const isVoiceLike = energeticVoice || veryLoudVoiceBand;
+      const isQuiet = voiceAvg < Math.max(baseline + 10, 18) && rms < 0.035;
+
+      if (isQuiet) {
+        audioState.quietSamples = Math.min(audioState.quietSamples + 1, 20);
+        audioViolationTimer.current = null;
+        cal.baseline = baseline * 0.95 + voiceAvg * 0.05;
+        return;
+      }
+
+      // After one audio strike, require both time and multiple quiet samples before
+      // another low-level mic strike can be issued. SpeechRecognition can still catch
+      // a new, clear utterance separately with its own longer cooldown.
+      if (now < audioState.lockedUntil || audioState.quietSamples < 6) {
+        if (!isVoiceLike) cal.baseline = baseline * 0.98 + voiceAvg * 0.02;
+        return;
+      }
 
       if (isVoiceLike) {
-        if (!audioViolationTimer.current) audioViolationTimer.current = Date.now();
-        // Sustained for 1.5 s (down from 3.5 s) — catches clear speech quickly
-        if (Date.now() - audioViolationTimer.current > 1500) {
-          const fired = handleCheatAttemptRef.current?.('Voice / Audio Detected Near Microphone', 'audio_detected', 8000);
-          if (fired) audioViolationTimer.current = null;
+        if (!audioViolationTimer.current) audioViolationTimer.current = now;
+        if (now - audioViolationTimer.current > 3200) {
+          const fired = handleCheatAttemptRef.current?.('Sustained Voice Detected Near Microphone', 'audio_detected', 45000);
+          if (fired) {
+            audioState.lockedUntil = now + 45000;
+            audioState.quietSamples = 0;
+          }
+          audioViolationTimer.current = null;
         }
       } else {
         audioViolationTimer.current = null;
-        cal.baseline = baseline * 0.97 + voiceAvg * 0.03;
+        cal.baseline = baseline * 0.98 + voiceAvg * 0.02;
       }
     }, 500);
 
@@ -608,6 +644,7 @@ export default function AssessmentTaker() {
         speechRecognitionRef.current = null;
       }
       audioViolationTimer.current = null;
+      audioStateRef.current = { quietSamples: 0, lockedUntil: 0 };
       cameraViolationTimer.current = null;
       cameraTrackViolationTimer.current = null;
       motionViolationTimer.current = null;

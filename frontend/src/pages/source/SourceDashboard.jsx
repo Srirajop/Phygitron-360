@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { sourceApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
-import { Search, Filter, Upload, Users, Send, Star, Trash2, Layers, BarChart2, Zap, X, ChevronDown, ArrowUpDown, Edit } from 'lucide-react';
+import { Search, Filter, Upload, Users, Send, Star, Trash2, Layers, BarChart2, Zap, X, ChevronDown, ArrowUpDown, Edit, Folder, CalendarDays, ArrowLeft } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 /* ── Score Badge ─────────────────────────────────────────────────────────── */
@@ -201,30 +201,33 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
 
 /* ── Main Component ──────────────────────────────────────────────────────── */
 // Caching removed to prevent stale fit scores across page navigations
+const DEFAULT_FILTERS = {
+  pool: 'all',
+  sort_by: 'newest',
+  limit: 20,
+  role_id: '',
+  search: '',
+  location: '',
+  exp_range: '',
+  upload_time: '',
+  upload_year: '',
+  upload_month: ''
+};
 
 export default function SourceDashboard() {
   const { user } = useAuth();
   const [candidates, setCandidates] = useState([]);
   const [jobRoles, setJobRoles] = useState([]);
   const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
   const [selected, setSelected] = useState(new Set());
-  const [filters, setFilters] = useState(() => {
-    try {
-      const saved = sessionStorage.getItem('talentVaultFilters');
-      return saved ? JSON.parse(saved) : { pool: 'all', sort_by: 'newest', limit: 20, role_id: '', search: '', location: '', exp_range: '' };
-    } catch {
-      return { pool: 'all', sort_by: 'newest', limit: 20, role_id: '', search: '', location: '', exp_range: '' };
-    }
-  });
+  const [filters, setFilters] = useState(() => ({ ...DEFAULT_FILTERS }));
+
   const [searchInput, setSearchInput] = useState(filters.search || '');
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteRoleId, setInviteRoleId] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
-  const [showAddRole, setShowAddRole] = useState(false);
-  const [newRole, setNewRole] = useState({ title: '', description: '', min_experience: 0 });
-  const [editingRoleId, setEditingRoleId] = useState(null);
-  const [addingRole, setAddingRole] = useState(false);
   const [scoring, setScoring] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
   const [sortCriteria, setSortCriteria] = useState(() => {
@@ -237,6 +240,7 @@ export default function SourceDashboard() {
   });
   const [editingEmailId, setEditingEmailId] = useState(null);
   const [editEmailVal, setEditEmailVal] = useState('');
+
   // AbortController ref: cancels the in-flight search request when a new one starts.
   // This prevents stale responses from overwriting fresher data and wastes no bandwidth.
   const abortRef = useRef(null);
@@ -259,9 +263,6 @@ export default function SourceDashboard() {
     }
   };
 
-  useEffect(() => {
-    sessionStorage.setItem('talentVaultFilters', JSON.stringify(filters));
-  }, [filters]);
 
   useEffect(() => {
     sessionStorage.setItem('talentVaultSort', JSON.stringify(sortCriteria));
@@ -278,63 +279,79 @@ export default function SourceDashboard() {
   }, []);
 
   const fetchCandidates = useCallback(() => {
-    const apiParams = { ...filters };
-    apiParams.sort_by = sortCriteria.join(',');
-    if (!apiParams.role_id) {
-      delete apiParams.role_id;
-      // If no role, remove fit_score from sort
-      const filteredSort = sortCriteria.filter(s => s !== 'fit_score');
-      if (filteredSort.length !== sortCriteria.length) {
+    try {
+      const apiParams = { ...filters };
+      if (apiParams.role_id) {
+        apiParams.sort_by = ['fit_score', ...sortCriteria.filter(s => s !== 'fit_score')].join(',');
+      } else {
+        delete apiParams.role_id;
+        const filteredSort = sortCriteria.filter(s => s !== 'fit_score');
         apiParams.sort_by = filteredSort.length > 0 ? filteredSort.join(',') : 'newest';
       }
+      
+      // Override search with the current input value directly
+      apiParams.search = searchInput;
+      if (!apiParams.search) delete apiParams.search;
+      if (!apiParams.location) delete apiParams.location;
+      if (!apiParams.exp_range) delete apiParams.exp_range;
+      if (!apiParams.upload_time) delete apiParams.upload_time;
+      
+      // Clean up frontend-only params
+      delete apiParams.upload_year;
+      delete apiParams.upload_month;
+      
+      // Prevent browser caching
+      apiParams._t = Date.now();
+
+      setLoading(true);
+      sourceApi.searchCandidates({ ...apiParams })
+        .then(r => {
+          const data = r.data.data || [];
+          setCandidates(data);
+        })
+        .catch(err => {
+          // Ignore aborted requests
+          if (err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.message === 'canceled') return;
+          console.error("Search failed:", err);
+          setCandidates([]);
+          toast.error(`Search failed: ${err?.message || 'Unknown error'}`);
+        })
+        .finally(() => setLoading(false));
+    } catch (criticalError) {
+      alert("CRITICAL ERROR IN FETCH: " + criticalError.message);
+      console.error(criticalError);
     }
-    if (!apiParams.search) delete apiParams.search;
-    if (!apiParams.location) delete apiParams.location;
-    if (!apiParams.exp_range) delete apiParams.exp_range;
+  }, [filters, sortCriteria, searchInput]);
 
-    // Cancel any in-flight request before firing a new one
-    if (abortRef.current) abortRef.current.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setLoading(true);
-    sourceApi.searchCandidates({ ...apiParams, signal: controller.signal })
-      .then(r => {
-        const data = r.data.data || [];
-        setCandidates(data);
-      })
-      .catch(err => {
-        // Ignore aborted requests
-        if (err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.message === 'canceled') return;
-        setCandidates([]);
-        toast.error('Failed to load candidates');
-      })
-      .finally(() => setLoading(false));
-  }, [filters, sortCriteria]);
-
-  // Debounced search
-  const handleSearchChange = (val) => {
-    setSearchInput(val);
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => {
-      setFilters(f => ({ ...f, search: val }));
-    }, 400);
-  };
-
-  // When role_id is cleared, always remove fit_score from sort so profiles
-  // are not stuck ranked by a stale score from the previous role query.
+  // Role searches are always ranked by fit score; all-role searches never are.
   useEffect(() => {
-    if (!filters.role_id) {
-      setSortCriteria(prev => {
-        const stripped = prev.filter(k => k !== 'fit_score');
-        return stripped.length === 0 ? ['newest'] : stripped;
-      });
-    }
+    setSortCriteria(prev => {
+      if (filters.role_id) {
+        return prev.includes('fit_score') ? prev : ['fit_score', ...prev];
+      }
+      const stripped = prev.filter(k => k !== 'fit_score');
+      return stripped.length === 0 ? ['newest'] : stripped;
+    });
   }, [filters.role_id]);
 
-  useEffect(() => { fetchCandidates(); }, [filters.role_id, filters.pool, filters.search, filters.location, filters.exp_range, filters.limit, sortCriteria]);
+  const handleSearchClick = () => {
+    setHasSearched(true);
+    fetchCandidates();
+  };
+
+  const resetFilters = () => {
+    sessionStorage.removeItem('talentVaultFilters');
+    sessionStorage.removeItem('talentVaultSort');
+    setFilters({ ...DEFAULT_FILTERS });
+    setSearchInput('');
+    setSortCriteria(['newest']);
+    setSelected(new Set());
+    setCandidates([]);
+    setHasSearched(false);
+  };
 
   const toggleSort = (key) => {
+    if (key === 'fit_score' && filters.role_id) return;
     setSortCriteria(prev => {
       if (prev.includes(key)) {
         const next = prev.filter(k => k !== key);
@@ -367,30 +384,21 @@ export default function SourceDashboard() {
     }
   };
 
-  const handleDeleteRole = async (roleId) => {
-    if (!roleId) {
-      if (!window.confirm("WARNING: Are you sure you want to delete ALL job roles? This action is permanent and cannot be undone.")) return;
-      try {
-        await sourceApi.deleteAllJobRoles();
-        toast.success("All job roles deleted");
-        setFilters(f => ({ ...f, role_id: '' }));
-        setSortCriteria(prev => prev.filter(k => k !== 'fit_score'));
-        sourceApi.listJobRoles().then(r => setJobRoles(r.data.data || []));
-      } catch (err) {
-        toast.error(err?.response?.data?.detail || "Failed to delete all job roles");
-      }
+  const handleBulkDelete = async () => {
+    const candidateIds = candidates.filter(c => !c.is_employee && selected.has(candidateKey(c))).map(c => c.id);
+    if (candidateIds.length === 0) {
+      toast.error('Select at least one candidate resume to delete');
       return;
     }
-
-    if (!window.confirm("Are you sure you want to delete this job role? This action cannot be undone.")) return;
+    if (!window.confirm(`Are you sure you want to delete ${candidateIds.length} resume(s)?`)) return;
+    
     try {
-      await sourceApi.deleteJobRole(roleId);
-      toast.success("Job role deleted");
-      setFilters(f => ({ ...f, role_id: '' }));
-      setSortCriteria(prev => prev.filter(k => k !== 'fit_score'));
-      sourceApi.listJobRoles().then(r => setJobRoles(r.data.data || []));
+      await sourceApi.bulkDeleteCandidates({ candidate_ids: candidateIds });
+      toast.success(`${candidateIds.length} resume(s) deleted`);
+      setSelected(new Set());
+      setCandidates(c => c.filter(x => !(candidateIds.includes(x.id) && !x.is_employee)));
     } catch (err) {
-      toast.error(err?.response?.data?.detail || "Failed to delete job role");
+      toast.error(err?.response?.data?.detail || "Failed to bulk delete");
     }
   };
 
@@ -421,8 +429,8 @@ export default function SourceDashboard() {
     try {
       const payload = { candidate_ids: candidateIds, job_role_id: parseInt(inviteRoleId) };
       if (candidateIds.length === 1 && inviteEmail) payload.email_addresses = [inviteEmail];
-      await sourceApi.sendInvite(payload);
-      toast.success(`Invites sent to ${candidateIds.length} candidates!`);
+      const res = await sourceApi.sendInvite(payload);
+      toast.success(res.data.message || `Invites processed for ${candidateIds.length} candidates!`);
       setSelected(new Set()); setShowInviteModal(false);
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to send invites');
@@ -436,51 +444,6 @@ export default function SourceDashboard() {
       if (cand) setInviteEmail(cand.email || '');
     } else { setInviteEmail(''); }
     setShowInviteModal(true);
-  };
-
-  const handleCreateRole = async (e) => {
-    e.preventDefault();
-    if (!newRole.title) return;
-    setAddingRole(true);
-    try {
-      if (editingRoleId) {
-        await sourceApi.updateJobRole(editingRoleId, newRole);
-        toast.success('Role updated!');
-      } else {
-        await sourceApi.createJobRole(newRole);
-        toast.success('Role created!');
-      }
-      sourceApi.listJobRoles().then(r => setJobRoles(r.data.data || []));
-      setShowAddRole(false);
-      setNewRole({ title: '', description: '', min_experience: 0 });
-      setEditingRoleId(null);
-    } catch { toast.error(editingRoleId ? 'Failed to update role' : 'Failed to create role'); }
-    finally { setAddingRole(false); }
-  };
-
-  const resetRoleModal = () => {
-    setShowAddRole(false);
-    setEditingRoleId(null);
-    setNewRole({ title: '', description: '', min_experience: 0 });
-  };
-
-  const handleEditRole = () => {
-    if (!filters.role_id) {
-      toast.error('Select a role first');
-      return;
-    }
-    const role = jobRoles.find(r => r.id === parseInt(filters.role_id, 10));
-    if (!role) {
-      toast.error('Role not found');
-      return;
-    }
-    setEditingRoleId(role.id);
-    setNewRole({
-      title: role.title || '',
-      description: role.description || '',
-      min_experience: role.min_experience || 0,
-    });
-    setShowAddRole(true);
   };
 
   const selectedCandidates = candidates.filter(c => selected.has(candidateKey(c)));
@@ -525,12 +488,15 @@ export default function SourceDashboard() {
               type="text"
               placeholder="Search by name, email, or skill..."
               value={searchInput}
-              onChange={e => handleSearchChange(e.target.value)}
+              onChange={e => setSearchInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleSearchClick(); }}
               style={{ border: 'none', outline: 'none', background: 'transparent', flex: 1, fontSize: '0.95rem', color: 'var(--text-primary)' }}
             />
             {searchInput && (
-              <button className="btn btn-ghost btn-sm" onClick={() => handleSearchChange('')} style={{ padding: 4 }}><X size={14} /></button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSearchInput('')} style={{ padding: 4, marginRight: 8 }}><X size={14} /></button>
             )}
+                        <button className="btn btn-ghost" onClick={resetFilters} style={{ padding: '8px 16px', fontWeight: 600 }}>Reset</button>
+            <button className="btn btn-primary" onClick={handleSearchClick} style={{ padding: '8px 24px', fontWeight: 600 }}>Search</button>
           </div>
         </div>
 
@@ -540,30 +506,6 @@ export default function SourceDashboard() {
             <div style={{ flex: 1, minWidth: 250 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                 <label className="form-label" style={{ marginBottom: 0 }}>Job Role</label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {canEditRoles && (
-                    <button
-                      type="button"
-                      onClick={handleEditRole}
-                      disabled={!filters.role_id}
-                      className="btn btn-ghost btn-sm"
-                      style={{ padding: '0 4px', height: 18, fontSize: 11, color: filters.role_id ? 'var(--primary)' : 'var(--text-muted)' }}
-                    >
-                      Edit Role
-                    </button>
-                  )}
-                  {canManageRoles && (
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteRole(filters.role_id)}
-                      className="btn btn-ghost btn-sm"
-                      style={{ padding: '0 4px', height: 18, fontSize: 11, color: 'var(--danger)' }}
-                    >
-                      - Delete {filters.role_id ? 'Role' : 'All Roles'}
-                    </button>
-                  )}
-                  {canManageRoles && <button type="button" onClick={() => setShowAddRole(true)} className="btn btn-ghost btn-sm" style={{ padding: '0 4px', height: 18, fontSize: 11, color: 'var(--primary)' }}>+ Add New</button>}
-                </div>
               </div>
               <select className="form-control" value={filters.role_id} onChange={e => {
                 const newRoleId = e.target.value;
@@ -587,6 +529,7 @@ export default function SourceDashboard() {
                 <option value="employee">Employees</option>
               </select>
             </div>
+
             <div style={{ minWidth: 150 }}>
               <label className="form-label">Experience</label>
               <select className="form-control" value={filters.exp_range} onChange={e => setFilters(f => ({ ...f, exp_range: e.target.value }))}>
@@ -596,6 +539,41 @@ export default function SourceDashboard() {
                 <option value="2-5">2-5 Years</option>
                 <option value="5+">5+ Years</option>
               </select>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ minWidth: 100 }}>
+                <label className="form-label">Upload Year</label>
+                <select className="form-control" value={filters.upload_year || ''} onChange={e => setFilters(f => {
+                  const y = e.target.value;
+                  let m = f.upload_month || '';
+                  if (y && parseInt(y) === new Date().getFullYear() && m && parseInt(m) > new Date().getMonth() + 1) {
+                    m = '';
+                  }
+                  return { ...f, upload_year: y, upload_month: m, upload_time: y ? (m ? `${y}-${m}` : y) : '' };
+                })}>
+                  <option value="">All Time</option>
+                  {Array.from({ length: new Date().getFullYear() - 2022 }, (_, i) => new Date().getFullYear() - i).map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ minWidth: 100 }}>
+                <label className="form-label">Upload Month</label>
+                <select className="form-control" disabled={!filters.upload_year} value={filters.upload_month || ''} onChange={e => setFilters(f => {
+                  const m = e.target.value;
+                  const y = f.upload_year || '';
+                  return { ...f, upload_month: m, upload_time: y ? (m ? `${y}-${m}` : y) : '' };
+                })}>
+                  <option value="">All Months</option>
+                  {Array.from({ length: 12 }, (_, i) => i + 1)
+                    .filter(m => !filters.upload_year || parseInt(filters.upload_year) < new Date().getFullYear() || m <= new Date().getMonth() + 1)
+                    .map(m => {
+                      const monthStr = m.toString().padStart(2, '0');
+                      const monthName = new Date(2000, m - 1).toLocaleString('default', { month: 'long' });
+                      return <option key={monthStr} value={monthStr}>{monthName}</option>;
+                  })}
+                </select>
+              </div>
             </div>
             <div style={{ minWidth: 140 }}>
               <label className="form-label">Location</label>
@@ -619,20 +597,14 @@ export default function SourceDashboard() {
             <div style={{ flex: 1, minWidth: 200 }}>
               <label className="form-label">Sort By</label>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  className={`btn btn-sm ${sortCriteria.includes('newest') ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => toggleSort('newest')}
-                  style={{ borderRadius: 20, padding: '4px 12px', fontSize: '0.75rem', fontWeight: 600 }}
-                >
-                  Recent
-                </button>
+
                 <button
                   type="button"
                   disabled={!filters.role_id}
-                  className={`btn btn-sm ${sortCriteria.includes('fit_score') ? 'btn-primary' : 'btn-secondary'}`}
+                  className={`btn btn-sm ${filters.role_id ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => toggleSort('fit_score')}
-                  style={{ borderRadius: 20, padding: '4px 12px', fontSize: '0.75rem', fontWeight: 600 }}
+                  title={filters.role_id ? 'Fit Score is required when a job role is selected' : 'Select a role to rank by fit score'}
+                  style={{ borderRadius: 20, padding: '4px 12px', fontSize: '0.75rem', fontWeight: 600, cursor: filters.role_id ? 'default' : 'not-allowed' }}
                 >
                   Fit Score
                 </button>
@@ -640,14 +612,37 @@ export default function SourceDashboard() {
             </div>
           </div>
         </div>
-
         {/* ── Candidate Grid ── */}
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><div className="spinner spinner-lg" /></div>
+        ) : !hasSearched ? (
+          <div className="empty-state">
+            <div className="empty-icon">🔍</div>
+            <p style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Ready to find candidates</p>
+            <p style={{ fontSize: '0.9rem' }}>Adjust your filters and click "Search" to view results.</p>
+          </div>
         ) : candidates.length === 0 ? (
           <div className="empty-state"><div className="empty-icon">🔍</div><p>No candidates found. Upload resumes or adjust filters.</p></div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+            {/* Select All Checkbox */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 4px', marginBottom: -4 }}>
+              <input 
+                type="checkbox" 
+                style={{ accentColor: 'var(--primary)', width: 16, height: 16, cursor: 'pointer' }}
+                checked={candidates.length > 0 && selected.size === candidates.length}
+                onChange={(e) => {
+                  if (e.target.checked) setSelected(new Set(candidates.map(candidateKey)));
+                  else setSelected(new Set());
+                }}
+              />
+              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', cursor: 'pointer' }} onClick={() => {
+                if (selected.size === candidates.length) setSelected(new Set());
+                else setSelected(new Set(candidates.map(candidateKey)));
+              }}>Select All</span>
+            </div>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
             {candidates.map((c, i) => (
               <div key={candidateKey(c)} className={`card animate-fade-in stagger-${Math.min(i + 1, 5)}`} style={{ padding: '16px 20px', border: selected.has(candidateKey(c)) ? '2px solid var(--primary)' : '1px solid var(--border)', cursor: 'pointer', transition: 'var(--transition)', width: '100%', maxWidth: '100%', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flexWrap: 'wrap' }}>
@@ -669,6 +664,7 @@ export default function SourceDashboard() {
                     </div>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', overflowWrap: 'anywhere', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
                       {c.location} · {c.exp_years > 0 ? `${c.exp_years} yrs exp` : 'Fresher'} · 
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Uploaded: {new Date(c.created_at).toLocaleDateString()}</span> ·
                       {editingEmailId === c.id && !c.is_employee ? (
                         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                           <input type="email" className="form-control" style={{ padding: '0 4px', height: 22, fontSize: '0.75rem', width: 150 }} value={editEmailVal} onChange={e => setEditEmailVal(e.target.value)} />
@@ -695,18 +691,11 @@ export default function SourceDashboard() {
                   </div>
 
                   {/* Scores */}
-                  <div style={{ display: 'flex', gap: 16, minWidth: 80, flexShrink: 0, justifyContent: 'flex-end', paddingRight: 16 }}>
-                    {filters.role_id ? (
+                  {filters.role_id && (
+                    <div style={{ display: 'flex', gap: 16, minWidth: 80, flexShrink: 0, justifyContent: 'flex-end', paddingRight: 16 }}>
                       <CircularScore score={c.ats_score} title="Fit Score" />
-                    ) : c.ats_score != null ? (
-                      <CircularScore score={c.ats_score} title="Fit Score" />
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 44, opacity: 0.35 }}>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Fit Score</div>
-                        <div style={{ width: 44, height: 44, borderRadius: '50%', border: '3px dashed var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>—</div>
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
 
                   {/* Actions */}
                   <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -718,7 +707,8 @@ export default function SourceDashboard() {
               </div>
             ))}
           </div>
-        )}
+          </div>
+          )}
       </div>
 
       {/* ── Floating Action Bar ── */}
@@ -732,6 +722,7 @@ export default function SourceDashboard() {
               </button>
             )}
             {canManageRoles && <button className="btn btn-primary btn-sm" onClick={handleOpenInvite} style={{ gap: 6 }}><Send size={15} /> Invite</button>}
+            {canManageRoles && <button className="btn btn-ghost btn-sm" onClick={handleBulkDelete} style={{ color: 'var(--danger)', background: 'rgba(239,68,68,0.1)', gap: 6 }}><Trash2 size={15} /> Delete</button>}
             <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())} style={{ color: 'rgba(255,255,255,0.7)' }}>Clear</button>
           </div>
         </div>
@@ -774,45 +765,6 @@ export default function SourceDashboard() {
               <button className="btn btn-ghost" onClick={() => setShowInviteModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={sendInvites}><Send size={14} /> Send {selected.size} Invite{selected.size !== 1 ? 's' : ''}</button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Add Role Modal ── */}
-      {showAddRole && (
-        <div className="modal-overlay" onClick={resetRoleModal}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h4>{editingRoleId ? 'Edit Job Role' : 'Create Job Role'}</h4>
-              <button className="btn btn-ghost btn-sm" onClick={resetRoleModal}>✕</button>
-            </div>
-            <form onSubmit={handleCreateRole}>
-              <div className="modal-body">
-                <p style={{ marginBottom: 16, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                  {editingRoleId
-                    ? 'Update the role details and latest job description. The system will refresh required skills from the updated JD.'
-                    : 'Create a role to measure candidates against. AI Fit Scores will compare candidate skills vs. role requirements.'}
-                </p>
-                <div className="form-group">
-                  <label className="form-label">Role Title *</label>
-                  <input required className="form-control" placeholder="e.g. Senior Backend Engineer" value={newRole.title} onChange={e => setNewRole(r => ({ ...r, title: e.target.value }))} />
-                </div>
-                <div className="form-group" style={{ marginTop: 16 }}>
-                  <label className="form-label">Minimum Experience (Years)</label>
-                  <input type="number" min="0" className="form-control" value={newRole.min_experience} onChange={e => setNewRole(r => ({ ...r, min_experience: parseInt(e.target.value || '0', 10) }))} />
-                </div>
-                <div className="form-group" style={{ marginTop: 16 }}>
-                  <label className="form-label">Job Description (Optional, for ATS matching)</label>
-                  <textarea className="form-control" rows={4} placeholder="Paste the full job description here. Our AI will automatically extract required skills." value={newRole.description} onChange={e => setNewRole(r => ({ ...r, description: e.target.value }))} />
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-ghost" onClick={resetRoleModal}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={addingRole}>
-                  {addingRole ? (editingRoleId ? 'Saving...' : 'Creating...') : (editingRoleId ? 'Save Changes' : 'Create Role')}
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

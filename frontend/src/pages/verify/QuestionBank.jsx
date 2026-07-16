@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { verifyApi } from '../../api';
-import { PlusCircle, Trash2, Tag, Database, Search, X } from 'lucide-react';
+import { PlusCircle, Trash2, Tag, Database, Search, X, LayoutGrid, List } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const QTYPES = [
@@ -162,6 +162,7 @@ export default function QuestionBank() {
   const [showAdd, setShowAdd] = useState(false);
   const [showImportUrl, setShowImportUrl] = useState(false);
   const [fileUploading, setFileUploading] = useState(false);
+  const [viewMode, setViewMode] = useState('grid');
 
   const load = async () => {
     setLoading(true);
@@ -235,6 +236,10 @@ export default function QuestionBank() {
               <option value="">All Tags</option>
               {allTags.map(t=><option key={t} value={t}>{t}</option>)}
             </select>
+            <div style={{ display: 'flex', gap: 4, padding: 4, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-card)' }}>
+              <button className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '6px 10px' }} onClick={() => setViewMode('list')} title="List view"><List size={16} /></button>
+              <button className={`btn btn-sm ${viewMode === 'grid' ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '6px 10px' }} onClick={() => setViewMode('grid')} title="Card view"><LayoutGrid size={16} /></button>
+            </div>
             {(filterTag||filterType||search) && <button className="btn btn-ghost btn-sm" onClick={()=>{setFilterTag('');setFilterType('');setSearch('');}}><X size={13}/> Clear</button>}
           </div>
         </div>
@@ -256,7 +261,54 @@ export default function QuestionBank() {
           Showing {filtered.length} of {items.length} questions
         </div>
 
-        {loading ? <div className="spinner" style={{margin:'48px auto'}}/> : (
+        {loading ? <div className="spinner" style={{margin:'48px auto'}}/> : filtered.length === 0 ? (
+          <div className="card animate-fade-in" style={{textAlign:'center',padding:48,color:'var(--text-muted)'}}>
+            <Database size={40} style={{marginBottom:12,opacity:0.3}}/>
+            <div style={{fontWeight:600}}>No questions found</div>
+            <div style={{fontSize:'0.85rem',marginTop:4}}>Try different filters or add a new question</div>
+          </div>
+        ) : viewMode === 'list' ? (
+          <div className="card animate-fade-in">
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr><th>Question</th><th>Type</th><th>Marks</th><th>Tags</th><th>Answer</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {filtered.map(item => (
+                    <tr key={item.id}>
+                      <td style={{ maxWidth: 520 }}>
+                        <div style={{ fontWeight: 600, lineHeight: 1.45 }}>
+                          {item.question_text?.length > 140 ? item.question_text.slice(0, 140) + '...' : item.question_text}
+                        </div>
+                        {item.options && item.options.length > 0 && (
+                          <div style={{ marginTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                            {item.options.slice(0, 4).map((o, i) => (
+                              <span key={i} style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{String.fromCharCode(65+i)}. {o.slice(0, 24)}{o.length > 24 ? '...' : ''}</span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                      <td><span className="badge badge-muted">{item.question_type}</span></td>
+                      <td>{item.marks} mark{item.marks !== 1 ? 's' : ''}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          {(item.tags || []).length > 0 ? (item.tags || []).map(t => <span key={t} className={`badge ${tagColor(t)}`}>{t}</span>) : <span style={{ color: 'var(--text-muted)' }}>-</span>}
+                        </div>
+                      </td>
+                      <td style={{ maxWidth: 220, color: 'var(--text-muted)' }}>
+                        {(item.correct_answer || item.model_answer || '-').toString().slice(0, 80)}{(item.correct_answer || item.model_answer || '').toString().length > 80 ? '...' : ''}
+                      </td>
+                      <td>
+                        <button className="btn btn-ghost btn-sm" style={{color:'var(--danger)',padding:4}} onClick={()=>deleteItem(item.id)} title="Delete"><Trash2 size={14}/></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(340px,1fr))',gap:16}}>
             {filtered.map(item=>(
               <div key={item.id} className="card animate-fade-in" style={{border:'1px solid var(--border)'}}>
@@ -270,13 +322,13 @@ export default function QuestionBank() {
                     <button className="btn btn-ghost btn-sm" style={{color:'var(--danger)',padding:4}} onClick={()=>deleteItem(item.id)}><Trash2 size={14}/></button>
                   </div>
                   <p style={{fontSize:'0.88rem',lineHeight:1.5,color:'var(--text-primary)',margin:0}}>
-                    {item.question_text.length>200?item.question_text.slice(0,200)+'…':item.question_text}
+                    {item.question_text.length>200?item.question_text.slice(0,200)+'...':item.question_text}
                   </p>
                   {item.options && item.options.length>0 && (
                     <div style={{marginTop:8,display:'flex',flexWrap:'wrap',gap:4}}>
                       {item.options.slice(0,4).map((o,i)=>(
                         <span key={i} style={{fontSize:'0.72rem',padding:'2px 8px',background:'var(--bg-hover)',borderRadius:4,color:item.correct_answer===o?'var(--success)':'var(--text-muted)',fontWeight:item.correct_answer===o?700:400}}>
-                          {String.fromCharCode(65+i)}. {o.slice(0,30)}{o.length>30?'…':''}
+                          {String.fromCharCode(65+i)}. {o.slice(0,30)}{o.length>30?'...':''}
                         </span>
                       ))}
                     </div>
@@ -284,13 +336,6 @@ export default function QuestionBank() {
                 </div>
               </div>
             ))}
-            {filtered.length===0 && (
-              <div style={{gridColumn:'1/-1',textAlign:'center',padding:48,color:'var(--text-muted)'}}>
-                <Database size={40} style={{marginBottom:12,opacity:0.3}}/>
-                <div style={{fontWeight:600}}>No questions found</div>
-                <div style={{fontSize:'0.85rem',marginTop:4}}>Try different filters or add a new question</div>
-              </div>
-            )}
           </div>
         )}
       </div>

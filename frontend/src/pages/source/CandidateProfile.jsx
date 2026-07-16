@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { sourceApi, verifyApi } from '../../api';
-import { ArrowLeft, MapPin, Clock, Star, AlertTriangle, ExternalLink, Calendar, X, FileText, Download, CheckCircle2, Info } from 'lucide-react';
+import { ArrowLeft, MapPin, Clock, Star, AlertTriangle, ExternalLink, Calendar, X, FileText, Download, CheckCircle2, Info, Mail } from 'lucide-react';
 import toast from 'react-hot-toast';
+import DocxViewer from '../../components/DocxViewer';
 
 const LEVEL_COLOR = { beginner: 'badge-muted', intermediate: 'badge-info', advanced: 'badge-primary', expert: 'badge-success' };
 const FLAGGED_COPY = [
@@ -108,10 +109,13 @@ export default function CandidateProfile() {
   const [errorDetail, setErrorDetail] = useState(null);
   const [showInvite, setShowInvite] = useState(false);
   const [inviteForm, setInviteForm] = useState({ job_role_id: '', deadline: '' });
+  const [showInviteEditor, setShowInviteEditor] = useState(false);
+  const [draftInviteId, setDraftInviteId] = useState(null);
+  const [draftForm, setDraftForm] = useState(null);
   const [jobRoles, setJobRoles] = useState([]);
   const [inviting, setInviting] = useState(false);
   const [showConvert, setShowConvert] = useState(false);
-  const [convertForm, setConvertForm] = useState({ salary: '', role_title: '', department: '', location: 'Office', start_date: '', recipient_email: '' });
+  const [convertForm, setConvertForm] = useState({ salary: '', role_title: '', department: '', location: 'Office', start_date: '', deadline: '', recipient_email: '' });
   const [converting, setConverting] = useState(false);
   const [reverting, setReverting] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -127,23 +131,59 @@ export default function CandidateProfile() {
     setShowInvite(true);
   };
 
-  const handleInvite = async (e) => {
+    const handleInvite = async (e) => {
     e.preventDefault();
     if (!inviteForm.job_role_id) return toast.error('Please select a job role');
     if (!inviteForm.email) return toast.error('Please provide an email address');
     setInviting(true);
     try {
-      await sourceApi.sendInvite({ 
+      const res = await sourceApi.sendInvite({ 
         candidate_ids: [parseInt(id)], 
         job_role_id: parseInt(inviteForm.job_role_id), 
         deadline: inviteForm.deadline || undefined,
         email_addresses: [inviteForm.email]
       });
-      toast.success('Assessment Invite sent! ✉️', { duration: 4000 });
+      
+      let invId = res.data?.data?.invite_id;
+      if (!invId) {
+        const fetchRes = await sourceApi.getCandidateInvite(id);
+        invId = fetchRes.data.data.id;
+        setDraftForm(fetchRes.data.data.invite_content);
+      } else {
+        const fetchRes = await sourceApi.getCandidateInvite(id);
+        setDraftForm(fetchRes.data.data.invite_content);
+      }
+      setDraftInviteId(invId);
       setShowInvite(false);
-      setData(prev => ({ ...prev, status: 'invited' }));
+      setShowInviteEditor(true);
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to send invite');
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const handleUpdateDraft = async () => {
+    try {
+      await sourceApi.updateInvite(draftInviteId, draftForm);
+      toast.success('Draft saved successfully!');
+      setShowInviteEditor(false);
+      setData(prev => ({ ...prev, status: 'invited' }));
+    } catch (err) {
+      toast.error('Failed to save draft');
+    }
+  };
+
+  const handleDispatchDraft = async () => {
+    setInviting(true);
+    try {
+      await sourceApi.updateInvite(draftInviteId, draftForm);
+      await sourceApi.dispatchInvite(draftInviteId);
+      toast.success('Assessment Invite sent to candidate! 📩');
+      setShowInviteEditor(false);
+      setData(prev => ({ ...prev, status: 'invited' }));
+    } catch (err) {
+      toast.error('Failed to dispatch invitation');
     } finally {
       setInviting(false);
     }
@@ -215,6 +255,49 @@ export default function CandidateProfile() {
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to send offer');
     } finally {
+      setConverting(false);
+    }
+  };
+
+  const handleRevokeOffer = async (offerId) => {
+    if (!window.confirm('Are you sure you want to revoke this offer? Candidate will be blocked from accessing the platform.')) return;
+    setConverting(true);
+    try {
+      await sourceApi.revokeOffer(offerId);
+      toast.success('Offer successfully revoked. 🚫');
+      const r = await sourceApi.getCandidate(id);
+      setData(r.data.data);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to revoke offer');
+    } finally {
+      setConverting(false);
+    }
+  };
+
+  const handleAcceptOffer = async (offerId) => {
+    if (!window.confirm('Are you sure you want to mark this offer as accepted? This will automatically convert the candidate to an Employee.')) return;
+    setConverting(true);
+    try {
+      await sourceApi.acceptOffer(offerId);
+      toast.success('Offer accepted! Candidate is now an Employee. 🎉');
+      const r = await sourceApi.getCandidate(id);
+      setData(r.data.data);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to accept offer');
+    } finally {
+      setConverting(false);
+    }
+  };
+
+  const handleDeleteCandidate = async () => {
+    if (!window.confirm('Are you sure you want to completely delete this resume and candidate record? This action cannot be undone.')) return;
+    setConverting(true); // Re-use converting state for disabled state
+    try {
+      await sourceApi.deleteCandidate(id);
+      toast.success('Resume deleted successfully. 🗑️');
+      navigate('/source'); // Go back to dashboard
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to delete resume');
       setConverting(false);
     }
   };
@@ -318,8 +401,9 @@ export default function CandidateProfile() {
           <div>
             <h1 style={{ marginBottom: 4 }}>{data.user?.full_name || 'Unknown'} <span style={{ fontWeight: 400, fontSize: '1rem', opacity: 0.7 }}>({data.type || 'Candidate'})</span></h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-              {data.location && <span><MapPin size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> {data.location}</span>}
-              {data.exp_years > 0 && <span><Clock size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> {data.exp_years} years exp</span>}
+              {data.user?.email && <span><Mail size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} /> {data.user.email}</span>}
+              {data.location && <span><MapPin size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} /> {data.location}</span>}
+              {data.exp_years > 0 && <span><Clock size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} /> {data.exp_years} years exp</span>}
               <span className={`badge badge-${(data.status || 'active') === 'active' ? 'success' : 'muted'}`}>{data.status || 'active'}</span>
             </div>
           </div>
@@ -573,16 +657,21 @@ export default function CandidateProfile() {
                     <FileText size={14} /> View Resume
                   </button>
                 )}
-                {data.status !== 'archived' ? (
+                {data.status !== 'archived' || data.latest_offer?.status === 'revoked' ? (
                   <>
                     {data.latest_offer && (
                       <div className="card" style={{ padding: 12, marginBottom: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                           <span style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>OFFER STATUS</span>
-                          <span className={`badge badge-${data.latest_offer.status === 'approved' ? 'success' : data.latest_offer.status === 'pending' ? 'info' : data.latest_offer.status === 'changes_requested' ? 'warning' : 'muted'}`}>
+                          <span className={`badge badge-${data.latest_offer.status === 'approved' ? 'success' : data.latest_offer.status === 'pending' ? 'info' : data.latest_offer.status === 'changes_requested' ? 'warning' : data.latest_offer.status === 'revoked' ? 'danger' : data.latest_offer.status === 'accepted' ? 'primary' : 'muted'}`}>
                             {(data.latest_offer.status || '').replace('_', ' ').toUpperCase() || 'UNKNOWN'}
                           </span>
                         </div>
+                        {data.latest_offer.deadline && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 12 }}>
+                            <strong>Deadline:</strong> {new Date(data.latest_offer.deadline).toLocaleString()}
+                          </div>
+                        )}
                         
                         {data.latest_offer.feedback && (
                           <div style={{ fontSize: '0.8rem', color: '#92400e', background: '#fffbeb', padding: 8, borderRadius: 6, marginBottom: 10 }}>
@@ -604,7 +693,8 @@ export default function CandidateProfile() {
                               department: data.latest_offer.department,
                               location: data.latest_offer.location || 'Office',
                               start_date: data.latest_offer.start_date ? data.latest_offer.start_date.split('T')[0] : '',
-                              recipient_email: data.user?.email || ''
+                              recipient_email: data.user?.email || '',
+                              deadline: data.latest_offer.deadline ? data.latest_offer.deadline.split('T')[0] : ''
                             });
                             let content = data.latest_offer.offer_content;
                             if (typeof content === 'string') {
@@ -615,6 +705,33 @@ export default function CandidateProfile() {
                           }} className="btn btn-secondary btn-block">
                             {data.latest_offer.status === 'changes_requested' ? 'Edit & Resubmit Offer' : 'Review/Edit Offer'}
                           </button>
+                        )}
+
+                        {data.latest_offer.status === 'sent' && (
+                          <button onClick={() => handleAcceptOffer(data.latest_offer.id)} className="btn btn-primary btn-block" style={{ marginTop: 8 }} disabled={converting}>
+                            {converting ? 'Processing...' : 'Mark Offer Accepted (Hire)'}
+                          </button>
+                        )}
+
+                        {['pending', 'changes_requested', 'sent', 'approved'].includes(data.latest_offer.status) && (
+                          <button onClick={() => handleRevokeOffer(data.latest_offer.id)} className="btn btn-block" style={{ marginTop: 8, background: 'var(--danger-lightest)', color: 'var(--danger)', borderColor: 'var(--danger-lighter)' }} disabled={converting}>
+                            {converting ? 'Processing...' : 'Revoke Offer'}
+                          </button>
+                        )}
+                        
+                        {data.latest_offer.status === 'revoked' && (
+                          <div style={{ marginTop: 12, padding: 12, border: '1px solid var(--border-light)', borderRadius: 8, background: '#fdfdfd' }}>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 8, marginTop: 0 }}>This offer was revoked. You can create a new offer, invite them to another assessment, or delete their record entirely.</p>
+                            <button onClick={() => setShowConvert(true)} className="btn btn-primary btn-block" style={{ marginBottom: 6 }}>
+                              Create New Offer
+                            </button>
+                            <button onClick={openInviteModal} className="btn btn-secondary btn-block" style={{ marginBottom: 6 }}>
+                              Send New Assessment Invite
+                            </button>
+                            <button onClick={handleDeleteCandidate} className="btn btn-ghost btn-block" style={{ color: 'var(--danger)' }} disabled={converting}>
+                              Delete Resume Record
+                            </button>
+                          </div>
                         )}
                       </div>
                     )}
@@ -627,6 +744,11 @@ export default function CandidateProfile() {
                         <button onClick={() => setShowConvert(true)} className="btn btn-shimmer btn-block" style={{ marginTop: 12, background: 'linear-gradient(135deg, #10B981, #059669)', border: 'none' }}>
                           Convert to Employee
                         </button>
+                        {data.status === 'archived' && (
+                          <button onClick={handleDeleteCandidate} className="btn btn-ghost btn-block" style={{ color: 'var(--danger)', marginTop: 12 }} disabled={converting}>
+                            Delete Resume Record
+                          </button>
+                        )}
                       </>
                     )}
                   </>
@@ -688,6 +810,48 @@ export default function CandidateProfile() {
         </div>
       )}
 
+      {/* Invite Editor Modal */}
+      {showInviteEditor && draftForm && (
+        <div className="modal-overlay" onClick={() => setShowInviteEditor(false)}>
+          <div className="modal" style={{ maxWidth: 600, width: '90%' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h4>Edit Assessment Invite</h4>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowInviteEditor(false)}><X size={16} /></button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                Review and customize the AI-generated invite for <strong>{data.user?.full_name}</strong>.
+              </p>
+              <div className="form-group">
+                <label className="form-label">Subject</label>
+                <input 
+                  className="form-control" 
+                  value={draftForm?.subject || ''} 
+                  onChange={(e) => setDraftForm({ ...draftForm, subject: e.target.value })}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Message Body</label>
+                <textarea 
+                  className="form-control" 
+                  rows={10}
+                  value={(draftForm?.body_paragraphs || []).join('\n\n')}
+                  onChange={(e) => setDraftForm({ ...draftForm, body_paragraphs: e.target.value.split('\n\n') })}
+                  style={{ fontSize: '0.85rem', lineHeight: 1.6 }}
+                />
+              </div>
+            </div>
+            <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: 12 }}>
+              <button className="btn btn-ghost" onClick={() => setShowInviteEditor(false)}>Cancel</button>
+              <button className="btn btn-secondary" onClick={handleUpdateDraft}>Save Draft</button>
+              <button className="btn btn-primary" onClick={handleDispatchDraft} disabled={inviting}>
+                {inviting ? 'Sending...' : 'Approve & Send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Convert Modal */}
       {showConvert && (
         <div className="modal-overlay" onClick={() => setShowConvert(false)}>
@@ -720,9 +884,13 @@ export default function CandidateProfile() {
                     <label className="form-label">Salary / CTC *</label>
                     <input required className="form-control" placeholder="e.g. $80k or ₹12LPA" value={convertForm.salary} onChange={e => setConvertForm(f => ({...f, salary: e.target.value}))} />
                   </div>
-                  <div className="form-group">
+                  <div>
                     <label className="form-label">Location</label>
-                    <input className="form-control" value={convertForm.location} onChange={e => setConvertForm(f => ({...f, location: e.target.value}))} />
+                    <input type="text" className="form-control" value={convertForm.location} onChange={e => setConvertForm({ ...convertForm, location: e.target.value })} required />
+                  </div>
+                  <div>
+                    <label className="form-label">Offer Deadline (Optional)</label>
+                    <input type="date" className="form-control" value={convertForm.deadline} onChange={e => setConvertForm({ ...convertForm, deadline: e.target.value })} />
                   </div>
                 </div>
                 <div className="form-group">
@@ -830,12 +998,22 @@ export default function CandidateProfile() {
               </button>
             </div>
           </div>
-          <div style={{ flex: 1, padding: 16 }} onClick={e => e.stopPropagation()}>
-            <iframe
-              src={data.resume_url}
-              title="Resume Viewer"
-              style={{ width: '100%', height: '100%', border: 'none', borderRadius: 8, background: 'white' }}
-            />
+          <div style={{ flex: 1, padding: 16, overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+            {data.resume_url ? (
+              data.resume_url.toLowerCase().includes('.pdf') ? (
+                <iframe
+                  src={data.resume_url}
+                  title="Resume Viewer"
+                  style={{ width: '100%', height: '100%', border: 'none', borderRadius: 8, background: 'white' }}
+                />
+              ) : (
+                <DocxViewer url={data.resume_url} />
+              )
+            ) : (
+              <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+                No resume available
+              </div>
+            )}
           </div>
         </div>
       )}

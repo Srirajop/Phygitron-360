@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { verifyApi, adminApi } from '../../api';
-import { BarChart2, PlusCircle, Send, Eye, Calendar, Trash2, Play, Pause } from 'lucide-react';
+import { BarChart2, PlusCircle, Send, Calendar, Trash2, Play, Pause, LayoutGrid, List } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
 
@@ -19,6 +19,7 @@ export default function ManageAssessments() {
   const canViewAnalytics = ['super_admin', 'org_admin', 'hr', 'manager'].includes(user?.role);
   const [assessments, setAssessments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState('list');
 
   // Assignment Modal State
   const [candidates, setCandidates] = useState([]);
@@ -133,65 +134,113 @@ export default function ManageAssessments() {
     }
   };
 
+  const renderAssessmentActions = (a) => (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      {canCreateOrAssign && a.status === 'draft' && (
+        <button className="btn btn-secondary btn-sm" onClick={() => publish(a.id)}>Publish</button>
+      )}
+      {canCreateOrAssign && a.status === 'active' && (
+        <>
+          <button className="btn btn-shimmer btn-sm" onClick={() => openAssignModal(a.id)} title="Assign">
+            <Send size={14} /> Assign
+          </button>
+          <button className="btn btn-ghost btn-sm text-warning" onClick={() => toggleStatus(a.id, a.status)} title="Deactivate">
+            <Pause size={14} />
+          </button>
+        </>
+      )}
+      {canCreateOrAssign && a.status === 'inactive' && (
+        <button className="btn btn-ghost btn-sm text-success" onClick={() => toggleStatus(a.id, a.status)} title="Activate">
+          <Play size={14} />
+        </button>
+      )}
+      {canCreateOrAssign && (
+        <button className="btn btn-ghost btn-sm text-danger" onClick={() => deleteAssessment(a.id)} title="Delete">
+          <Trash2 size={14} />
+        </button>
+      )}
+      {canViewAnalytics && (
+        <Link to={`/verify/analytics/${a.id}`} className="btn btn-ghost btn-sm" title="Analytics"><BarChart2 size={14} /></Link>
+      )}
+    </div>
+  );
+
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
         <div><h1>Manage Assessments</h1><p>Create, publish, and monitor assessments</p></div>
-        {canCreateOrAssign && <Link to="/verify/build" className="btn btn-shimmer"><PlusCircle size={16} /> Create Assessment</Link>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="card" style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 10 }}>
+            <button className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '6px 10px' }} onClick={() => setViewMode('list')} title="List view"><List size={16} /></button>
+            <button className={`btn btn-sm ${viewMode === 'grid' ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '6px 10px' }} onClick={() => setViewMode('grid')} title="Card view"><LayoutGrid size={16} /></button>
+          </div>
+          {canCreateOrAssign && <Link to="/verify/build" className="btn btn-shimmer"><PlusCircle size={16} /> Create Assessment</Link>}
+        </div>
       </div>
       <div className="page-body">
-        <div className="card animate-fade-in">
-          <div className="table-container">
-            <table>
-              <thead><tr><th>Title</th><th>Type</th><th>Time</th><th>Pass</th><th>Status</th><th>Actions</th></tr></thead>
-              <tbody>
-                {loading ? <tr><td colSpan={6} style={{ textAlign: 'center', padding: 32 }}><div className="spinner" style={{ margin: '0 auto' }} /></td></tr>
-                  : assessments.length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)' }}>No assessments yet. <Link to="/verify/build">Create one →</Link></td></tr>
-                  : assessments.map((a, i) => (
+        {loading ? (
+          <div className="card animate-fade-in" style={{ padding: 48, textAlign: 'center' }}>
+            <div className="spinner" style={{ margin: '0 auto' }} />
+          </div>
+        ) : assessments.length === 0 ? (
+          <div className="card animate-fade-in" style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>
+            No assessments yet. <Link to="/verify/build">Create one</Link>
+          </div>
+        ) : viewMode === 'list' ? (
+          <div className="card animate-fade-in">
+            <div className="table-container">
+              <table>
+                <thead><tr><th>Title</th><th>Type</th><th>Time</th><th>Pass</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {assessments.map((a, i) => (
                     <tr key={a.id} className={`animate-fade-in stagger-${Math.min(i+1,5)}`}>
                       <td style={{ fontWeight: 600 }}>{a.title}</td>
                       <td><span className="badge badge-muted">{a.type}</span></td>
-                      <td>{a.time_limit_minutes ? `${a.time_limit_minutes} min` : '—'}</td>
+                      <td>{a.time_limit_minutes ? `${a.time_limit_minutes} min` : '-'}</td>
                       <td>{a.pass_score}%</td>
                       <td><span className={`badge ${STATUS_BADGE[a.status] || 'badge-muted'}`}>{a.status}</span></td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          {canCreateOrAssign && a.status === 'draft' && (
-                            <button className="btn btn-secondary btn-sm" onClick={() => publish(a.id)}>Publish</button>
-                          )}
-                          {canCreateOrAssign && a.status === 'active' && (
-                            <>
-                              <button className="btn btn-shimmer btn-sm" onClick={() => openAssignModal(a.id)} title="Assign">
-                                <Send size={14} /> Assign
-                              </button>
-                              <button className="btn btn-ghost btn-sm text-warning" onClick={() => toggleStatus(a.id, a.status)} title="Deactivate">
-                                <Pause size={14} />
-                              </button>
-                            </>
-                          )}
-                          {canCreateOrAssign && a.status === 'inactive' && (
-                            <button className="btn btn-ghost btn-sm text-success" onClick={() => toggleStatus(a.id, a.status)} title="Activate">
-                              <Play size={14} />
-                            </button>
-                          )}
-                          {canCreateOrAssign && (
-                            <button className="btn btn-ghost btn-sm text-danger" onClick={() => deleteAssessment(a.id)} title="Delete">
-                              <Trash2 size={14} />
-                            </button>
-                          )}
-                          {canViewAnalytics && (
-                            <Link to={`/verify/analytics/${a.id}`} className="btn btn-ghost btn-sm" title="Analytics"><BarChart2 size={14} /></Link>
-                          )}
-                        </div>
-                      </td>
+                      <td>{renderAssessmentActions(a)}</td>
                     </tr>
                   ))}
-              </tbody>
-            </table>
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
+            {assessments.map((a, i) => (
+              <div key={a.id} className={`card animate-fade-in stagger-${Math.min(i+1,5)}`} style={{ border: '1px solid var(--border)' }}>
+                <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 16, minHeight: 210 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <h3 style={{ margin: 0, fontSize: '1rem', lineHeight: 1.35, wordBreak: 'break-word' }}>{a.title}</h3>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                        <span className="badge badge-muted">{a.type}</span>
+                        <span className={`badge ${STATUS_BADGE[a.status] || 'badge-muted'}`}>{a.status}</span>
+                      </div>
+                    </div>
+                  </div>
 
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
+                    <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-hover)' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Time</div>
+                      <div style={{ fontWeight: 800, marginTop: 4 }}>{a.time_limit_minutes ? `${a.time_limit_minutes} min` : '-'}</div>
+                    </div>
+                    <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-hover)' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Pass</div>
+                      <div style={{ fontWeight: 800, marginTop: 4 }}>{a.pass_score}%</div>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
+                    {renderAssessmentActions(a)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       {assignModal.open && (
         <div className="modal-overlay">
           <div className="modal card animate-scale-in">

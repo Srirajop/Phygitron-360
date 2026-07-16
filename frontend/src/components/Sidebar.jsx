@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   Users, Upload, CheckSquare, BookOpen, Briefcase, Settings,
   LogOut, BarChart2, PlusCircle, FileText, Award, Map, Target,
-  Layers, UserCheck, Home, Cpu, Milestone, Clock, Shield
+  Layers, UserCheck, Home, Cpu, Milestone, Clock, Shield, Folder, Database
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -20,11 +20,15 @@ const roleNavItems = {
     { section: 'Source', module: 'source', items: [
       { to: '/source/upload', label: 'Upload Resumes', icon: Upload },
       { to: '/source', label: 'Talent Vault', icon: Users },
-      { to: '/source/active', label: 'Active Candidates', icon: UserCheck },
+      { to: '/source/repo', label: 'Resume Repo', icon: Folder },
+      { to: '/source/roles', label: 'Job Roles', icon: Briefcase },
+      { to: '/source/active', label: 'Trainee Dashboard', icon: UserCheck },
       { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
     ]},
     { section: 'Verify', module: 'verify', items: [
-      { to: '/verify/manage', label: 'Assessments', icon: CheckSquare },
+      { to: '/verify/build', label: 'Assessment Builder', icon: PlusCircle },
+      { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
+      { to: '/verify/bank', label: 'Question Bank', icon: Database },
     ]},
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'Directory', icon: Briefcase },
@@ -43,11 +47,15 @@ const roleNavItems = {
     { section: 'Source', module: 'source', items: [
       { to: '/source/upload', label: 'Upload Resumes', icon: Upload },
       { to: '/source', label: 'Talent Vault', icon: Users },
-      { to: '/source/active', label: 'Active Candidates', icon: UserCheck },
+      { to: '/source/repo', label: 'Resume Repo', icon: Folder },
+      { to: '/source/roles', label: 'Job Roles', icon: Briefcase },
+      { to: '/source/active', label: 'Trainee Dashboard', icon: UserCheck },
       { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
     ]},
     { section: 'Verify', module: 'verify', items: [
-      { to: '/verify/manage', label: 'Assessments', icon: CheckSquare },
+      { to: '/verify/build', label: 'Assessment Builder', icon: PlusCircle },
+      { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
+      { to: '/verify/bank', label: 'Question Bank', icon: Database },
     ]},
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'Directory', icon: Briefcase },
@@ -90,11 +98,13 @@ const roleNavItems = {
   manager: [
     { section: 'Source', module: 'source', items: [
       { to: '/source', label: 'Talent Vault', icon: Users },
-      { to: '/source/active', label: 'Active Candidates', icon: UserCheck },
+      { to: '/source/repo', label: 'Resume Repo', icon: Folder },
+      { to: '/source/roles', label: 'Job Roles', icon: Briefcase },
+      { to: '/source/active', label: 'Trainee Dashboard', icon: UserCheck },
       { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
     ]},
     { section: 'Verify', module: 'verify', items: [
-      { to: '/verify/manage', label: 'Assessments', icon: CheckSquare },
+      { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
     ]},
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'My Team', icon: Users },
@@ -108,6 +118,11 @@ const roleNavItems = {
     ]},
   ],
   instructor: [
+    { section: 'Verify', module: 'verify', items: [
+      { to: '/verify/build', label: 'Assessment Builder', icon: PlusCircle },
+      { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
+      { to: '/verify/bank', label: 'Question Bank', icon: Database },
+    ]},
     { section: 'Learning', module: 'forge', items: [
       { to: '/forge', label: 'Dashboard', icon: BookOpen },
       { to: '/forge/library', label: 'Learning Paths', icon: Layers },

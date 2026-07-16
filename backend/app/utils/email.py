@@ -2,6 +2,8 @@ import os
 from typing import Optional
 from jinja2 import Environment, BaseLoader
 from app.config import settings
+import smtplib
+from email.message import EmailMessage
 
 try:
     import sendgrid
@@ -23,35 +25,29 @@ body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
 .header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
 .header p{color:rgba(255,255,255,0.8);margin:8px 0 0}
 .body{padding:32px}
-.body h2{color:#1e1b4b;font-size:22px}
 .body p{color:#4b5563;line-height:1.6}
-.creds{background:#f8f5ff;border:1px solid #e9d5ff;border-radius:12px;padding:20px;margin:24px 0}
-.creds p{margin:6px 0;color:#374151}
-.creds strong{color:#7C3AED}
-.btn{display:inline-block;background:linear-gradient(135deg,#7C3AED,#6B21A8);color:#fff;text-decoration:none;padding:14px 32px;border-radius:10px;font-weight:600;font-size:16px;margin:24px 0}
 .footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
 </style></head>
 <body>
 <div class="container">
   <div class="header">
-    <h1>🎯 PHYGITRON 360</h1>
-    <p>AI-Powered Talent Lifecycle Platform</p>
+    <h1>🎯 EWANDZ</h1>
+    <p>Talent Acquisition</p>
   </div>
   <div class="body">
-    <h2>You've been invited! 🚀</h2>
-    <p>Hi <strong>{{ candidate_name }}</strong>,</p>
-    <p>You have been invited to complete an assessment for the <strong>{{ role_name }}</strong> position at <strong>{{ company_name }}</strong>.</p>
-    <div class="creds">
-      <p><strong>Platform URL:</strong> {{ platform_url }}</p>
-      <p><strong>Username (Email):</strong> {{ email }}</p>
-      <p><strong>Temporary Password:</strong> {{ temp_password }}</p>
-      <p><strong>Assessment Deadline:</strong> {{ deadline }}</p>
+    <p>Hello <strong>{{ candidate_name }}</strong>,</p>
+    {{ custom_body_html }}
+    <div style="background:#f3f4f6;padding:16px;border-radius:8px;margin-top:24px;margin-bottom:24px;">
+      <p style="margin:0 0 8px 0;font-weight:600">Your Secure Login Credentials</p>
+      <p style="margin:0 0 4px 0"><strong>Portal Link:</strong> <a href="{{ platform_url }}/login?email={{ email }}" style="color:#7C3AED;">{{ platform_url }}/login</a></p>
+      <p style="margin:0 0 4px 0"><strong>Username:</strong> {{ email }}</p>
+      <p style="margin:0"><strong>Temporary Password:</strong> {{ temp_password }}</p>
     </div>
-    <p>Please log in and change your password immediately. Then complete your assigned assessments before the deadline.</p>
-    <a href="{{ platform_url }}/login?email={{ email }}" class="btn">Login Now →</a>
-    <p style="color:#9ca3af;font-size:13px">If you did not expect this email, you can safely ignore it.</p>
+    <p>For any queries, please feel free to reach out to the HR Team.</p>
+    <br/>
+    <p>Regards,<br/>EWANDZ Talent Acquisition Team</p>
   </div>
-  <div class="footer">© 2025 PHYGITRON 360 · Powered by EwandZDigital</div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
 </div>
 </body></html>
 """
@@ -80,7 +76,7 @@ body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
     <p>Required: {{ pass_score }}% &nbsp;·&nbsp; Your score: {{ score }}%</p>
     <a href="{{ platform_url }}/verify/result/{{ result_id }}" class="btn">View Full Feedback →</a>
   </div>
-  <div class="footer">© 2025 PHYGITRON 360 · Powered by EwandZDigital</div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
 </div>
 </body></html>
 """
@@ -107,7 +103,7 @@ body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
     <p>You have successfully completed <strong>{{ course_title }}</strong>.</p>
     <a href="{{ certificate_url }}" class="btn">Download Certificate →</a>
   </div>
-  <div class="footer">© 2025 PHYGITRON 360 · Powered by EwandZDigital</div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
 </div>
 </body></html>
 """
@@ -120,30 +116,26 @@ body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
 .container{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(124,58,237,0.1)}
 .header{background:linear-gradient(135deg,#10B981,#059669);padding:40px 32px;text-align:center}
 .header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
-.body{padding:32px;}
-.body h2{color:#1e1b4b;font-size:22px;margin-bottom:24px}
-.item{padding:16px;background:#f8f5ff;border-radius:8px;margin-bottom:12px;border-left:4px solid #10B981;}
-.btn{display:inline-block;background:linear-gradient(135deg,#10B981,#059669);color:#fff;text-decoration:none;padding:14px 32px;border-radius:10px;font-weight:600;font-size:16px;margin:24px 0}
+.body{padding:32px}
+.body p{color:#4b5563;line-height:1.6}
 .footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
 </style></head>
 <body>
 <div class="container">
-  <div class="header"><h1>🎉 Congratulations!</h1></div>
-  <div class="body">
-    <h2>Welcome to {{ company_name }}, {{ candidate_name }}!</h2>
-    <p>We are thrilled to offer you the position of <strong>{{ role_title }}</strong>.</p>
-    
-    <div class="item">
-      <strong>Role:</strong> {{ role_title }}<br/>
-      <strong>Department:</strong> {{ department }}<br/>
-      <strong>Location:</strong> {{ location }}<br/>
-      <strong>Compensation:</strong> {{ salary }}
-    </div>
-    
-    <p>We were incredibly impressed by your background and performance during the assessment phase. We believe you will be a fantastic addition to our team.</p>
-    <a href="{{ platform_url }}/onboarding/setup?token={{ token }}" class="btn">Start Your Onboarding →</a>
+  <div class="header">
+    <h1>🎉 Offer Letter</h1>
   </div>
-  <div class="footer">© 2025 PHYGITRON 360 · Powered by EwandZDigital</div>
+  <div class="body">
+    <p>Dear <strong>{{ candidate_name }}</strong>,</p>
+    <p>Congratulations! We are pleased to extend an offer for the position of <strong>{{ role_title }}</strong>.</p>
+    <p>Please find your offer letter attached for review.</p>
+    <p>Joining Date: {{ start_date }}<br/>
+    Location: {{ location }}</p>
+    <p>We look forward to welcoming you to the team.</p>
+    <br/>
+    <p>Regards,<br/>HR Team</p>
+  </div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
 </div>
 </body></html>
 """
@@ -171,7 +163,7 @@ body{font-family:Inter,Arial,sans-serif;background:#fff1f2;margin:0;padding:0}
     </div>
     <p style="text-align:center;"><a href="{{ action_url }}" style="color:#e11d48;font-weight:700;">View in Dashboard →</a></p>
   </div>
-  <div class="footer">Phygitron 360 Enterprise HRMS Alerting System</div>
+  <div class="footer">EWANDZ HRMS Alerting System</div>
 </div>
 </body></html>
 """
@@ -185,30 +177,32 @@ body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
 .header{background:linear-gradient(135deg,#7C3AED,#6B21A8);padding:40px 32px;text-align:center}
 .header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
 .body{padding:32px}
-.body h2{color:#1e1b4b;font-size:20px}
-.detail-box{background:#f8f5ff;border:1px solid #e9d5ff;border-radius:12px;padding:20px;margin:24px 0}
-.btn{display:inline-block;background:linear-gradient(135deg,#7C3AED,#6B21A8);color:#fff;text-decoration:none;padding:14px 32px;border-radius:10px;font-weight:600;font-size:16px;margin:24px 0}
+.body h3{color:#1e1b4b;font-size:18px}
+.body p{color:#4b5563;line-height:1.6}
 .footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
 </style></head>
 <body>
 <div class="container">
-  <div class="header"><h1>New Assessment Assigned! 🎯</h1></div>
-  <div class="body">
-    <h2>Hi {{ candidate_name }},</h2>
-    <p>A new professional assessment has been curated specifically for your profile. Please review the details below:</p>
-    <div class="detail-box">
-      <p style="margin: 8px 0;"><strong>Assessment:</strong> {{ assessment_title }}</p>
-      {% if question_count %}<p style="margin: 8px 0;"><strong>Total Questions:</strong> {{ question_count }}</p>{% endif %}
-      {% if duration_mins %}<p style="margin: 8px 0;"><strong>Time Limit:</strong> {{ duration_mins }} minutes</p>{% endif %}
-      {% if pass_score %}<p style="margin: 8px 0;"><strong>Passing Score:</strong> {{ pass_score }}%</p>{% endif %}
-      <p style="margin: 8px 0;"><strong>Closing Date:</strong> {{ deadline or 'No deadline' }}</p>
-    </div>
-    <p>Please ensure you are in a quiet environment with a stable internet connection before starting.</p>
-    <div style="text-align: center;">
-      <a href="{{ platform_url }}/verify/dashboard" class="btn" style="color: #ffffff !important; text-decoration: none;">Launch Assessment →</a>
-    </div>
+  <div class="header">
+    <h1>📝 Assessment Assigned</h1>
   </div>
-  <div class="footer">© 2025 PHYGITRON 360 · Powered by EwandZDigital</div>
+  <div class="body">
+    <p>Hello <strong>{{ candidate_name }}</strong>,</p>
+    <p>Thank you for your interest in EWANDZ and for applying for the position of <strong>{{ role_name }}</strong>.</p>
+    <p>After reviewing your profile, we are pleased to move forward with your application. As the next step in our hiring process, you have been assigned an assessment to help us better understand your skills and experience.</p>
+    <h3>Assessment Details</h3>
+    <p>Assessment: {{ assessment_title }}<br/>
+    Duration: {{ duration_mins }} minutes<br/>
+    Deadline: {{ deadline or 'No deadline' }}</p>
+    <p><strong>Start Assessment:</strong><br/>
+    <a href="{{ platform_url }}/verify/dashboard">{{ platform_url }}/verify/dashboard</a></p>
+    <p>We recommend completing the assessment well before the deadline to avoid any last-minute issues.</p>
+    <p>We appreciate your time and effort and look forward to reviewing your submission.</p>
+    <p>We wish you the very best.</p>
+    <br/>
+    <p>Regards,<br/>Talent Acquisition Team</p>
+  </div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
 </div>
 </body></html>
 """
@@ -222,32 +216,117 @@ body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
 .header{background:linear-gradient(135deg,#7C3AED,#6B21A8);padding:40px 32px;text-align:center}
 .header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
 .body{padding:32px}
-.body h2{color:#1e1b4b;font-size:20px}
-.detail-box{background:#f8f5ff;border:1px solid #e9d5ff;border-radius:12px;padding:20px;margin:24px 0}
-.btn{display:inline-block;background:linear-gradient(135deg,#7C3AED,#6B21A8);color:#fff;text-decoration:none;padding:14px 32px;border-radius:10px;font-weight:600;font-size:16px;margin:24px 0}
+.body p{color:#4b5563;line-height:1.6}
 .footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
 </style></head>
 <body>
 <div class="container">
-  <div class="header"><h1>New Course Assigned! 🎓</h1></div>
-  <div class="body">
-    <h2>Hi {{ candidate_name }},</h2>
-    <p>A new learning course has been assigned to you to accelerate your skills. Please review the details below:</p>
-    <div class="detail-box">
-      <p style="margin: 8px 0;"><strong>Course:</strong> {{ course_title }}</p>
-      {% if difficulty %}<p style="margin: 8px 0;"><strong>Difficulty:</strong> {{ difficulty }}</p>{% endif %}
-      {% if estimated_hours %}<p style="margin: 8px 0;"><strong>Estimated Effort:</strong> {{ estimated_hours }} hours</p>{% endif %}
-      <p style="margin: 8px 0;"><strong>Complete By:</strong> {{ deadline or 'No deadline' }}</p>
-    </div>
-    <p>We hope this course helps you in your professional journey. You can access it anytime in your dashboard.</p>
-    <div style="text-align: center;">
-      <a href="{{ platform_url }}/forge" class="btn" style="color: #ffffff !important; text-decoration: none;">Start Learning →</a>
-    </div>
+  <div class="header">
+    <h1>🎓 Course Assigned</h1>
   </div>
-  <div class="footer">© 2025 PHYGITRON 360 · Powered by EwandZDigital</div>
+  <div class="body">
+    <p>Hello <strong>{{ candidate_name }}</strong>,</p>
+    <p>As part of our ongoing commitment to learning and professional development, the <strong>{{ course_title }}</strong> course has been assigned to you on Learning Central.</p>
+    <p>To access the course, please log in using the link below:<br/>
+    <a href="{{ platform_url }}/forge">{{ platform_url }}/forge</a></p>
+    <p>We encourage you to complete the course at your earliest convenience and strengthen your understanding of cybersecurity best practices.</p>
+    <p>Happy learning, and thank you for investing in your growth!</p>
+    <br/>
+    <p>Regards,<br/>HR Team<br/>EWANDZ</p>
+  </div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
 </div>
 </body></html>
 """
+
+FORGOT_PASSWORD_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
+.container{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(124,58,237,0.1)}
+.header{background:linear-gradient(135deg,#7C3AED,#6B21A8);padding:40px 32px;text-align:center}
+.header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
+.body{padding:32px}
+.body p{color:#4b5563;line-height:1.6}
+.footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
+</style></head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>🔑 Reset Password</h1>
+  </div>
+  <div class="body">
+    <p>Hello <strong>{{ user_name }}</strong>,</p>
+    <p>We received a request to reset your password.</p>
+    <p>Reset Password: <a href="{{ reset_link }}">{{ reset_link }}</a></p>
+    <p>If you did not initiate this request, please ignore this email.</p>
+    <br/>
+    <p>Regards,<br/>Support Team</p>
+  </div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
+</div>
+</body></html>
+"""
+
+PASSWORD_CHANGED_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
+.container{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(124,58,237,0.1)}
+.header{background:linear-gradient(135deg,#10B981,#059669);padding:40px 32px;text-align:center}
+.header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
+.body{padding:32px}
+.body p{color:#4b5563;line-height:1.6}
+.footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
+</style></head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>✔️ Password Changed</h1>
+  </div>
+  <div class="body">
+    <p>Hello <strong>{{ user_name }}</strong>,</p>
+    <p>This is a confirmation that your account password was successfully changed.</p>
+    <p>If you did not make this change, please contact HR Team immediately.</p>
+    <br/>
+    <p>Regards,<br/>Support Team</p>
+  </div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
+</div>
+</body></html>
+"""
+
+PROFILE_PASSWORD_UPDATED_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
+.container{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(124,58,237,0.1)}
+.header{background:linear-gradient(135deg,#10B981,#059669);padding:40px 32px;text-align:center}
+.header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
+.body{padding:32px}
+.body p{color:#4b5563;line-height:1.6}
+.footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
+</style></head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>✔️ Password Updated</h1>
+  </div>
+  <div class="body">
+    <p>Hello <strong>{{ user_name }}</strong>,</p>
+    <p>Your account password has been successfully updated through your profile settings.</p>
+    <p>No further action is required.</p>
+    <br/>
+    <p>Regards,<br/>Support Team</p>
+  </div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
+</div>
+</body></html>
+"""
+
 
 jinja_env = Environment(loader=BaseLoader())
 
@@ -257,9 +336,6 @@ def render_template(template_str: str, **kwargs) -> str:
     return tmpl.render(**kwargs)
 
 
-import smtplib
-from email.message import EmailMessage
-
 async def send_email(to_email: str, subject: str, html_content: str, attachment_bytes: Optional[bytes] = None, attachment_filename: str = "document.pdf"):
     """Send an email via Gmail SMTP using provided credentials."""
     smtp_email = "srirajpillai2104@gmail.com"
@@ -268,7 +344,7 @@ async def send_email(to_email: str, subject: str, html_content: str, attachment_
     try:
         msg = EmailMessage()
         msg['Subject'] = subject
-        msg['From'] = f"PHYGITRON 360 <{smtp_email}>"
+        msg['From'] = f"EWANDZ <{smtp_email}>"
         msg['To'] = to_email
         msg.set_content("Please enable HTML to view this email.")
         msg.add_alternative(html_content, subtype='html')
@@ -294,22 +370,19 @@ async def send_email(to_email: str, subject: str, html_content: str, attachment_
 async def send_invite_email(
     to_email: str,
     candidate_name: str,
-    role_name: str,
-    company_name: str,
+    subject: str,
+    custom_body_html: str,
     temp_password: str,
-    deadline: str,
 ):
     html = render_template(
         INVITE_TEMPLATE,
         candidate_name=candidate_name,
-        role_name=role_name,
-        company_name=company_name,
+        custom_body_html=custom_body_html,
         email=to_email,
         temp_password=temp_password,
-        deadline=deadline,
         platform_url=settings.FRONTEND_URL,
     )
-    await send_email(to_email, f"Invitation to complete an assessment for {role_name} at {company_name}", html)
+    await send_email(to_email, subject, html)
 
 
 async def send_result_email(
@@ -364,6 +437,8 @@ async def send_offer_letter_email(
     location: str = "Office",
     attachment_bytes: Optional[bytes] = None
 ):
+    # Added start_date mapping for jinja compatibility with old usage if needed
+    # But usually joining date is passed inside, I will map it as start_date="To be communicated" or via caller
     html = render_template(
         OFFER_LETTER_TEMPLATE,
         candidate_name=candidate_name,
@@ -372,9 +447,10 @@ async def send_offer_letter_email(
         department=department,
         salary=salary,
         location=location,
+        start_date="As per offer document",
         login_url=settings.FRONTEND_URL + "/login",
     )
-    subject = f"🎉 Job Offer: {role_title} at {company_name}"
+    subject = f"Offer Letter – {role_title}"
     await send_email(to_email, subject, html, attachment_bytes=attachment_bytes, attachment_filename="Offer_Letter.pdf")
 
 
@@ -386,6 +462,8 @@ async def send_assignment_notification_email(
     duration_mins: Optional[int] = None,
     question_count: Optional[int] = None,
     pass_score: Optional[float] = None,
+    # Incase it's required for signature matching, role_name might be needed
+    role_name: str = "your requested position"
 ):
     html = render_template(
         ASSIGN_TEMPLATE,
@@ -396,8 +474,11 @@ async def send_assignment_notification_email(
         question_count=question_count,
         pass_score=pass_score,
         platform_url=settings.FRONTEND_URL,
+        role_name=role_name
     )
-    await send_email(to_email, f"New Assessment Assigned: {assessment_title}", html)
+    await send_email(to_email, "Next Step in Your Application at EWANDZ – Assessment Assignment", html)
+
+
 async def send_hr_alert_email(
     to_email: str,
     event_title: str,
@@ -430,5 +511,67 @@ async def send_course_assignment_notification_email(
         estimated_hours=estimated_hours,
         platform_url=settings.FRONTEND_URL,
     )
-    await send_email(to_email, f"New Course Assigned: {course_title}", html)
+    await send_email(to_email, f"Course Assigned: {course_title}", html)
 
+
+async def send_forgot_password_email(to_email: str, user_name: str, reset_link: str):
+    html = render_template(
+        FORGOT_PASSWORD_TEMPLATE,
+        user_name=user_name,
+        reset_link=reset_link,
+    )
+    await send_email(to_email, "Reset Your Password", html)
+
+
+async def send_password_changed_email(to_email: str, user_name: str):
+    html = render_template(
+        PASSWORD_CHANGED_TEMPLATE,
+        user_name=user_name,
+    )
+    await send_email(to_email, "Password Successfully Changed", html)
+
+
+async def send_profile_password_updated_email(to_email: str, user_name: str):
+    html = render_template(
+        PROFILE_PASSWORD_UPDATED_TEMPLATE,
+        user_name=user_name,
+    )
+    await send_email(to_email, "Profile Password Updated", html)
+
+
+async def send_offer_reminder_email(
+    to_email: str,
+    candidate_name: str,
+    role_title: str,
+    company_name: str,
+    deadline: str,
+):
+    html = render_template(
+        OFFER_REMINDER_TEMPLATE,
+        candidate_name=candidate_name,
+        role_title=role_title,
+        company_name=company_name,
+        deadline=deadline,
+    )
+    await send_email(to_email, f"Action Required: Offer Deadline Approaching for {role_title}", html)
+
+
+async def send_invite_reminder_email(
+    to_email: str,
+    candidate_name: str,
+    role_title: str,
+    company_name: str,
+    deadline: str,
+    temp_password: str,
+):
+    html = render_template(
+        INVITE_REMINDER_TEMPLATE,
+        candidate_name=candidate_name,
+        role_title=role_title,
+        company_name=company_name,
+        deadline=deadline,
+        email=to_email,
+        temp_password=temp_password,
+        platform_url=settings.FRONTEND_URL,
+    )
+    await send_email(to_email, f"Reminder: Assessment Pending for {role_title}", html)
