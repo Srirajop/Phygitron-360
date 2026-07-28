@@ -2,8 +2,64 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { sourceApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
-import { Search, Filter, Upload, Users, Send, Star, Trash2, Layers, BarChart2, Zap, X, ChevronDown, ArrowUpDown, Edit, Folder, CalendarDays, ArrowLeft } from 'lucide-react';
+import { Search, Filter, Upload, Users, Send, Star, Trash2, Layers, BarChart2, Zap, X, ChevronDown, ArrowUpDown, Edit, Folder, CalendarDays, ArrowLeft, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+function MultiSelectDropdown({ label, options, selectedValues = [], onChange, placeholder = "Select..." }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef();
+  
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const toggle = (val) => {
+    if (selectedValues.includes(val)) onChange(selectedValues.filter(v => v !== val));
+    else onChange([...selectedValues, val]);
+  };
+
+  const display = selectedValues.length === 0 ? placeholder : selectedValues.length === 1 ? options.find(o => o.value === selectedValues[0])?.label : `${selectedValues.length} Selected`;
+
+  return (
+    <div ref={ref} style={{ position: 'relative', width: '100%', minWidth: 140 }}>
+      <label className="form-label">{label}</label>
+      <div 
+        className="form-control" 
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none', padding: '12px 18px', minHeight: 46 }}
+        onClick={() => setOpen(!open)}
+      >
+        <span style={{ fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{display}</span>
+        <ChevronDown size={14} style={{ opacity: 0.6, flexShrink: 0 }} />
+      </div>
+      {open && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, minWidth: '100%', marginTop: 4, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 0', zIndex: 50, maxHeight: 250, overflowY: 'auto', boxShadow: 'var(--shadow-lg)' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 4 }}>
+            <input 
+              type="checkbox" 
+              checked={selectedValues.length === 0}
+              onChange={() => { onChange([]); setOpen(false); }}
+            />
+            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>All</span>
+          </label>
+          {options.map(opt => (
+            <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', transition: 'background 0.2s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-card-hover)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+              <input 
+                type="checkbox" 
+                checked={selectedValues.includes(opt.value)}
+                onChange={() => toggle(opt.value)}
+              />
+              <span style={{ fontSize: '0.85rem' }}>{opt.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ── Score Badge ─────────────────────────────────────────────────────────── */
 function CircularScore({ score, title }) {
@@ -209,9 +265,8 @@ const DEFAULT_FILTERS = {
   search: '',
   location: '',
   exp_range: '',
-  upload_time: '',
-  upload_year: '',
-  upload_month: ''
+  upload_years: [],
+  upload_months: []
 };
 
 export default function SourceDashboard() {
@@ -294,13 +349,21 @@ export default function SourceDashboard() {
       if (!apiParams.search) delete apiParams.search;
       if (!apiParams.location) delete apiParams.location;
       if (!apiParams.exp_range) delete apiParams.exp_range;
-      if (!apiParams.upload_time) delete apiParams.upload_time;
       
       // Clean up frontend-only params
-      delete apiParams.upload_year;
-      delete apiParams.upload_month;
+      if (apiParams.upload_years && apiParams.upload_years.length > 0) {
+        apiParams.upload_years = apiParams.upload_years.join(',');
+      } else {
+        delete apiParams.upload_years;
+      }
       
-      // Prevent browser caching
+      if (apiParams.upload_months && apiParams.upload_months.length > 0) {
+        apiParams.upload_months = apiParams.upload_months.join(',');
+      } else {
+        delete apiParams.upload_months;
+      }
+      
+      if (!apiParams.search) delete apiParams.search;
       apiParams._t = Date.now();
 
       setLoading(true);
@@ -501,7 +564,7 @@ export default function SourceDashboard() {
         </div>
 
         {/* ── Filters ── */}
-        <div className="card animate-fade-in" style={{ marginBottom: 24 }}>
+        <div className="card animate-fade-in" style={{ marginBottom: 24, overflow: 'visible' }}>
           <div className="card-body" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div style={{ flex: 1, minWidth: 250 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -540,40 +603,25 @@ export default function SourceDashboard() {
                 <option value="5+">5+ Years</option>
               </select>
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={{ minWidth: 100 }}>
-                <label className="form-label">Upload Year</label>
-                <select className="form-control" value={filters.upload_year || ''} onChange={e => setFilters(f => {
-                  const y = e.target.value;
-                  let m = f.upload_month || '';
-                  if (y && parseInt(y) === new Date().getFullYear() && m && parseInt(m) > new Date().getMonth() + 1) {
-                    m = '';
-                  }
-                  return { ...f, upload_year: y, upload_month: m, upload_time: y ? (m ? `${y}-${m}` : y) : '' };
-                })}>
-                  <option value="">All Time</option>
-                  {Array.from({ length: new Date().getFullYear() - 2022 }, (_, i) => new Date().getFullYear() - i).map(y => (
-                    <option key={y} value={y}>{y}</option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ minWidth: 100 }}>
-                <label className="form-label">Upload Month</label>
-                <select className="form-control" disabled={!filters.upload_year} value={filters.upload_month || ''} onChange={e => setFilters(f => {
-                  const m = e.target.value;
-                  const y = f.upload_year || '';
-                  return { ...f, upload_month: m, upload_time: y ? (m ? `${y}-${m}` : y) : '' };
-                })}>
-                  <option value="">All Months</option>
-                  {Array.from({ length: 12 }, (_, i) => i + 1)
-                    .filter(m => !filters.upload_year || parseInt(filters.upload_year) < new Date().getFullYear() || m <= new Date().getMonth() + 1)
-                    .map(m => {
-                      const monthStr = m.toString().padStart(2, '0');
-                      const monthName = new Date(2000, m - 1).toLocaleString('default', { month: 'long' });
-                      return <option key={monthStr} value={monthStr}>{monthName}</option>;
-                  })}
-                </select>
-              </div>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <MultiSelectDropdown
+                label="Upload Year"
+                placeholder="All Years"
+                options={Array.from({ length: new Date().getFullYear() - 2022 }, (_, i) => new Date().getFullYear() - i).map(y => ({ label: y.toString(), value: y.toString() }))}
+                selectedValues={filters.upload_years}
+                onChange={(years) => setFilters(f => ({ ...f, upload_years: years }))}
+              />
+              <MultiSelectDropdown
+                label="Upload Month"
+                placeholder="All Months"
+                options={Array.from({ length: 12 }, (_, i) => i + 1).map(m => {
+                  const monthStr = m.toString().padStart(2, '0');
+                  const monthName = new Date(2000, m - 1).toLocaleString('default', { month: 'long' });
+                  return { label: monthName, value: monthStr };
+                })}
+                selectedValues={filters.upload_months}
+                onChange={(months) => setFilters(f => ({ ...f, upload_months: months }))}
+              />
             </div>
             <div style={{ minWidth: 140 }}>
               <label className="form-label">Location</label>

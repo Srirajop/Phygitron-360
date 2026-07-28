@@ -1175,7 +1175,8 @@ async def search_candidates(
     sort_by: str = "newest",
     limit: int = 20,
     lifecycle_phase: Optional[str] = "all",
-    upload_time: Optional[str] = None,
+    upload_years: Optional[str] = None,
+    upload_months: Optional[str] = None,
     current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1249,12 +1250,17 @@ async def search_candidates(
             if hasattr(model, 'location'):
                 q = q.where(model.location.ilike(f"%{location}%"))
         
-        if upload_time and hasattr(model, 'created_at'):
+        if upload_years and hasattr(model, 'created_at'):
             from sqlalchemy import extract
-            parts = upload_time.split('-')
-            q = q.where(extract('year', model.created_at) == int(parts[0]))
-            if len(parts) > 1:
-                q = q.where(extract('month', model.created_at) == int(parts[1]))
+            years = [int(y.strip()) for y in upload_years.split(',') if y.strip().isdigit()]
+            if years:
+                q = q.where(extract('year', model.created_at).in_(years))
+        
+        if upload_months and hasattr(model, 'created_at'):
+            from sqlalchemy import extract
+            months = [int(m.strip()) for m in upload_months.split(',') if m.strip().isdigit()]
+            if months:
+                q = q.where(extract('month', model.created_at).in_(months))
 
         if search:
             from sqlalchemy import exists

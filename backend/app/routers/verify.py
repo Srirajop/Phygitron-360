@@ -526,6 +526,7 @@ async def get_assessment(
             "terminated_by_proctor": assgn.terminated_by_proctor or False,
             "time_remaining_seconds": time_remaining_seconds,
             "session_already_started": session_already_started,
+            "proctoring_config": assgn.proctoring_config,
         }
         if is_candidate and assgn.custom_questions:
             # Strip correct_answer / model_answer from the stored custom question set
@@ -706,6 +707,7 @@ class AssignRequest(BaseModel):
     user_ids: List[int]
     deadline: Optional[str] = None
     question_ids: Optional[List[int]] = None  # Subset selection; None = all questions
+    proctoring_config: Optional[dict] = None
 
 async def generate_variants_bg(assessment_id: int, user_ids: list):
     from app.database import AsyncSessionLocal
@@ -851,6 +853,7 @@ async def assign_assessment(
             existing_assgn.deadline = deadline
             existing_assgn.assigned_by = current_user.id
             existing_assgn.custom_questions = custom_q
+            existing_assgn.proctoring_config = body.proctoring_config
             # CRITICAL: Reset proctoring state so the user isn't instantly blocked
             existing_assgn.strike_count = 0
             existing_assgn.terminated_by_proctor = False
@@ -864,6 +867,7 @@ async def assign_assessment(
                 deadline=deadline,
                 status=AssignmentStatus.pending,
                 custom_questions=custom_q,
+                proctoring_config=body.proctoring_config,
             )
             db.add(assgn)
             new_assignments.append(uid)
@@ -2554,7 +2558,7 @@ async def get_result(
     flags_res = await db.execute(
         select(ProctoringFlag).where(ProctoringFlag.assessment_result_id == result_id)
     )
-    flags = [{"type": f.flag_type, "details": f.details, "flagged_at": f.flagged_at.isoformat()} for f in flags_res.scalars()]
+    flags = [{"id": f.id, "type": f.flag_type, "details": f.details, "flagged_at": f.flagged_at.isoformat()} for f in flags_res.scalars()]
     appeal_res = await db.execute(
         select(AssessmentQuery).options(selectinload(AssessmentQuery.user))
         .where(AssessmentQuery.assessment_result_id == result_id)
@@ -2650,7 +2654,53 @@ async def submit_result_appeal(
 
     await db.commit()
     await db.refresh(appeal)
-    return success(serialize_assessment_query(appeal), "Your appeal has been submitted")
+
+    return success(data=serialize_assessment_query(appeal, user=current_user), message="Appeal submitted successfully")
+
+
+@router.delete("/result/{result_id}/flags/{flag_id}")
+async def delete_proctoring_flag(
+    result_id: int,
+    flag_id: int,
+    current_user: User = Depends(require_role(["super_admin", "org_admin", "hr"])),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(
+        select(ProctoringFlag)
+        .where(
+            ProctoringFlag.id == flag_id,
+            ProctoringFlag.assessment_result_id == result_id,
+        )
+    )
+    flag = res.scalar_one_or_none()
+    if not flag:
+        raise HTTPException(status_code=404, detail="Flag not found")
+        
+    db.delete(flag)
+    await db.commit()
+    return success(message="Screenshot deleted successfully")
+
+
+@router.delete("/result/{result_id}/screenshots")
+async def delete_all_screenshots(
+    result_id: int,
+    current_user: User = Depends(require_role(["super_admin", "org_admin", "hr"])),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(
+        select(ProctoringFlag)
+        .where(
+            ProctoringFlag.assessment_result_id == result_id,
+            ProctoringFlag.flag_type == "screenshot"
+        )
+    )
+    flags = res.scalars().all()
+    
+    for flag in flags:
+        db.delete(flag)
+        
+    await db.commit()
+    return success(data={"count": len(flags)}, message="All screenshots deleted successfully")
 
 
 @router.get("/assessments/{assessment_id}/queries")

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { verifyApi } from '../../api';
 import { Terminal, TerminalSquare, Play, Info, CheckCircle, Upload, ChevronLeft, ChevronRight, Send, AlertTriangle, Clock, Maximize, AlertOctagon, Lock } from 'lucide-react';
@@ -87,6 +87,11 @@ export default function AssessmentTaker() {
   const isAssessmentTestMode = searchParams.get('testMode') === '1' || localStorage.getItem('assessment_test_mode') === 'true';
 
   const [assessment, setAssessment] = useState(null);
+  const proctoringConfig = useMemo(() => {
+    return assessment?.proctoring_config || {
+      full_screen: true, tab_switch: true, multiple_people: true, face_not_visible: true, audio_detect: true
+    };
+  }, [assessment]);
   const [answers, setAnswers] = useState({});
   const [currentQ, setCurrentQ] = useState(0);
   const [timeLeft, setTimeLeft] = useState(null);
@@ -225,6 +230,7 @@ export default function AssessmentTaker() {
 
     return () => {
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      if (!proctoringConfig.audio_detect) return;
       if (audioCtxRef.current) audioCtxRef.current.close().catch(() => {});
     };
   }, []);
@@ -330,7 +336,7 @@ export default function AssessmentTaker() {
 
     // ── LAYER 1: SpeechRecognition ───────────────────────────────────────────
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
+    if (SpeechRecognition && proctoringConfig.audio_detect) {
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
@@ -364,7 +370,7 @@ export default function AssessmentTaker() {
 
     // ── LAYER 2: Web Audio — catches murmurs / whispers ──────────────────────
     const audioInterval = setInterval(() => {
-      if (!analyserRef.current) return;
+      if (!analyserRef.current || !proctoringConfig.audio_detect) return;
       const fftSize = analyserRef.current.fftSize;
       const sampleRate = audioCtxRef.current?.sampleRate || 44100;
       const binHz = sampleRate / fftSize;
@@ -402,20 +408,17 @@ export default function AssessmentTaker() {
       const energeticVoice = voiceAvg > voiceFloor && voiceSpreadLooksHuman && rms > 0.035;
       const veryLoudVoiceBand = voiceAvg > Math.max(baseline + 32, 42) && voiceSpreadLooksHuman && rms > 0.055;
       const isVoiceLike = energeticVoice || veryLoudVoiceBand;
-      const isQuiet = voiceAvg < Math.max(baseline + 10, 18) && rms < 0.035;
 
-      if (isQuiet) {
+      if (!isVoiceLike) {
         audioState.quietSamples = Math.min(audioState.quietSamples + 1, 20);
         audioViolationTimer.current = null;
         cal.baseline = baseline * 0.95 + voiceAvg * 0.05;
-        return;
       }
 
       // After one audio strike, require both time and multiple quiet samples before
       // another low-level mic strike can be issued. SpeechRecognition can still catch
       // a new, clear utterance separately with its own longer cooldown.
       if (now < audioState.lockedUntil || audioState.quietSamples < 6) {
-        if (!isVoiceLike) cal.baseline = baseline * 0.98 + voiceAvg * 0.02;
         return;
       }
 
@@ -429,9 +432,6 @@ export default function AssessmentTaker() {
           }
           audioViolationTimer.current = null;
         }
-      } else {
-        audioViolationTimer.current = null;
-        cal.baseline = baseline * 0.98 + voiceAvg * 0.02;
       }
     }, 500);
 
@@ -525,7 +525,7 @@ export default function AssessmentTaker() {
           if (sigFaces.length >= 1) {
             seenFaceOnceRef.current = true;
             motionViolationTimer.current = null;
-          } else if (seenFaceOnceRef.current) {
+          } else if (seenFaceOnceRef.current && proctoringConfig.face_not_visible) {
             if (!motionViolationTimer.current) motionViolationTimer.current = Date.now();
             else if (Date.now() - motionViolationTimer.current > 7000) {
               handleCheatAttemptRef.current?.('Face Not Visible — Please Stay in Frame', 'person_not_visible', 12000);
@@ -534,7 +534,7 @@ export default function AssessmentTaker() {
             }
           }
 
-          if (sigFaces.length >= 2) {
+          if (sigFaces.length >= 2 && proctoringConfig.multiple_people) {
             // Sustained 5 s before flagging (was 2 s).
             // Someone briefly walking past or a transient reflection won't accumulate
             // 5 full seconds of detections sampled every 1.8 s.
@@ -570,31 +570,13 @@ export default function AssessmentTaker() {
         motionViolationTimer.current = null;
       }
 
-      // ── Multiple people: histogram peak detection (pixel-heuristic fallback only) ──
-      // This path runs only when the native FaceDetector API is unavailable.
-      //
-      // FALSE-POSITIVE MITIGATIONS vs. the old implementation
-      // ─────────────────────────────────────────────────────────────────────────
-      //  • peakThreshold doubled (20 % of face-zone height, was 10 %).
-      //    Low threshold lets arms, forearms, and warm walls generate peaks.
-      //  • Peaks must be face-sized: >= 20 px wide on the 160 px canvas (~12 %
-      //    of frame). Thin arm/hand spikes (< 20 px) are ignored.
-      //  • The two peaks must be SEPARATED by a clear gap >= 20 % of frame width
-      //    (32 px). A raised hand stays next to the face; a second person stands
-      //    at a distinct horizontal position.
-      //  • Overall skin ratio raised to 5 % (was 1.5 %). Isolated warm objects
-      //    (mugs, notepads, painted walls) don't push the whole-frame ratio
-      //    this high.
-      //  • Sustained for 6 s (was 2 s). Transient lighting changes, motion blur,
-      //    or a brief arm-raise won't last long enough to trigger.
-      //  • Per-violation cooldown raised to 45 s (was 20 s).
-
+      // ── Multiple people: tuned histogram peak detection (pixel-heuristic fallback) ──
       const smoothed = [...skinHistogram];
       for (let x = 2; x < W - 2; x++) {
         smoothed[x] = (skinHistogram[x-2] + skinHistogram[x-1] + skinHistogram[x] + skinHistogram[x+1] + skinHistogram[x+2]) / 5;
       }
 
-      const peakThreshold = faceZoneH * 0.20; // was 0.10
+      const peakThreshold = faceZoneH * 0.15; // lowered to catch less prominent faces
       const peaks = [];
       let inPeak = false, pkStart = 0;
       for (let x = 0; x < W; x++) {
@@ -607,26 +589,30 @@ export default function AssessmentTaker() {
       }
       if (inPeak) peaks.push({ start: pkStart, end: W, width: W - pkStart });
 
-      // Keep only face-sized peaks (wide enough to be a head, narrow enough
-      // not to be the whole torso or the entire frame).
-      const MIN_PEAK_W = 20; // ~12.5 % of 160 px canvas
-      const MAX_PEAK_W = 70; // ~44 % — excludes full-torso or full-frame blobs
+      // Identify peaks that look like faces
+      const MIN_PEAK_W = 15; // smaller faces accepted
+      const MAX_PEAK_W = 90; // larger max width in case they stand close together
       const facePeaks = peaks.filter(p => p.width >= MIN_PEAK_W && p.width <= MAX_PEAK_W);
 
-      // Two peaks must have a clear spatial gap between them.
-      const MIN_GAP_PX = Math.floor(W * 0.20); // 32 px at W=160
-      let hasWellSeparatedPair = false;
+      let multipleDetected = false;
+      // Condition A: Two distinct peaks with a small gap
+      const MIN_GAP_PX = 15; // relaxed gap
       for (let i = 0; i < facePeaks.length - 1; i++) {
         if (facePeaks[i + 1].start - facePeaks[i].end >= MIN_GAP_PX) {
-          hasWellSeparatedPair = true;
+          multipleDetected = true;
           break;
         }
       }
+      
+      // Condition B: A single massive blob (two faces merged) that isn't the whole screen
+      if (peaks.some(p => p.width >= 90 && p.width < 140)) {
+        multipleDetected = true;
+      }
 
-      if (hasWellSeparatedPair && avgBright > 16 && overallRatio > 0.05) {
+      if (multipleDetected && avgBright > 16 && overallRatio > 0.05 && proctoringConfig.multiple_people) {
         if (!backgroundMovementTimer.current) backgroundMovementTimer.current = Date.now();
-        else if (Date.now() - backgroundMovementTimer.current > 6000) { // was 2000
-          handleCheatAttemptRef.current?.('Multiple People Detected in Camera', 'proctoring_violation', 45000); // was 20000
+        else if (Date.now() - backgroundMovementTimer.current > 6000) {
+          handleCheatAttemptRef.current?.('Multiple People Detected in Camera', 'proctoring_violation', 45000);
           backgroundMovementTimer.current = null;
         }
       } else {
@@ -657,6 +643,7 @@ export default function AssessmentTaker() {
 
   useEffect(() => {
     const handler = () => {
+      if (!proctoringConfig.tab_switch) return;
       if (!hasStarted || submittingRef.current) return;
       if (document.hidden) handleCheatAttempt('Tab Switching');
     };
@@ -668,6 +655,7 @@ export default function AssessmentTaker() {
     const onFSChange = () => {
       const isFS = !!document.fullscreenElement;
       setIsFullscreen(isFS);
+      if (!proctoringConfig.full_screen) return;
       if (!hasStarted || submittingRef.current) return;
       if (!isFS) handleCheatAttempt('Exiting Fullscreen');
     };
@@ -762,6 +750,10 @@ export default function AssessmentTaker() {
         if (!startTime.current) startTime.current = now;
         setIsFullscreen(true);
         setHasStarted(true);
+        // Resume AudioContext now that the user has interacted with the page
+        if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+          audioCtxRef.current.resume().catch(e => console.warn('Audio resume failed:', e));
+        }
       })
       .catch(() => toast.error('Fullscreen blocked. Please click again.'));
   }, [assessment, id]);
@@ -813,10 +805,16 @@ export default function AssessmentTaker() {
           </p>
           <div style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, padding: 20, marginTop: 16, marginBottom: 28, textAlign: 'left' }}>
             <div style={{ display: 'grid', gap: 12, fontSize: '0.9rem', color: 'rgba(255,255,255,0.85)' }}>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>🖥️</span> Fullscreen mode is mandatory throughout</div>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>📹</span> Webcam and 🎤 Microphone will be monitored</div>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>🚫</span> Tab switching and background movement are restricted</div>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>⚠️</span> {MAX_STRIKES} violations = automatic termination</div>
+              {proctoringConfig.full_screen && <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>🖥️</span> Fullscreen mode is mandatory</div>}
+              {(proctoringConfig.multiple_people || proctoringConfig.face_not_visible || proctoringConfig.audio_detect) && (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <span>📹</span> {proctoringConfig.audio_detect ? 'Webcam and 🎤 Microphone' : 'Webcam'} will be monitored
+                </div>
+              )}
+              {proctoringConfig.tab_switch && <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>🚫</span> Tab switching is restricted</div>}
+              {(proctoringConfig.full_screen || proctoringConfig.multiple_people || proctoringConfig.face_not_visible || proctoringConfig.audio_detect || proctoringConfig.tab_switch) && (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>⚠️</span> {MAX_STRIKES} violations = automatic termination</div>
+              )}
               {assessment.time_limit_minutes && <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>⏱️</span> Time limit: <strong>{assessment.time_limit_minutes} minutes</strong></div>}
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>📝</span> {(assessment.questions || []).length} questions</div>
             </div>

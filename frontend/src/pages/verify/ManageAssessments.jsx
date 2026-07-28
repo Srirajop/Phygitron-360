@@ -24,6 +24,9 @@ export default function ManageAssessments() {
   // Assignment Modal State
   const [candidates, setCandidates] = useState([]);
   const [assignModal, setAssignModal] = useState({ open: false, assessmentId: null, deadline: '', loading: false });
+  const [proctoringConfig, setProctoringConfig] = useState({ 
+    full_screen: true, tab_switch: true, multiple_people: true, face_not_visible: true, audio_detect: true 
+  });
   const [selectedCandidates, setSelectedCandidates] = useState([]);
   const [search, setSearch] = useState('');
   
@@ -34,12 +37,21 @@ export default function ManageAssessments() {
 
   // Memoized filters to prevent lag on search keystrokes
   const filteredCandidates = React.useMemo(() => {
-    if (!search) return candidates;
-    const s = search.toLowerCase();
-    return candidates.filter(c => 
-      (c.full_name || '').toLowerCase().includes(s) || 
-      (c.email || '').toLowerCase().includes(s)
-    );
+    let list = candidates;
+    if (search) {
+      const s = search.toLowerCase();
+      list = candidates.filter(c => 
+        (c.full_name || '').toLowerCase().includes(s) || 
+        (c.email || '').toLowerCase().includes(s)
+      );
+    }
+    // Sort to group by role, then by name
+    return [...list].sort((a, b) => {
+      const roleA = a.role || '';
+      const roleB = b.role || '';
+      if (roleA !== roleB) return roleA.localeCompare(roleB);
+      return (a.full_name || '').localeCompare(b.full_name || '');
+    });
   }, [candidates, search]);
 
   const groupedQuestions = React.useMemo(() => {
@@ -66,6 +78,7 @@ export default function ManageAssessments() {
     setSearch('');
     setShowSubset(false);
     setSelectedQuestionIds([]);
+    setProctoringConfig({ full_screen: true, tab_switch: true, multiple_people: true, face_not_visible: true, audio_detect: true });
     
     // Load users
     if (candidates.length === 0) {
@@ -95,6 +108,7 @@ export default function ManageAssessments() {
         user_ids: selectedCandidates,
         deadline: assignModal.deadline ? new Date(assignModal.deadline).toISOString() : null,
         question_ids: showSubset ? selectedQuestionIds : null,
+        proctoring_config: proctoringConfig,
       });
       toast.success('Assessment assigned successfully!');
       setAssignModal({ open: false, assessmentId: null, deadline: '', loading: false });
@@ -370,6 +384,34 @@ export default function ManageAssessments() {
                   </div>
                 )}
                 
+                <div className="form-group" style={{ padding: '16px', background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <label className="form-label" style={{ marginBottom: 0 }}>Proctoring Settings</label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setProctoringConfig({ full_screen: true, tab_switch: true, multiple_people: true, face_not_visible: true, audio_detect: true })}>Enable All</button>
+                      <button type="button" className="btn btn-ghost btn-sm text-danger" onClick={() => setProctoringConfig({ full_screen: false, tab_switch: false, multiple_people: false, face_not_visible: false, audio_detect: false })}>Disable All</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {[
+                      { key: 'full_screen', label: 'Enforce Full Screen' },
+                      { key: 'tab_switch', label: 'Detect Tab Switching' },
+                      { key: 'multiple_people', label: 'Detect Multiple People in Camera' },
+                      { key: 'face_not_visible', label: 'Detect Face Not Visible' },
+                      { key: 'audio_detect', label: 'Detect Audio / Background Noise' },
+                    ].map(feat => (
+                      <label key={feat.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={proctoringConfig[feat.key]}
+                          onChange={(e) => setProctoringConfig(p => ({ ...p, [feat.key]: e.target.checked }))}
+                        />
+                        <span style={{ fontSize: '0.9rem' }}>{feat.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="form-group">
                   <label className="form-label">Deadline (Optional)</label>
                   <div className="form-date-group">

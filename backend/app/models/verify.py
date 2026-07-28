@@ -138,6 +138,7 @@ class AssessmentAssignment(Base):
     status = Column(Enum(AssignmentStatus), default=AssignmentStatus.pending)
     custom_questions = Column(JSON, nullable=True)
     started_at = Column(DateTime, nullable=True)
+    proctoring_config = Column(JSON, nullable=True)
     # Proctoring strike persistence — survives page reloads / reconnects
     strike_count = Column(Integer, default=0, nullable=False)
     terminated_by_proctor = Column(Boolean, default=False, nullable=False)

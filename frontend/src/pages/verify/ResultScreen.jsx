@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { verifyApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
-import { CheckCircle, XCircle, Trophy, BookOpen, BarChart2, Download, ExternalLink, FileText } from 'lucide-react';
+import { CheckCircle, XCircle, Trophy, BookOpen, BarChart2, Download, ExternalLink, FileText, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const CONFETTI_COLORS = ['#7C3AED', '#A855F7', '#EC4899', '#06B6D4', '#F59E0B', '#10B981'];
@@ -86,6 +86,35 @@ export default function ResultScreen() {
   const appealQuery = result.appeal_query;
   const proctoringFlags = Array.isArray(result.proctoring_flags) ? result.proctoring_flags : [];
   const violationFlags = proctoringFlags.filter(flag => !PROCTORING_EVIDENCE_TYPES.has(flag.type));
+  const isAdmin = ['super_admin', 'org_admin', 'hr'].includes(user?.role);
+
+  const handleDeleteFlag = async (flagId) => {
+    if (!window.confirm("Delete this screenshot?")) return;
+    try {
+      await verifyApi.deleteProctoringFlag(result.result_id, flagId);
+      setResult(prev => ({
+        ...prev,
+        proctoring_flags: prev.proctoring_flags.filter(f => f.id !== flagId)
+      }));
+      toast.success("Screenshot deleted");
+    } catch (err) {
+      toast.error("Failed to delete screenshot");
+    }
+  };
+
+  const handleDeleteAllScreenshots = async () => {
+    if (!window.confirm("Delete all screenshots for this assessment?")) return;
+    try {
+      await verifyApi.deleteAllScreenshots(result.result_id);
+      setResult(prev => ({
+        ...prev,
+        proctoring_flags: prev.proctoring_flags.filter(f => f.type !== 'screenshot')
+      }));
+      toast.success("All screenshots deleted");
+    } catch (err) {
+      toast.error("Failed to delete screenshots");
+    }
+  };
 
   const handleSubmitAppeal = async () => {
     if (!appealText.trim()) return;
@@ -348,11 +377,18 @@ export default function ResultScreen() {
           <div className="card animate-fade-in stagger-3" style={{ maxWidth: 640, margin: '0 auto 24px' }}>
             <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h4>📹 Proctoring Report</h4>
-              {violationFlags.length === 0 ? (
-                <span className="badge badge-success">Clean</span>
-              ) : (
-                <span className="badge badge-danger">{violationFlags.length} Violations</span>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {isAdmin && proctoringFlags.some(f => f.type === 'screenshot') && (
+                  <button className="btn btn-danger btn-sm" onClick={handleDeleteAllScreenshots} title="Delete all screenshots" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Trash2 size={14} /> Delete All
+                  </button>
+                )}
+                {violationFlags.length === 0 ? (
+                  <span className="badge badge-success">Clean</span>
+                ) : (
+                  <span className="badge badge-danger">{violationFlags.length} Violations</span>
+                )}
+              </div>
             </div>
             <div className="card-body">
               {proctoringFlags.length === 0 ? (
@@ -362,7 +398,7 @@ export default function ResultScreen() {
               ) : (
                 <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.875rem', color: 'var(--text-primary)' }}>
                   {[...proctoringFlags].sort((a, b) => new Date(a.flagged_at) - new Date(b.flagged_at)).map((flag, idx) => (
-                    <li key={idx} style={{ marginBottom: 12 }}>
+                    <li key={flag.id || idx} style={{ marginBottom: 12 }}>
                       <span className={`badge ${PROCTORING_EVIDENCE_TYPES.has(flag.type) ? 'badge-muted' : 'badge-danger'}`} style={{ marginRight: 8, fontSize: '0.7rem' }}>
                         {flag.type.replace('_', ' ').toUpperCase()}
                       </span>
@@ -370,7 +406,21 @@ export default function ResultScreen() {
                       {PROCTORING_EVIDENCE_TYPES.has(flag.type) ? (
                         <div style={{ marginTop: 8 }}>
                           {flag.type === 'screenshot' && flag.details?.startsWith('data:image') ? (
-                            <img src={flag.details} alt="Proctor Snapshot" style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                            isAdmin ? (
+                              <div style={{ position: 'relative', display: 'inline-block' }}>
+                                <img src={flag.details} alt="Proctor Snapshot" style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                                <button
+                                  className="btn btn-danger btn-sm"
+                                  style={{ position: 'absolute', top: 8, right: 8, padding: '4px', borderRadius: '4px', background: 'rgba(220, 38, 38, 0.9)' }}
+                                  onClick={() => handleDeleteFlag(flag.id)}
+                                  title="Delete screenshot"
+                                >
+                                  <Trash2 size={14} color="#fff" />
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-muted" style={{ fontStyle: 'italic' }}> [Screenshot captured and hidden for privacy]</span>
+                            )
                           ) : flag.type === 'audio_snippet' ? (
                             <span className="text-muted"> [Audio evidence captured]</span>
                           ) : (
