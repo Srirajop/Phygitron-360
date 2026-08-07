@@ -69,6 +69,7 @@ class Assessment(Base):
     is_deleted = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    sections = Column(JSON, nullable=True)
 
     creator = relationship("User", foreign_keys=[created_by])
     questions = relationship("AssessmentQuestion", back_populates="assessment", cascade="all, delete-orphan")
@@ -95,6 +96,7 @@ class AssessmentQuestion(Base):
     order_index = Column(Integer, default=0)
     images = Column(JSON, nullable=True)
     tags = Column(JSON, nullable=True)  # e.g. ["Java", "OOP", "Aptitude"]
+    section_id = Column(String(50), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 

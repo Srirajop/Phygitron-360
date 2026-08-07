@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { sourceApi } from '../../api';
+import { verifyApi } from '../../api';
 import { Search, Trophy, Activity, ClipboardCheck, AlertTriangle, Users, Star, ExternalLink, Timer, BarChart2, Clock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
@@ -45,13 +45,15 @@ export default function ActiveCandidates() {
   const [dashboard, setDashboard] = useState({ stats: {}, trainees: [], leaderboard: [], active_tests: [], recent_results: [] });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [population, setPopulation] = useState('all');
 
   useEffect(() => {
-    sourceApi.activeCandidates()
+    setLoading(true);
+    verifyApi.analyticsDashboard(population)
       .then(r => setDashboard(r.data.data || { stats: {}, trainees: [], leaderboard: [], active_tests: [], recent_results: [] }))
-      .catch(() => toast.error('Failed to load trainee dashboard'))
+      .catch(() => toast.error('Failed to load assessment analytics'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [population]);
 
   const trainees = dashboard.trainees || [];
   const filtered = useMemo(() => {
@@ -70,9 +72,14 @@ export default function ActiveCandidates() {
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
-          <h1>Trainee Dashboard</h1>
-          <p>Track assessment activity, leaderboard performance, and trainee progress</p>
+          <h1>Analytics Dashboard</h1>
+          <p>Track assessment activity, participation, results, and proctoring across your organisation</p>
         </div>
+        <select value={population} onChange={e => setPopulation(e.target.value)} className="form-control" style={{ width: 180 }}>
+          <option value="all">All participants</option>
+          <option value="trainee">Trainees</option>
+          <option value="employee">Employees</option>
+        </select>
       </div>
 
       <div className="page-body">
@@ -81,7 +88,7 @@ export default function ActiveCandidates() {
         ) : (
           <>
             <div className="stats-grid animate-fade-in" style={{ marginBottom: 24 }}>
-              <StatCard label="Total Trainees" value={dashboard.stats?.total_trainees ?? 0} icon={<Users size={18} />} />
+              <StatCard label="Participants" value={dashboard.stats?.total_trainees ?? 0} icon={<Users size={18} />} />
               <StatCard label="Active Tests" value={dashboard.stats?.active_tests ?? 0} icon={<Activity size={18} />} />
               <StatCard label="Completed Tests" value={dashboard.stats?.completed_tests ?? 0} icon={<ClipboardCheck size={18} />} />
               <StatCard label="Avg Score" value={dashboard.stats?.avg_score == null ? '-' : `${dashboard.stats.avg_score}%`} icon={<BarChart2 size={18} />} />
@@ -105,7 +112,7 @@ export default function ActiveCandidates() {
                     {(dashboard.active_tests || []).slice(0, 6).map(test => (
                       <div key={`${test.assignment_id}-${test.user_id}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--border-light)' }}>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{test.trainee?.name}</div>
+                          <div style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{test.trainee?.name} <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>({test.trainee?.type})</span></div>
                           <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{test.title}</div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -175,7 +182,7 @@ export default function ActiveCandidates() {
 
             {highPerformers.length > 0 && (
               <div style={{ marginBottom: 24 }}>
-                <h3 style={{ fontSize: '1rem', fontWeight: 800, margin: '0 0 12px' }}>Top Trainees</h3>
+                <h3 style={{ fontSize: '1rem', fontWeight: 800, margin: '0 0 12px' }}>Top Participants</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>
                   {highPerformers.map(t => (
                     <Link key={t.user_id} to={`/source/candidates/${t.id}`} className="card" style={{ padding: 16, textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -194,7 +201,7 @@ export default function ActiveCandidates() {
               <Search size={18} color="var(--text-muted)" />
               <input
                 type="text"
-                placeholder="Search trainees by name, email, or location..."
+                placeholder="Search participants by name or email..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 style={{ border: 'none', outline: 'none', background: 'transparent', flex: 1, fontSize: '0.95rem', color: 'var(--text-primary)' }}
@@ -202,13 +209,13 @@ export default function ActiveCandidates() {
             </div>
 
             {filtered.length === 0 ? (
-              <div className="empty-state"><p>No trainees found.</p></div>
+              <div className="empty-state"><p>No participants found for this selection.</p></div>
             ) : (
               <div className="card animate-scale-in" style={{ overflow: 'hidden' }}>
                 <table className="table" style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
-                      <th style={{ padding: '16px 20px', fontWeight: 700 }}>Trainee</th>
+                      <th style={{ padding: '16px 20px', fontWeight: 700 }}>Participant</th>
                       <th style={{ padding: '16px 20px', fontWeight: 700 }}>Assignments</th>
                       <th style={{ padding: '16px 20px', fontWeight: 700 }}>Completed</th>
                       <th style={{ padding: '16px 20px', fontWeight: 700 }}>Average</th>
@@ -222,7 +229,7 @@ export default function ActiveCandidates() {
                       <tr key={t.user_id} style={{ borderBottom: '1px solid var(--border-light)' }}>
                         <td style={{ padding: '16px 20px' }}>
                           <div style={{ fontWeight: 900, color: 'var(--text-primary)' }}>{t.name}</div>
-                          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.email}</div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.email} · {t.type}</div>
                         </td>
                         <td style={{ padding: '16px 20px' }}>
                           <div style={{ fontWeight: 800 }}>{t.tests_assigned}</div>
@@ -242,7 +249,11 @@ export default function ActiveCandidates() {
                           {t.malpractice_count > 0 ? <span className="badge badge-danger">{t.malpractice_count}</span> : <span className="badge badge-secondary">0</span>}
                         </td>
                         <td style={{ padding: '16px 20px' }}>
-                          <Link to={`/source/candidates/${t.id}`} className="btn btn-secondary btn-sm">View</Link>
+                          {t.candidate_profile_id ? (
+                            <Link to={`/source/candidates/${t.candidate_profile_id}`} className="btn btn-secondary btn-sm">View</Link>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>No profile</span>
+                          )}
                         </td>
                       </tr>
                     ))}

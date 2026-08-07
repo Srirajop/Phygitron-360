@@ -132,12 +132,29 @@ export default function ResultScreen() {
     }
   };
 
+  const handleReleaseResult = async () => {
+    try {
+      await verifyApi.releaseResult(result.result_id);
+      setResult(prev => ({ ...prev, is_released: true }));
+      toast.success("Result released to candidate");
+    } catch (err) {
+      toast.error("Failed to release result");
+    }
+  };
+
   return (
     <div>
       {showConfetti && <Confetti />}
-      <div className="page-header">
-        <h1>Assessment Results</h1>
-        <p>{result.assessment?.title}</p>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+        <div>
+          <h1>Assessment Results</h1>
+          <p>{result.assessment?.title}</p>
+        </div>
+        {isAdmin && !result.is_released && result.score !== null && (
+          <button className="btn btn-shimmer" onClick={handleReleaseResult}>
+            Release Result
+          </button>
+        )}
       </div>
       <div className="page-body">
         {/* Score Card / Submission State */}
@@ -319,19 +336,124 @@ export default function ResultScreen() {
         )}
 
         {/* Candidate Responses (Show for recruiters or released candidates) */}
-        {(result.is_released || user?.role !== 'candidate') && result.assessment?.questions?.some(q => q.question_type === 'file_upload' || q.question_type === 'coding' || q.question_type === 'written') && (
-          <div className="card animate-fade-in" style={{ maxWidth: 640, margin: '0 auto 24px' }}>
-            <div className="card-header"><h4>📂 Candidate Responses</h4></div>
-            <div className="card-body" style={{ padding: 0 }}>
-              {(result.assessment?.questions || []).map((q, idx) => {
+        {(result.is_released || user?.role !== 'candidate') && result.assessment?.questions?.length > 0 && (() => {
+          let questions = [];
+          if (result.assessment.sections && result.assessment.sections.length > 0) {
+            result.assessment.sections.forEach(sec => {
+              questions.push(...result.assessment.questions.filter(q => q.section_id === sec.id));
+            });
+            questions.push(...result.assessment.questions.filter(q => !q.section_id));
+          } else {
+            questions = result.assessment.questions;
+          }
+          let right = 0;
+          let wrong = 0;
+          let unanswered = 0;
+
+          questions.forEach(q => {
+            const answer = result.answers?.[q.id];
+            if (answer === undefined || answer === null || answer === '' || (Array.isArray(answer) && answer.length === 0)) {
+              unanswered++;
+              return;
+            }
+            const score = result.scores_per_question?.[q.id];
+            if (score !== undefined) {
+              if (Number(score) > 0) right++;
+              else wrong++;
+            } else {
+              if (q.question_type === 'mcq') {
+                if (answer === q.correct_answer) right++;
+                else wrong++;
+              } else if (q.question_type === 'mcq_multi') {
+                const ansArr = Array.isArray(answer) ? answer : [];
+                let corrArr = [];
+                try { corrArr = typeof q.correct_answer === 'string' && q.correct_answer.startsWith('[') ? JSON.parse(q.correct_answer) : [q.correct_answer]; } catch(e) { corrArr = [q.correct_answer]; }
+                const isRight = ansArr.length === corrArr.length && ansArr.every(x => corrArr.includes(x));
+                if (isRight) right++;
+                else wrong++;
+              }
+            }
+          });
+
+          return (
+            <div className="card animate-fade-in" style={{ maxWidth: 640, margin: '0 auto 24px' }}>
+              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                <h4 style={{ margin: 0 }}>📂 Candidate Responses</h4>
+                <div style={{ fontSize: '0.8rem', display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <span style={{ color: 'var(--success)' }}><b>{right}</b> Right</span>
+                  <span style={{ color: 'var(--danger)' }}><b>{wrong}</b> Wrong</span>
+                  <span style={{ color: 'var(--text-muted)' }}><b>{unanswered}</b> Unanswered</span>
+                  <span style={{ color: 'var(--primary)', fontWeight: 600 }}><b>{questions.length}</b> Total</span>
+                </div>
+              </div>
+              <div className="card-body" style={{ padding: 0 }}>
+                {questions.map((q, idx) => {
                 const answer = result.answers?.[q.id];
-                if (!answer) return null;
 
                 return (
                   <div key={idx} style={{ padding: 20, borderBottom: idx < result.assessment.questions.length - 1 ? '1px solid var(--border)' : 'none' }}>
                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8 }}>QUESTION {idx + 1} ({q.question_type.toUpperCase()})</div>
                     <div style={{ fontSize: '0.9rem', marginBottom: 12, fontWeight: 500 }}>{q.question_text}</div>
                     
+                    {q.question_type === 'mcq' && (
+                      <div style={{ marginTop: 12 }}>
+                        {(q.options || []).map((opt, i) => {
+                          const isSelected = answer === opt;
+                          const isCorrect = q.correct_answer === opt;
+                          let bg = 'var(--bg-page)';
+                          let border = '1px solid var(--border)';
+                          let icon = null;
+                          if (isSelected && isCorrect) {
+                            bg = 'var(--success-light)'; border = '1px solid var(--success)'; icon = '✅';
+                          } else if (isSelected && !isCorrect) {
+                            bg = 'var(--danger-light)'; border = '1px solid var(--danger)'; icon = '❌';
+                          } else if (isCorrect) {
+                            bg = 'var(--success-light)'; border = '1px dashed var(--success)'; icon = '✓';
+                          }
+                          return (
+                            <div key={i} style={{ padding: '8px 12px', background: bg, border, borderRadius: 6, marginBottom: 8, fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between' }}>
+                              <span>{opt}</span>
+                              {icon && <span>{icon}</span>}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {q.question_type === 'mcq_multi' && (
+                      <div style={{ marginTop: 12 }}>
+                        {(q.options || []).map((opt, i) => {
+                          const ansArr = Array.isArray(answer) ? answer : [];
+                          let corrArr = [];
+                          try {
+                            corrArr = typeof q.correct_answer === 'string' && q.correct_answer.startsWith('[') ? JSON.parse(q.correct_answer) : [q.correct_answer];
+                          } catch (e) { corrArr = [q.correct_answer]; }
+                          
+                          const isSelected = ansArr.includes(opt);
+                          const isCorrect = corrArr.includes(opt);
+                          let bg = 'var(--bg-page)';
+                          let border = '1px solid var(--border)';
+                          let icon = null;
+                          if (isSelected && isCorrect) {
+                            bg = 'var(--success-light)'; border = '1px solid var(--success)'; icon = '✅';
+                          } else if (isSelected && !isCorrect) {
+                            bg = 'var(--danger-light)'; border = '1px solid var(--danger)'; icon = '❌';
+                          } else if (isCorrect) {
+                            bg = 'var(--success-light)'; border = '1px dashed var(--success)'; icon = '✓';
+                          }
+                          return (
+                            <div key={i} style={{ padding: '8px 12px', background: bg, border, borderRadius: 6, marginBottom: 8, fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between' }}>
+                              <label style={{ display: 'flex', alignItems: 'center', margin: 0, cursor: 'default' }}>
+                                <input type="checkbox" checked={isSelected} readOnly style={{ marginRight: 8, pointerEvents: 'none' }} />
+                                <span>{opt}</span>
+                              </label>
+                              {icon && <span>{icon}</span>}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
                     {q.question_type === 'file_upload' && (
                       <div style={{ background: 'var(--bg-page)', padding: 16, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: '1px solid var(--border)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -343,15 +465,19 @@ export default function ResultScreen() {
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{typeof answer === 'string' ? answer.split('/').pop().split('_').slice(1).join('_') : 'Candidate_Submission'}</div>
                           </div>
                         </div>
-                        <a href={answer} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm" style={{ gap: 8 }}>
-                          <Download size={14} /> Download
-                        </a>
+                        {answer ? (
+                          <a href={answer} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm" style={{ gap: 8 }}>
+                            <Download size={14} /> Download
+                          </a>
+                        ) : (
+                          <span className="text-muted" style={{ fontSize: '0.8rem' }}>No file uploaded</span>
+                        )}
                       </div>
                     )}
 
                     {q.question_type === 'written' && (
                       <div style={{ background: 'var(--bg-page)', padding: 16, borderRadius: 8, fontSize: '0.85rem', whiteSpace: 'pre-wrap', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                        {answer}
+                        {answer || <span style={{ color: 'var(--text-muted)' }}>No answer provided</span>}
                       </div>
                     )}
 
@@ -361,8 +487,8 @@ export default function ResultScreen() {
                           {(() => {
                             try {
                               const parsed = typeof answer === 'string' ? JSON.parse(answer) : answer;
-                              return parsed.code || answer;
-                            } catch { return answer; }
+                              return parsed?.code || answer || 'No code provided';
+                            } catch { return answer || 'No code provided'; }
                           })()}
                         </pre>
                       </div>
@@ -372,8 +498,9 @@ export default function ResultScreen() {
               })}
             </div>
           </div>
-        )}
-        {result.proctoring_flags !== undefined && (
+          );
+        })()}
+        {['super_admin', 'org_admin', 'hr', 'manager'].includes(user?.role) && result.proctoring_flags !== undefined && (
           <div className="card animate-fade-in stagger-3" style={{ maxWidth: 640, margin: '0 auto 24px' }}>
             <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h4>📹 Proctoring Report</h4>

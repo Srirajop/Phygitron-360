@@ -97,6 +97,7 @@ export const sourceApi = {
 // ── Verify ────────────────────────────────────────────────────────────────
 export const verifyApi = {
   createAssessment: (data) => api.post('/api/v1/verify/assessments', data),
+  updateAssessment: (id, data) => api.put(`/api/v1/verify/assessments/${id}`, data),
   listAssessments: () => api.get('/api/v1/verify/assessments'),
   getAssessment: (id) => api.get(`/api/v1/verify/assessments/${id}`),
   publishAssessment: (id) => api.post(`/api/v1/verify/assessments/${id}/publish`),
@@ -119,7 +120,7 @@ export const verifyApi = {
   deleteProctoringFlag: (resultId, flagId) => api.delete(`/api/v1/verify/result/${resultId}/flags/${flagId}`),
   deleteAllScreenshots: (resultId) => api.delete(`/api/v1/verify/result/${resultId}/screenshots`),
   importQuestions: (formData) => api.post('/api/v1/verify/import-questions', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
-  importFromUrl: (url) => api.post('/api/v1/verify/import-url', { url }),
+  importFromUrl: (url, includeImages = false) => api.post('/api/v1/verify/import-url', { url, include_images: includeImages }),
   randomizeAssessment: (data) => api.post('/api/v1/verify/randomize-assessment', data),
   getUserResults: (userId) => api.get(`/api/v1/verify/users/${userId}/results`),
   uploadQuestionImage: (file) => {
@@ -133,6 +134,7 @@ export const verifyApi = {
   // Question Bank (Bucket)
   listQuestionBank: (params) => api.get('/api/v1/verify/question-bank', { params }),
   createBankItem: (data) => api.post('/api/v1/verify/question-bank', data),
+  createBulkBankItems: (questions) => api.post('/api/v1/verify/question-bank/bulk', { questions }),
   updateBankItem: (id, data) => api.put(`/api/v1/verify/question-bank/${id}`, data),
   deleteBankItem: (id) => api.delete(`/api/v1/verify/question-bank/${id}`),
   addBankToAssessment: (data) => api.post('/api/v1/verify/question-bank/bulk-add-to-assessment', data),
@@ -140,9 +142,10 @@ export const verifyApi = {
     const fd = new FormData(); fd.append('file', file);
     return api.post('/api/v1/verify/question-bank/import-file', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
-  importUrlToBank: (url, tags = []) => api.post('/api/v1/verify/question-bank/import-url', { url, tags }),
+  importUrlToBank: (url, tags = [], includeImages = false) => api.post('/api/v1/verify/question-bank/import-url', { url, tags, include_images: includeImages }),
   // Proctoring strike persistence
   recordStrike: (data) => api.post('/api/v1/verify/record-strike', data),
+  analyticsDashboard: (population = 'all') => api.get('/api/v1/verify/analytics-dashboard', { params: { population } }),
   // Session start — stamps started_at server-side using assessment_id (idempotent, auto-creates assignment row)
   startSession: (data) => api.post('/api/v1/verify/start-session', data),
 };

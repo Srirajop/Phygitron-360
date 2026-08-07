@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { verifyApi } from '../../api';
-import { PlusCircle, Trash2, GripVertical, ChevronDown, Sparkles, Loader2, Upload, Download, FileText, Link as LinkIcon, Image as ImageIcon, X, Database, Tag, Edit2 } from 'lucide-react';
+import { PlusCircle, Trash2, GripVertical, ChevronDown, Sparkles, Loader2, Upload, Download, FileText, Link as LinkIcon, Image as ImageIcon, X, Database, Tag, Edit2, ChevronLeft } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const QUESTION_TYPES = [
@@ -11,15 +12,25 @@ const QUESTION_TYPES = [
   { value: 'file_upload', label: '📎 File Upload' },
 ];
 
-function QuestionForm({ q, index, onChange, onRemove, onAutoGenerate, generating }) {
+function QuestionForm({ q, index, sections, onChange, onRemove, onAutoGenerate, onSaveToBank, generating }) {
   return (
     <div className="card animate-fade-in" style={{ marginBottom: 16, border: '1px solid var(--border)' }}>
       <div className="card-body">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <span className="badge badge-primary">Q{index + 1}</span>
-          <button className="btn btn-danger btn-sm" onClick={onRemove}><Trash2 size={13} /></button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span className="badge badge-primary">Q{index + 1}</span>
+            {q.section_id && sections && (
+              <span className="badge" style={{ background: 'var(--primary-lightest)', color: 'var(--primary)' }}>
+                Section: {sections.find(s => s.id === q.section_id)?.title || 'Unknown'}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-secondary btn-sm" title="Save to Question Bank" onClick={onSaveToBank}><Database size={13} /></button>
+            <button className="btn btn-danger btn-sm" title="Remove Question" onClick={onRemove}><Trash2 size={13} /></button>
+          </div>
         </div>
-        <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12 }}>
+        <div className="form-group" style={{ display: 'grid', gridTemplateColumns: (sections && sections.length > 0) ? '2fr 1fr 1fr' : '2fr 1fr', gap: 12 }}>
           <div>
             <label className="form-label">Question Type</label>
             <select className="form-control" value={q.question_type} onChange={e => onChange('question_type', e.target.value)}>
@@ -30,6 +41,15 @@ function QuestionForm({ q, index, onChange, onRemove, onAutoGenerate, generating
             <label className="form-label">Marks</label>
             <input type="number" className="form-control" min={0.5} step={0.5} value={q.marks} onChange={e => onChange('marks', parseFloat(e.target.value))} />
           </div>
+          {sections && sections.length > 0 && (
+            <div>
+              <label className="form-label">Section</label>
+              <select className="form-control" value={q.section_id || ''} onChange={e => onChange('section_id', e.target.value)}>
+                <option value="">No Section</option>
+                {sections.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+              </select>
+            </div>
+          )}
         </div>
         <div className="form-group">
           <label className="form-label">{q.question_type === 'file_upload' ? 'Upload Instructions (e.g., "Upload your project zip")' : 'Question Text *'}</label>
@@ -72,6 +92,23 @@ function QuestionForm({ q, index, onChange, onRemove, onAutoGenerate, generating
                   </button>
                 </div>
               ))}
+              
+              {( (q.images && q.images.length > 0) || (q.question_text && /!\[.*?\]\(.*?\)/.test(q.question_text)) ) && (
+                <button 
+                  className="btn btn-ghost" 
+                  title="Clear all images from this question"
+                  style={{ width: 100, height: 80, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, cursor: 'pointer', border: '2px dashed var(--danger)', borderRadius: 8, fontSize: '0.7rem', color: 'var(--danger)' }}
+                  onClick={() => {
+                    onChange('images', []);
+                    if (q.question_text) {
+                      onChange('question_text', q.question_text.replace(/!\[.*?\]\(.*?\)/g, ''));
+                    }
+                  }}
+                >
+                  <Trash2 size={18} />
+                  <span>Clear All</span>
+                </button>
+              )}
               
               <label className="btn btn-ghost" style={{ width: 100, height: 80, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, cursor: 'pointer', border: '2px dashed var(--border)', borderRadius: 8, fontSize: '0.7rem' }}>
                 <ImageIcon size={18} />
@@ -249,14 +286,56 @@ function QuestionForm({ q, index, onChange, onRemove, onAutoGenerate, generating
 const blankQuestion = () => ({ question_text:'', question_type:'mcq', options:['','','',''], correct_answer:'', model_answer:'', starter_code:'', test_cases:[], marks:5, order_index:0, images:[], tags:[] });
 
 export default function AssessmentBuilder() {
+  const [searchParams] = useSearchParams();
+  const nav = useNavigate();
+  const editId = searchParams.get('edit'); // present when editing an existing assessment
+
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
   const [timeLimit, setTimeLimit] = useState(30);
   const [passScore, setPassScore] = useState(70);
   const [shuffle, setShuffle] = useState(true);
   const [showResult, setShowResult] = useState(true);
+  const [sections, setSections] = useState([]);
+  // 1 = Standard (no sections), 2 = Sectioned (free switch), 3 = Timed Sections (locked)
+  const [assessmentLevel, setAssessmentLevel] = useState(1);
   const [questions, setQuestions] = useState([blankQuestion()]);
+  const [loadingEdit, setLoadingEdit] = useState(!!editId);
   const [loading, setLoading] = useState(false);
+
+  // Load existing assessment data when in edit mode
+  useEffect(() => {
+    if (!editId) return;
+    setLoadingEdit(true);
+    verifyApi.getAssessment(editId)
+      .then(r => {
+        const a = r.data.data;
+        setTitle(a.title || '');
+        setDesc(a.description || '');
+        setTimeLimit(a.time_limit_minutes || 30);
+        setPassScore(a.pass_score || 70);
+        setShuffle(a.shuffle_questions ?? true);
+        setShowResult(a.show_result_immediately ?? true);
+        const loadedSections = Array.isArray(a.sections) ? a.sections : [];
+        setSections(loadedSections);
+        // Derive level from loaded data
+        if (!loadedSections.length) setAssessmentLevel(1);
+        else if (loadedSections.some(s => s.time_limit_minutes)) setAssessmentLevel(3);
+        else setAssessmentLevel(2);
+        const loadedQs = (a.questions || []).map(q => ({
+          ...blankQuestion(),
+          ...q,
+          options: q.options || ['', '', '', ''],
+          test_cases: q.test_cases || [],
+          images: q.images || [],
+          tags: q.tags || [],
+        }));
+        setQuestions(loadedQs.length > 0 ? loadedQs : [blankQuestion()]);
+      })
+      .catch(() => toast.error('Failed to load assessment for editing'))
+      .finally(() => setLoadingEdit(false));
+  }, [editId]);
+
   const [generatingFor, setGeneratingFor] = useState(null);
   const [bankModal, setBankModal] = useState(false);
   const [bankItems, setBankItems] = useState([]);
@@ -345,6 +424,15 @@ export default function AssessmentBuilder() {
   const handleSave = async (publish = false) => {
     if (!title.trim()) { toast.error('Title is required'); return; }
     if (questions.some(q => !q.question_text.trim())) { toast.error('All questions need text'); return; }
+
+    if (sections && sections.length > 0) {
+      const totalSectionTime = sections.reduce((acc, s) => acc + (s.time_limit_minutes || 0), 0);
+      if (timeLimit && totalSectionTime > timeLimit) {
+        toast.error(`Total section time (${totalSectionTime} mins) exceeds global assessment time limit (${timeLimit} mins).`);
+        return;
+      }
+    }
+
     const invalidCodingIndex = questions.findIndex(q => {
       if (q.question_type !== 'coding') return false;
       const testCases = Array.isArray(q.test_cases) ? q.test_cases : [];
@@ -359,19 +447,29 @@ export default function AssessmentBuilder() {
       // Auto-detect assessment type
       const types = [...new Set(questions.map(q => q.question_type))];
       const asmtType = types.length > 1 ? 'mixed' : (types[0] || 'mcq');
-
-      const res = await verifyApi.createAssessment({ 
-        title, 
-        description: desc, 
+      const payload = {
+        title,
+        description: desc,
         type: asmtType,
-        time_limit_minutes: timeLimit, 
-        pass_score: passScore, 
-        shuffle_questions: shuffle, 
-        show_result_immediately: showResult, 
-        questions 
-      });
-      if (publish) await verifyApi.publishAssessment(res.data.data.id);
-      toast.success(publish ? 'Assessment published!' : 'Draft saved!');
+        time_limit_minutes: timeLimit,
+        pass_score: passScore,
+        shuffle_questions: shuffle,
+        show_result_immediately: showResult,
+        sections,
+        questions
+      };
+
+      if (editId) {
+        // Edit mode — update existing assessment
+        await verifyApi.updateAssessment(editId, payload);
+        toast.success('Assessment updated successfully!');
+        nav('/verify/manage');
+      } else {
+        // Create mode
+        const res = await verifyApi.createAssessment(payload);
+        if (publish) await verifyApi.publishAssessment(res.data.data.id);
+        toast.success(publish ? 'Assessment published!' : 'Draft saved!');
+      }
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Save failed');
     } finally {
@@ -484,7 +582,9 @@ export default function AssessmentBuilder() {
       const tags = prompt("Enter default tags for these questions (comma separated, optional):") || "";
       const tagsArr = tags.split(',').map(t => t.trim()).filter(Boolean);
       
-      const res = await verifyApi.importFromUrl(url);
+      const includeImages = window.confirm("Do you want to scrape and include images from this URL? (Select Cancel to skip images)");
+
+      const res = await verifyApi.importFromUrl(url, includeImages);
       let newQs = res.data.data;
       if (Array.isArray(newQs) && newQs.length > 0) {
         if (tagsArr.length > 0) {
@@ -538,7 +638,10 @@ export default function AssessmentBuilder() {
     try {
       const tags = prompt("Enter tags (comma separated, optional):") || "";
       const tagsArr = tags.split(',').map(t => t.trim()).filter(Boolean);
-      const res = await verifyApi.importFromUrl(url);
+      
+      const includeImages = window.confirm("Do you want to scrape and include images from this URL? (Select Cancel to skip images)");
+      
+      const res = await verifyApi.importUrlToBank(url, tagsArr, includeImages);
       let newQs = res.data.data || [];
       if (newQs.length > 0) {
          if (tagsArr.length > 0) newQs = newQs.map(q => ({ ...q, tags: [...new Set([...(q.tags || []), ...tagsArr])] }));
@@ -553,10 +656,57 @@ export default function AssessmentBuilder() {
     setBankFileUploading(false);
   };
 
+  const handleSaveToBank = async (qIndex) => {
+    const q = questions[qIndex];
+    if (!q.question_text) {
+      toast.error('Question text cannot be empty');
+      return;
+    }
+    try {
+      const loadingId = toast.loading('Saving to Question Bank...');
+      await verifyApi.createBankItem(q);
+      toast.success('Question saved to bank!', { id: loadingId });
+    } catch (err) {
+      toast.error('Failed to save to bank');
+    }
+  };
+
+  const handleBulkSaveToBank = async () => {
+    const validQs = questions.filter(q => q.question_text);
+    if (validQs.length === 0) {
+      toast.error('No valid questions to save');
+      return;
+    }
+    try {
+      const loadingId = toast.loading('Saving all questions to bank...');
+      await verifyApi.createBulkBankItems(validQs);
+      toast.success(`Saved ${validQs.length} questions to bank!`, { id: loadingId });
+    } catch (err) {
+      toast.error('Failed to save to bank');
+    }
+  };
+
+  if (loadingEdit) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300, flexDirection: 'column', gap: 16 }}>
+        <div className="spinner spinner-lg" />
+        <div style={{ color: 'var(--text-muted)' }}>Loading assessment…</div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
-        <div><h1>Assessment Builder</h1><p>Design multi-format assessments — MCQ, written, and coding</p></div>
+        <div>
+          {editId && (
+            <button className="btn btn-ghost btn-sm" onClick={() => nav('/verify/manage')} style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <ChevronLeft size={14} /> Back to Manage
+            </button>
+          )}
+          <h1>{editId ? 'Edit Assessment' : 'Assessment Builder'}</h1>
+          <p>{editId ? `Editing: ${title}` : 'Design multi-format assessments — MCQ, written, and coding'}</p>
+        </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <label className={`btn btn-secondary ${loading ? 'disabled' : ''}`} style={{ cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
             {loading ? <Loader2 className="animate-spin" size={14} /> : <Upload size={14} />} 
@@ -570,9 +720,34 @@ export default function AssessmentBuilder() {
           <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={openBankModal} disabled={loading}>
             <Database size={14} /> From Bank
           </button>
+          
+          <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={handleBulkSaveToBank} disabled={loading || questions.length === 0}>
+            <Database size={14} /> Save All to Bank
+          </button>
+          
+          {questions.some(q => (q.images && q.images.length > 0) || (q.question_text && /!\[.*?\]\(.*?\)/.test(q.question_text))) && (
+            <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={() => {
+              if (window.confirm("Are you sure you want to remove ALL images from EVERY question in this assessment?")) {
+                setQuestions(prev => prev.map(q => ({
+                  ...q, 
+                  images: [],
+                  question_text: q.question_text ? q.question_text.replace(/!\[.*?\]\(.*?\)/g, '') : q.question_text
+                })));
+                toast.success("All images removed from the assessment.");
+              }
+            }} disabled={loading}>
+              <Trash2 size={14} /> Clear All Images
+            </button>
+          )}
 
-          <button className="btn btn-secondary" onClick={() => handleSave(false)} disabled={loading}>Save Draft</button>
-          <button className="btn btn-shimmer" onClick={() => handleSave(true)} disabled={loading}>🚀 Publish</button>
+          {!editId ? (
+            <>
+              <button className="btn btn-secondary" onClick={() => handleSave(false)} disabled={loading}>Save Draft</button>
+              <button className="btn btn-shimmer" onClick={() => handleSave(true)} disabled={loading}>🚀 Publish</button>
+            </>
+          ) : (
+            <button className="btn btn-shimmer" onClick={() => handleSave(false)} disabled={loading}>✅ Save Changes</button>
+          )}
         </div>
       </div>
       <div className="page-body">
@@ -583,10 +758,12 @@ export default function AssessmentBuilder() {
               <QuestionForm 
                 key={i} 
                 q={q} 
-                index={i} 
+                index={i}
+                sections={sections}
                 onChange={(k, v) => updateQ(i, k, v)} 
                 onRemove={() => removeQ(i)} 
                 onAutoGenerate={handleAutoGenerate}
+                onSaveToBank={() => handleSaveToBank(i)}
                 generating={generatingFor === i}
               />
             ))}
@@ -628,6 +805,94 @@ export default function AssessmentBuilder() {
                 </div>
               </div>
             </div>
+
+            {/* ── Assessment Level Picker ─────────────────────────────────── */}
+            <div className="card animate-fade-in stagger-2" style={{ marginTop: 16 }}>
+              <div className="card-header"><h4>Assessment Level</h4></div>
+              <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {[
+                  { level: 1, icon: '📋', label: 'Standard', sub: 'All questions in one flat list. No sections.' },
+                  { level: 2, icon: '📂', label: 'Sectioned', sub: 'Questions grouped into sections. Candidates can navigate freely between them.' },
+                  { level: 3, icon: '🔒', label: 'Timed Sections', sub: 'Each section has a countdown timer. Candidates cannot advance until time is up.' },
+                ].map(({ level, icon, label, sub }) => (
+                  <div
+                    key={level}
+                    onClick={() => {
+                      setAssessmentLevel(level);
+                      if (level === 1) setSections([]);
+                      if (level === 2) {
+                        // Strip timers from any existing sections
+                        setSections(s => s.map(sec => ({ ...sec, time_limit_minutes: null })));
+                        if (sections.length === 0) setSections([{ id: `sec_${Date.now()}`, title: 'Section 1', time_limit_minutes: null }]);
+                      }
+                      if (level === 3 && sections.length === 0) {
+                        setSections([{ id: `sec_${Date.now()}`, title: 'Section 1', time_limit_minutes: 20 }]);
+                      }
+                    }}
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 14px',
+                      borderRadius: 10, cursor: 'pointer', transition: 'all 0.18s ease',
+                      border: assessmentLevel === level ? '2px solid var(--primary)' : '1px solid var(--border)',
+                      background: assessmentLevel === level ? 'var(--primary-lightest)' : 'var(--bg-page)',
+                    }}
+                  >
+                    <span style={{ fontSize: '1.4rem', lineHeight: 1 }}>{icon}</span>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.88rem', color: assessmentLevel === level ? 'var(--primary)' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        Level {level} — {label}
+                        {assessmentLevel === level && <span style={{ fontSize: '0.7rem', background: 'var(--primary)', color: '#fff', borderRadius: 4, padding: '1px 6px' }}>Selected</span>}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 3 }}>{sub}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Sections Panel (Level 2 & 3 only) ──────────────────────── */}
+            {assessmentLevel >= 2 && (
+              <div className="card animate-fade-in stagger-3" style={{ marginTop: 16 }}>
+                <div className="card-header"><h4>Sections</h4></div>
+                <div className="card-body">
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 12 }}>
+                    {assessmentLevel === 2
+                      ? 'Add sections to group your questions. Candidates can switch between sections freely.'
+                      : 'Add sections with time limits. Candidates cannot advance until the timer expires.'}
+                  </p>
+                  {sections.map((sec, i) => (
+                    <div key={sec.id} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                      <input
+                        className="form-control form-control-sm"
+                        value={sec.title}
+                        onChange={e => { const ns = [...sections]; ns[i].title = e.target.value; setSections(ns); }}
+                        placeholder="Section Title"
+                        style={{ flex: 1 }}
+                      />
+                      {assessmentLevel === 3 && (
+                        <input
+                          type="number"
+                          className="form-control form-control-sm"
+                          style={{ width: 80 }}
+                          value={sec.time_limit_minutes || ''}
+                          onChange={e => { const ns = [...sections]; ns[i].time_limit_minutes = e.target.value ? parseInt(e.target.value) : null; setSections(ns); }}
+                          placeholder="Mins"
+                          title="Time limit for this section in minutes"
+                        />
+                      )}
+                      <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => setSections(sections.filter((_, idx) => idx !== i))}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setSections([...sections, { id: `sec_${Date.now()}`, title: `Section ${sections.length + 1}`, time_limit_minutes: assessmentLevel === 3 ? 20 : null }])}
+                  >
+                    + Add Section
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="card animate-fade-in stagger-2" style={{ marginTop: 16, background: 'var(--primary-lightest)' }}>
               <div className="card-body">

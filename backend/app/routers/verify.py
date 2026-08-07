@@ -164,7 +164,12 @@ class QuestionCreate(BaseModel):
     order_index: int = 0
     images: Optional[List[str]] = []
     tags: Optional[List[str]] = []
+    section_id: Optional[str] = None
 
+class SectionCreate(BaseModel):
+    id: str
+    title: str
+    time_limit_minutes: Optional[int] = None
 
 class AssessmentCreate(BaseModel):
     title: str
@@ -174,6 +179,7 @@ class AssessmentCreate(BaseModel):
     pass_score: float = 70.0
     shuffle_questions: bool = False
     show_result_immediately: bool = True
+    sections: Optional[List[dict]] = None
     questions: List[QuestionCreate] = []
 
 
@@ -206,6 +212,7 @@ async def create_assessment(
         pass_score=body.pass_score,
         shuffle_questions=body.shuffle_questions,
         show_result_immediately=body.show_result_immediately,
+        sections=body.sections,
         created_by=current_user.id,
         status=AssessmentStatus.draft,
     )
@@ -248,6 +255,7 @@ async def create_assessment(
             order_index=q.order_index,
             images=q.images,
             tags=q.tags or [],
+            section_id=q.section_id,
         )
         db.add(question)
 
@@ -270,6 +278,7 @@ async def import_questions(
 
 class URLImportRequest(BaseModel):
     url: str
+    include_images: bool = False
 
 @router.post("/import-url")
 async def import_url(
@@ -322,11 +331,15 @@ async def import_url(
                             
                             # Extract ALL image URLs and replace with Markdown
                             all_imgs = []
-                            for img in soup.find_all('img'):
-                                src = img.get('src')
-                                if src:
-                                    all_imgs.append(src)
-                                    img.replace_with(f"![image]({src})")
+                            if body.include_images:
+                                for img in soup.find_all('img'):
+                                    src = img.get('src')
+                                    if src:
+                                        all_imgs.append(src)
+                                        img.replace_with(f"![image]({src})")
+                            else:
+                                for img in soup.find_all('img'):
+                                    img.decompose()
                             
                             # Preserve block-level formatting
                             for tag in soup.find_all(['p', 'div', 'ul', 'ol', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'blockquote']):
@@ -384,26 +397,37 @@ async def import_url(
             
         # Extract ALL image URLs and replace with Markdown for general scraper
         all_imgs = []
-        for img in soup.find_all('img'):
-            src = img.get('src')
-            if src:
-                if not src.startswith('http'):
-                    from urllib.parse import urljoin
-                    src = urljoin(body.url, src)
-                all_imgs.append(src)
-                img.replace_with(f"![image]({src})")
+        if body.include_images:
+            for img in soup.find_all('img'):
+                src = img.get('src')
+                if src:
+                    if not src.startswith('http'):
+                        from urllib.parse import urljoin
+                        src = urljoin(body.url, src)
+                    all_imgs.append(src)
+                    img.replace_with(f"![image]({src})")
+        else:
+            for img in soup.find_all('img'):
+                img.decompose()
 
         text = soup.get_text(separator=' ', strip=True)
-        if len(text) > 15000:
-            text = text[:15000]
+        if len(text) > 100000:
+            text = text[:100000]
             
         questions = await parse_questions_with_ai(text)
         
-        if questions and all_imgs:
+        if questions:
             for q in questions:
-                existing = q.get('images', [])
-                if not isinstance(existing, list): existing = []
-                q['images'] = list(set(existing + all_imgs))
+                if not body.include_images:
+                    q['images'] = []
+                    # Also strip markdown images from text if include_images is false
+                    import re
+                    if q.get('question_text'):
+                        q['question_text'] = re.sub(r'!\[.*?\]\(.*?\)', '', q['question_text'])
+                elif all_imgs:
+                    existing = q.get('images', [])
+                    if not isinstance(existing, list): existing = []
+                    q['images'] = list(set(existing + all_imgs))
 
         return success(questions)
     except Exception as e:
@@ -495,7 +519,7 @@ async def get_assessment(
         "id": q.id, "question_text": q.question_text, "question_type": q.question_type.value if hasattr(q.question_type, 'value') else q.question_type,
         "options": q.options, "marks": float(q.marks), "skill_id": q.skill_id,
         "starter_code": q.starter_code, "test_cases": q.test_cases, "programming_language": q.programming_language,
-        "order_index": q.order_index,
+        "order_index": q.order_index, "section_id": q.section_id,
         "images": q.images or [],
         "tags": q.tags or [],
         # Only expose correct answers to HR/admin roles, never to candidates
@@ -531,10 +555,16 @@ async def get_assessment(
         if is_candidate and assgn.custom_questions:
             # Strip correct_answer / model_answer from the stored custom question set
             _CANDIDATE_STRIP = {"correct_answer", "model_answer"}
-            formatted_questions = [
-                {k: v for k, v in cq.items() if k not in _CANDIDATE_STRIP}
-                for cq in assgn.custom_questions
-            ]
+            orig_q_map = {q.id: q for q in questions}
+            formatted_questions = []
+            for cq in assgn.custom_questions:
+                stripped = {k: v for k, v in cq.items() if k not in _CANDIDATE_STRIP}
+                orig = orig_q_map.get(cq.get("id"))
+                if orig:
+                    stripped["section_id"] = orig.section_id
+                    stripped["images"] = orig.images or []
+                    stripped["tags"] = orig.tags or []
+                formatted_questions.append(stripped)
 
     return success({
         "id": a.id, "title": a.title, "description": a.description,
@@ -542,12 +572,99 @@ async def get_assessment(
         "pass_score": float(a.pass_score), "shuffle_questions": a.shuffle_questions,
         "show_result_immediately": a.show_result_immediately,
         "status": a.status.value,
+        "sections": a.sections or [],
         "questions": formatted_questions,
         **assignment_meta,
     })
 
 
+@router.put("/assessments/{assessment_id}")
+async def update_assessment(
+    assessment_id: int,
+    body: AssessmentCreate,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fully update an existing assessment (works even after publishing)."""
+    result = await db.execute(
+        select(Assessment).where(
+            Assessment.id == assessment_id,
+            Assessment.org_id == current_user.org_id,
+            Assessment.is_deleted == False,
+        )
+    )
+    a = result.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="Assessment not found or access denied")
+
+    # Auto-detect type
+    types = list({q.question_type for q in body.questions})
+    asmtType = "mixed" if len(types) > 1 else (types[0] if types else "mcq")
+
+    # Update assessment fields
+    a.title = body.title
+    a.description = body.description
+    a.type = asmtType
+    a.time_limit_minutes = body.time_limit_minutes
+    a.pass_score = body.pass_score
+    a.shuffle_questions = body.shuffle_questions
+    a.show_result_immediately = body.show_result_immediately
+    a.sections = body.sections
+
+    # Delete old questions and replace with new ones
+    await db.execute(
+        __import__("sqlalchemy", fromlist=["delete"]).delete(AssessmentQuestion).where(
+            AssessmentQuestion.assessment_id == assessment_id
+        )
+    )
+
+    for q in body.questions:
+        normalized_test_cases = q.test_cases
+        normalized_language = q.programming_language
+        if q.question_type == "coding":
+            normalized_test_cases = _prepare_test_cases(q.test_cases or [])
+            if len(normalized_test_cases) < 3:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Each coding question must have at least 3 test cases.",
+                )
+            if any(not str(tc.get("expected_output", "")).strip() for tc in normalized_test_cases):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Every coding test case must include an expected output.",
+                )
+            try:
+                normalized_language = _normalize_language(q.programming_language or "python")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+        question = AssessmentQuestion(
+            assessment_id=assessment_id,
+            question_text=q.question_text,
+            question_type=q.question_type,
+            options=q.options,
+            correct_answer=q.correct_answer,
+            model_answer=q.model_answer,
+            starter_code=q.starter_code,
+            test_cases=normalized_test_cases,
+            programming_language=normalized_language,
+            accepted_file_types=q.accepted_file_types,
+            skill_id=q.skill_id,
+            marks=q.marks,
+            order_index=q.order_index,
+            images=q.images,
+            tags=q.tags or [],
+            section_id=q.section_id,
+        )
+        db.add(question)
+
+    await db.commit()
+    await db.refresh(a)
+    return success({"id": a.id, "title": a.title, "status": a.status.value if hasattr(a.status, "value") else a.status})
+
+
 @router.post("/assessments/{assessment_id}/publish")
+
 async def publish_assessment(
     assessment_id: int,
     current_user: User = Depends(require_role(["hr", "org_admin"])),
@@ -599,6 +716,121 @@ async def record_strike(
 
 class StartSessionRequest(BaseModel):
     assessment_id: int
+
+
+@router.get("/analytics-dashboard")
+async def analytics_dashboard(
+    population: str = "all",
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Assessment analytics for trainees and employees, scoped to the organisation."""
+    if population not in {"all", "trainee", "employee"}:
+        raise HTTPException(status_code=400, detail="Population must be all, trainee, or employee.")
+
+    assignments = (await db.execute(
+        select(AssessmentAssignment, Assessment, User)
+        .join(Assessment, AssessmentAssignment.assessment_id == Assessment.id)
+        .join(User, AssessmentAssignment.user_id == User.id)
+        .where(Assessment.org_id == current_user.org_id)
+    )).all()
+
+    all_results = (await db.execute(
+        select(AssessmentResult, Assessment, User)
+        .join(Assessment, AssessmentResult.assessment_id == Assessment.id)
+        .join(User, AssessmentResult.user_id == User.id)
+        .where(Assessment.org_id == current_user.org_id)
+    )).all()
+
+    def participant_type(person):
+        role = person.role.value if hasattr(person.role, "value") else str(person.role)
+        return "employee" if role == "employee" else "trainee"
+
+    # Build union set of users matching population
+    people = {}
+    # Pre-fetch candidate profile IDs for all users in one shot
+    from app.models.source import Candidate as CandidateModel
+    candidate_rows = (await db.execute(
+        select(CandidateModel.user_id, CandidateModel.id).where(CandidateModel.org_id == current_user.org_id)
+    )).all()
+    candidate_profile_map = {row.user_id: row.id for row in candidate_rows}  # user_id -> candidate.id
+
+    def get_or_create_person(user):
+        ptype = participant_type(user)
+        if population != "all" and ptype != population:
+            return None
+        if user.id not in people:
+            people[user.id] = {
+                "id": user.id, "user_id": user.id,
+                "candidate_profile_id": candidate_profile_map.get(user.id),
+                "name": user.full_name or user.email,
+                "email": user.email, "type": ptype.title(), "tests_assigned": 0,
+                "tests_active": 0, "tests_completed": 0, "scores": [], "malpractice_count": 0,
+                "latest_result": None,
+            }
+        return people[user.id]
+
+    active_tests = []
+    for assignment, assessment, user in assignments:
+        person = get_or_create_person(user)
+        if not person:
+            continue
+        person["tests_assigned"] += 1
+        status = assignment.status.value if hasattr(assignment.status, "value") else str(assignment.status)
+        if status == "started":
+            person["tests_active"] += 1
+            active_tests.append({
+                "assignment_id": assignment.id, "user_id": user.id, "title": assessment.title,
+                "status": status, "trainee": {"id": user.id, "name": person["name"], "type": person["type"]}
+            })
+        person["malpractice_count"] += assignment.strike_count or 0
+
+    recent_results = []
+    for result, assessment, user in all_results:
+        person = get_or_create_person(user)
+        if not person:
+            continue
+        person["tests_completed"] += 1
+        if result.score is not None:
+            person["scores"].append(float(result.score))
+        entry = {
+            "result_id": result.id, "user_id": user.id, "title": assessment.title,
+            "score": float(result.score) if result.score is not None else None,
+            "submitted_at": result.submitted_at.isoformat() if result.submitted_at else None,
+            "trainee": {"id": user.id, "name": person["name"], "type": person["type"]}
+        }
+        recent_results.append(entry)
+        if not person["latest_result"] or (entry["submitted_at"] or "") > (person["latest_result"]["submitted_at"] or ""):
+            person["latest_result"] = entry
+
+    participants = []
+    for person in people.values():
+        scores = person.pop("scores")
+        person["avg_score"] = round(sum(scores) / len(scores), 1) if scores else None
+        participants.append(person)
+
+    leaderboard = sorted((p for p in participants if p["avg_score"] is not None), key=lambda p: p["avg_score"], reverse=True)
+    for rank, person in enumerate(leaderboard, start=1):
+        person["rank"] = rank
+        person["best_score"] = person["avg_score"]
+
+    filtered_results = [r for r, _, u in all_results if get_or_create_person(u) is not None]
+    scored = [r for r in filtered_results if r.score is not None]
+
+    return success({
+        "stats": {
+            "total_trainees": len(participants),
+            "active_tests": len(active_tests),
+            "completed_tests": len(filtered_results),
+            "avg_score": round(sum(float(r.score) for r in scored) / len(scored), 1) if scored else None,
+            "high_performers": sum(1 for p in participants if (p["avg_score"] or 0) >= 70),
+            "malpractice_flags": sum(p["malpractice_count"] for p in participants)
+        },
+        "trainees": sorted(participants, key=lambda p: (p["tests_active"] == 0, p["name"].lower())),
+        "leaderboard": leaderboard,
+        "active_tests": active_tests,
+        "recent_results": sorted(recent_results, key=lambda r: r["submitted_at"] or "", reverse=True)[:12],
+    })
 
 
 @router.post("/start-session")
@@ -919,6 +1151,38 @@ class BulkAddToDraftRequest(BaseModel):
     assessment_id: int
     bank_item_ids: List[int]
 
+class BulkQuestionBankCreate(BaseModel):
+    questions: List[QuestionBankCreate]
+
+@router.post("/question-bank/bulk")
+async def create_bulk_bank_items(
+    body: BulkQuestionBankCreate,
+    current_user: User = Depends(require_role(["hr", "org_admin", "instructor"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add multiple questions to the organisation's question bank."""
+    items = []
+    for q in body.questions:
+        item = QuestionBankItem(
+            org_id=current_user.org_id,
+            question_text=q.question_text,
+            question_type=q.question_type,
+            options=q.options,
+            correct_answer=q.correct_answer,
+            model_answer=q.model_answer,
+            starter_code=q.starter_code,
+            test_cases=q.test_cases,
+            programming_language=q.programming_language,
+            marks=q.marks,
+            tags=q.tags or [],
+            images=q.images or [],
+            created_by=current_user.id,
+        )
+        db.add(item)
+        items.append(item)
+    await db.commit()
+    return success({"added": len(items)})
+
 
 @router.post("/question-bank")
 async def create_bank_item(
@@ -1152,6 +1416,7 @@ async def import_file_to_bank(
 class BankURLImportRequest(BaseModel):
     url: str
     tags: Optional[List[str]] = []
+    include_images: bool = False
 
 
 @router.post("/question-bank/import-url")
@@ -1177,7 +1442,20 @@ async def import_url_to_bank(
             # Remove scripts/styles
             for tag in soup(["script", "style", "nav", "footer", "header"]):
                 tag.decompose()
-            page_text = soup.get_text(separator="\n", strip=True)[:8000]
+                
+            if body.include_images:
+                for img in soup.find_all('img'):
+                    src = img.get('src')
+                    if src:
+                        if not src.startswith('http'):
+                            from urllib.parse import urljoin
+                            src = urljoin(body.url, src)
+                        img.replace_with(f"![image]({src})")
+            else:
+                for img in soup.find_all('img'):
+                    img.decompose()
+                    
+            page_text = soup.get_text(separator="\n", strip=True)[:100000]
 
         questions = await parse_questions_with_ai(page_text)
         if not questions:
@@ -1185,6 +1463,12 @@ async def import_url_to_bank(
 
         added = 0
         for q in questions:
+            if not body.include_images:
+                q['images'] = []
+                import re
+                if q.get('question_text'):
+                    q['question_text'] = re.sub(r'!\[.*?\]\(.*?\)', '', q['question_text'])
+                    
             item = QuestionBankItem(
                 org_id=current_user.org_id,
                 created_by=current_user.id,
@@ -1230,7 +1514,9 @@ async def my_assessments(
         "assessment_id": asmt.id,
         "title": asmt.title,
         "description": asmt.description,
+        "type": asmt.type.value if hasattr(asmt.type, 'value') else asmt.type,
         "time_limit_minutes": asmt.time_limit_minutes,
+        "sections": asmt.sections,
         "deadline": assgn.deadline.isoformat() if assgn.deadline else None,
         "status": assgn.status.value,
         "terminated_by_proctor": assgn.terminated_by_proctor,
@@ -1305,9 +1591,16 @@ def _normalize_compare_value(value) -> str:
     if not text:
         return ""
 
+    # Normalise boolean representations: 1/0/"1"/"0" ↔ true/false
+    lower = text.lower()
+    if lower in ("true", "1"):  return "true"
+    if lower in ("false", "0"): return "false"
+
     for parser in (json.loads, ast.literal_eval):
         try:
             parsed = parser(text)
+            if isinstance(parsed, bool):
+                return "true" if parsed else "false"
             return _compact_json(parsed) if not isinstance(parsed, str) else parsed.strip()
         except Exception:
             continue
@@ -1571,6 +1864,7 @@ def _cpp_print(t: str, var: str) -> str:
     t = t.strip()
     if "vector<vector" in t: return f"cout << __fmtVVI({var}) << endl;"
     if "vector" in t:        return f"cout << __fmtVI({var}) << endl;"
+    if t == "bool":          return f"cout << boolalpha << {var} << endl;"
     return f"cout << {var} << endl;"
 
 
@@ -1596,8 +1890,23 @@ def _wrap_cpp_solution(code: str) -> str:
 
     body = "\n".join(read_lines) + "\n" + run_block
 
-    return f"""#include <bits/stdc++.h>
+    return f"""#include <iostream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <sstream>
+#include <map>
+#include <unordered_map>
+#include <set>
+#include <unordered_set>
+#include <queue>
+#include <stack>
+#include <numeric>
+#include <climits>
+#include <cmath>
+#include <stdexcept>
 using namespace std;
+
 
 {code}
 
@@ -1622,8 +1931,8 @@ vector<vector<int>> __parseVecVecInt(string s) {{
     return r;
 }}
 string __parseStr(string s) {{
-    if(!s.empty() && (s.front()=='"' || s.front()=='\'')) s.erase(0, 1);
-    if(!s.empty() && (s.back()=='"' || s.back()=='\'')) s.pop_back();
+    if(!s.empty() && (s.front()=='"' || s.front()==char(39))) s.erase(0, 1);
+    if(!s.empty() && (s.back()=='"' || s.back()==char(39))) s.pop_back();
     return s;
 }}
 char __parseChar(string s) {{
@@ -1964,7 +2273,7 @@ async def _execute_locally(language: str, wrapped_code: str, stdin: str = ""):
                     cwd=temp_dir,
                     capture_output=True,
                     text=True,
-                    timeout=20,
+                    timeout=45,
                 )
             except subprocess.TimeoutExpired:
                 raise RuntimeError("Local compilation timed out")
@@ -1996,7 +2305,7 @@ async def _execute_locally(language: str, wrapped_code: str, stdin: str = ""):
                 input=stdin or "",
                 capture_output=True,
                 text=True,
-                timeout=20,
+                timeout=30,
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError("Local execution timed out")
@@ -2019,46 +2328,80 @@ async def _execute_locally(language: str, wrapped_code: str, stdin: str = ""):
 
 async def _execute_via_judge0(language: str, source_code: str, stdin: str = "") -> dict:
     """
-    Execute code via Judge0 CE public API (no API key required).
-    Uses submit→poll to avoid wait=true timeout issues with compiled languages.
+    Execute code via Judge0 CE public API.
+    Uses base64 encoding (required by ce.judge0.com) and submit→poll pattern.
     """
     import asyncio
     import httpx
+    import base64
 
+    # Language IDs for ce.judge0.com
     language_ids = {
-        "python": 71,
-        "javascript": 63,
-        "java": 62,
-        "cpp": 54,
+        "python": 71,      # Python 3 (3.8.1)
+        "javascript": 63,  # JavaScript (Node.js 12.14.0)
+        "java": 62,        # Java (OpenJDK 13.0.1)
+        "cpp": 54,         # C++ (GCC 9.2.0)
     }
     lang_id = language_ids.get(language)
     if not lang_id:
         raise RuntimeError(f"Language '{language}' is not supported by the remote execution engine.")
 
-    payload = {"language_id": lang_id, "source_code": source_code, "stdin": stdin or ""}
-    base = "https://ce.judge0.com"
+    def b64(s: str) -> str:
+        return base64.b64encode(s.encode("utf-8")).decode("utf-8")
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # 1. Submit
-        resp = await client.post(f"{base}/submissions?base64_encoded=false", json=payload, headers={"Content-Type": "application/json"})
-        resp.raise_for_status()
+    def b64dec(s) -> str:
+        if not s:
+            return ""
+        try:
+            return base64.b64decode(s).decode("utf-8", errors="replace")
+        except Exception:
+            return str(s)
+
+    payload = {
+        "language_id": lang_id,
+        "source_code": b64(source_code),
+        "stdin": b64(stdin or ""),
+    }
+    base = "https://ce.judge0.com"
+    headers = {"Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # 1. Submit (base64_encoded=true so Judge0 decodes our b64 payload)
+        resp = await client.post(
+            f"{base}/submissions?base64_encoded=true",
+            json=payload,
+            headers=headers,
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Judge0 submission failed ({resp.status_code}): {resp.text[:300]}"
+            )
         token = resp.json().get("token")
         if not token:
             raise RuntimeError("Judge0 did not return a submission token")
 
-        # 2. Poll until done (max 30s)
-        for _ in range(30):
+        # 2. Poll until done — response will also be base64 encoded
+        data = {}
+        for _ in range(40):
             await asyncio.sleep(1)
-            r = await client.get(f"{base}/submissions/{token}?base64_encoded=false", timeout=15.0)
+            r = await client.get(
+                f"{base}/submissions/{token}?base64_encoded=true",
+                timeout=15.0,
+            )
+            if r.status_code == 400:
+                # Token not ready yet on some Judge0 builds — keep polling
+                await asyncio.sleep(1)
+                continue
             r.raise_for_status()
             data = r.json()
             status_id = (data.get("status") or {}).get("id", 0)
             if status_id not in (1, 2):  # 1=In Queue, 2=Processing
                 break
 
-    stdout = data.get("stdout") or ""
-    stderr = data.get("stderr") or ""
-    compile_output = data.get("compile_output") or ""
+    status_id = (data.get("status") or {}).get("id", 0)
+    stdout = b64dec(data.get("stdout"))
+    stderr = b64dec(data.get("stderr"))
+    compile_output = b64dec(data.get("compile_output"))
     if compile_output:
         stderr = compile_output + ("\n" + stderr if stderr.strip() else "")
 
@@ -2075,40 +2418,106 @@ async def _execute_via_judge0(language: str, source_code: str, stdin: str = "") 
     }
 
 
+async def _execute_via_piston(language: str, source_code: str, stdin: str = "") -> dict:
+    """
+    Execute code via Piston API (https://emkc.org/api/v2/piston).
+    Free, no API key, supports C++/Java/Python/JS in 1-4 seconds.
+    """
+    import httpx
+
+    piston_lang_map = {
+        "python":     ("python",     "3.10.0"),
+        "javascript": ("javascript", "18.15.0"),
+        "java":       ("java",       "15.0.2"),
+        "cpp":        ("cpp",        "10.2.0"),
+    }
+    lang, version = piston_lang_map.get(language, (language, "*"))
+
+    payload = {
+        "language": lang,
+        "version": version,
+        "files": [{"content": source_code}],
+        "stdin": stdin or "",
+        "compile_timeout": 30000,
+        "run_timeout": 10000,
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            "https://emkc.org/api/v2/piston/execute",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    run_info     = data.get("run",     {}) or {}
+    compile_info = data.get("compile", {}) or {}
+
+    compile_err = (compile_info.get("stderr") or "") + (compile_info.get("output") or "")
+    if compile_info and compile_info.get("code", 0) != 0:
+        return {
+            "language": language,
+            "version":  data.get("version", version),
+            "compile":  compile_info,
+            "run": {
+                "stdout": "",
+                "stderr": compile_err.strip(),
+                "output": compile_err.strip(),
+                "code":   compile_info.get("code", 1),
+                "signal": None,
+            },
+        }
+
+    run_stdout = run_info.get("stdout") or ""
+    run_stderr = run_info.get("stderr") or ""
+    return {
+        "language": language,
+        "version":  data.get("version", version),
+        **({"compile": compile_info} if compile_info else {}),
+        "run": {
+            "stdout": run_stdout,
+            "stderr": run_stderr,
+            "output": run_info.get("output") or (run_stdout + run_stderr),
+            "code":   run_info.get("code", 0),
+            "signal": run_info.get("signal"),
+        },
+    }
+
+
 async def _execute_code(language: str, wrapped_code: str, stdin: str = "") -> dict:
     """
-    Smart execution router:
-      - Python  → local subprocess (fast, always available)
-      - JS      → try local node first, fall back to Judge0
-      - Java/C++→ Judge0 CE (no local compilers required)
+    Execution router:
+      - Python     - local subprocess (fast), fall back to Piston
+      - JavaScript - try local Node first, fall back to Piston
+      - C++ / Java - Piston first (skips 45s local g++ timeout), local as last resort
     """
     if language == "python":
         try:
             return await _execute_locally(language, wrapped_code, stdin)
         except Exception as local_exc:
-            logger.warning("Local Python execution failed (%s). Trying Judge0...", local_exc)
-            return await _execute_via_judge0(language, wrapped_code, stdin)
+            logger.warning("Local Python failed (%s). Trying Piston...", local_exc)
+            return await _execute_via_piston(language, wrapped_code, stdin)
 
     if language == "javascript":
         try:
             return await _execute_locally(language, wrapped_code, stdin)
         except Exception as local_exc:
-            logger.warning("Local JS execution failed (%s). Trying Judge0...", local_exc)
-            return await _execute_via_judge0(language, wrapped_code, stdin)
+            logger.warning("Local JS failed (%s). Trying Piston...", local_exc)
+            return await _execute_via_piston(language, wrapped_code, stdin)
 
-    # Java / C++ — go straight to Judge0 (no local compiler assumed)
+    # C++ / Java: Piston first, local as fallback
     try:
-        return await _execute_via_judge0(language, wrapped_code, stdin)
-    except Exception as judge0_exc:
-        logger.warning("Judge0 failed for %s (%s). Trying local...", language, judge0_exc)
+        return await _execute_via_piston(language, wrapped_code, stdin)
+    except Exception as piston_exc:
+        logger.warning("Piston %s failed (%s). Trying local...", language, piston_exc)
         try:
             return await _execute_locally(language, wrapped_code, stdin)
         except Exception as local_exc:
             raise RuntimeError(
                 f"All execution engines failed for {language}. "
-                f"Remote: {judge0_exc}. Local: {local_exc}"
+                f"Piston: {piston_exc}. Local: {local_exc}"
             )
-
 
 async def _run_test_cases(language: str, code: str, test_cases: list):
     test_cases = _prepare_test_cases(test_cases)
@@ -2566,14 +2975,48 @@ async def get_result(
     )
     appeal_query = appeal_res.scalars().first()
 
+    # Fetch questions (try customized assignment questions first to preserve shuffle order)
+    assgn_res = await db.execute(
+        select(AssessmentAssignment).where(
+            AssessmentAssignment.assessment_id == res.assessment_id,
+            AssessmentAssignment.user_id == res.user_id
+        )
+    )
+    assgn = assgn_res.scalar_one_or_none()
+    
     is_hr = current_user.role.value in ["hr", "org_admin", "manager"]
     fb = json.loads(res.feedback) if res.feedback and res.feedback.startswith("{") else {}
     is_released = fb.get("_is_released", True) if isinstance(fb, dict) else True
 
+    if assgn and assgn.custom_questions:
+        formatted_questions = []
+        for cq in assgn.custom_questions:
+            formatted_q = {**cq}
+            if not is_hr and not is_released:
+                formatted_q.pop("correct_answer", None)
+                formatted_q.pop("model_answer", None)
+            formatted_questions.append(formatted_q)
+    else:
+        q_result = await db.execute(
+            select(AssessmentQuestion)
+            .where(AssessmentQuestion.assessment_id == asmt.id)
+            .order_by(AssessmentQuestion.order_index)
+        )
+        questions = q_result.scalars().all()
+        formatted_questions = [{
+            "id": q.id, "question_text": q.question_text, "question_type": q.question_type.value if hasattr(q.question_type, 'value') else q.question_type,
+            "options": q.options, "marks": float(q.marks), "skill_id": q.skill_id,
+            "starter_code": q.starter_code, "test_cases": q.test_cases, "programming_language": q.programming_language,
+            "order_index": q.order_index,
+            "images": q.images or [],
+            "tags": q.tags or [],
+            **({} if (not is_hr and not is_released) else {"correct_answer": q.correct_answer, "model_answer": q.model_answer}),
+        } for q in questions]
+
     if not is_hr and not is_released:
         return success({
             "result_id": res.id,
-            "assessment": {"id": asmt.id, "title": asmt.title, "pass_score": float(asmt.pass_score)},
+            "assessment": {"id": asmt.id, "title": asmt.title, "pass_score": float(asmt.pass_score), "sections": asmt.sections or [], "questions": formatted_questions},
             "score": None,
             "pass_status": None,
             "feedback": {"summary": "Result is pending manual review."},
@@ -2585,14 +3028,16 @@ async def get_result(
             "is_released": False,
             "user_id": res.user_id,
             "appeal_query": serialize_assessment_query(appeal_query) if appeal_query else None,
+            "answers": {},
         })
 
     return success({
         "result_id": res.id,
-        "assessment": {"id": asmt.id, "title": asmt.title, "pass_score": float(asmt.pass_score)},
+        "assessment": {"id": asmt.id, "title": asmt.title, "pass_score": float(asmt.pass_score), "sections": asmt.sections or [], "questions": formatted_questions},
         "score": float(res.score) if res.score is not None else None,
         "pass_status": res.pass_status,
         "feedback": fb,
+        "answers": res.answers,
         "scores_per_question": res.scores_per_question,
         "time_taken_seconds": res.time_taken_seconds,
         "submitted_at": res.submitted_at.isoformat() if res.submitted_at else None,

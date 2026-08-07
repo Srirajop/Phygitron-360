@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 import random
 import httpx
 
-def call_groq(system_prompt: str, user_prompt: str) -> dict:
+def call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> dict:
     """Call Groq API via the groq library and return parsed JSON."""
     from groq import Groq
     import re
@@ -22,7 +22,7 @@ def call_groq(system_prompt: str, user_prompt: str) -> dict:
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.1,
-        max_tokens=4096,
+        max_tokens=max_tokens,
         response_format={"type": "json_object"},
     )
     content = response.choices[0].message.content.strip()
@@ -41,14 +41,14 @@ def call_groq(system_prompt: str, user_prompt: str) -> dict:
     return json.loads(content.strip())
 
 
-def call_llm(system_prompt: str, user_prompt: str) -> dict:
+def call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> dict:
     """Call Groq API."""
     engines = [call_groq]
     
     last_exception = None
     for engine in engines:
         try:
-            return engine(system_prompt, user_prompt)
+            return engine(system_prompt, user_prompt, max_tokens=max_tokens)
         except Exception as e:
             last_exception = e
             logger.warning(f"LLM Engine {engine.__name__} failed: {str(e)[:200]}. Trying next...")

@@ -79,6 +79,150 @@ function starterForLanguage(language, existingStarter = '') {
   return '';
 }
 
+// ── Section Complete Overlay ───────────────────────────────────────────────────
+// Shown when a section's time limit expires. Auto-advances after 3 s.
+function SectionCompleteOverlay({ sections, currentSectionIndex, isFinalSection, onAdvance }) {
+  const [countdown, setCountdown] = React.useState(3);
+  const currentSection = sections[currentSectionIndex];
+  const nextSection = !isFinalSection ? sections[currentSectionIndex + 1] : null;
+
+  React.useEffect(() => {
+    if (countdown <= 0) { onAdvance(); return; }
+    const t = setTimeout(() => setCountdown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [countdown]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 9998,
+      background: 'linear-gradient(135deg, #0f0c29 0%, #1a1a2e 50%, #16213e 100%)',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      textAlign: 'center', padding: 32,
+    }}>
+      {/* Pulse ring */}
+      <div style={{ position: 'relative', marginBottom: 32 }}>
+        <div style={{
+          width: 100, height: 100, borderRadius: '50%',
+          background: 'linear-gradient(135deg, #10b981, #059669)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 0 60px rgba(16,185,129,0.35)',
+          animation: 'pulse 2s infinite',
+        }}>
+          <span style={{ fontSize: '2.5rem' }}>✓</span>
+        </div>
+      </div>
+
+      <div style={{ color: '#6EE7B7', fontWeight: 700, fontSize: '0.85rem', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>
+        Section Complete
+      </div>
+      <h2 style={{ fontSize: '2rem', color: '#fff', fontWeight: 800, marginBottom: 8 }}>
+        {currentSection?.title}
+      </h2>
+      <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.95rem', marginBottom: 40, maxWidth: 420, lineHeight: 1.7 }}>
+        {isFinalSection
+          ? 'You have completed all sections. Your assessment will be submitted automatically.'
+          : <>Great work! Time for this section has ended. You will now move on to <strong style={{ color: '#A78BFA' }}>{nextSection?.title}</strong>.</>}
+      </p>
+
+      {/* Up next card */}
+      {!isFinalSection && nextSection && (
+        <div style={{
+          background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: 14, padding: '16px 28px', marginBottom: 36,
+          display: 'flex', alignItems: 'center', gap: 16,
+        }}>
+          <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(124,58,237,0.25)', border: '1px solid rgba(124,58,237,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: '#A78BFA' }}>
+            {currentSectionIndex + 2}
+          </div>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem' }}>{nextSection.title}</div>
+            {nextSection.time_limit_minutes && (
+              <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.8rem', marginTop: 2 }}>
+                ⏱ {nextSection.time_limit_minutes} minute{nextSection.time_limit_minutes !== 1 ? 's' : ''} time limit
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Countdown */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+        <div style={{
+          width: 64, height: 64, borderRadius: '50%',
+          border: '3px solid rgba(124,58,237,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontWeight: 900, fontSize: '1.6rem', color: '#A78BFA',
+          background: 'rgba(124,58,237,0.1)',
+        }}>
+          {countdown}
+        </div>
+        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem' }}>
+          {isFinalSection ? 'Submitting' : 'Continuing'} in {countdown}s…
+        </div>
+        <button
+          className="btn btn-primary"
+          style={{ marginTop: 8, padding: '10px 28px', fontWeight: 700 }}
+          onClick={onAdvance}
+        >
+          {isFinalSection ? 'Submit Now →' : `Continue to ${nextSection?.title} →`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Section Locked Banner ─────────────────────────────────────────────────────
+// Inline info banner shown when a candidate tries to move to the next section
+// before the current section's time has expired.
+function SectionLockedBanner({ sectionTitle, sectionTimeLeft, formatTime, onClose }) {
+  React.useEffect(() => {
+    const t = setTimeout(onClose, 5000);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 14,
+      background: 'linear-gradient(135deg, #FFFBEB, #FEF3C7)',
+      border: '1.5px solid #F59E0B',
+      borderRadius: 14, padding: '16px 20px',
+      marginBottom: 20,
+      boxShadow: '0 4px 20px rgba(245,158,11,0.15)',
+      animation: 'fadeIn 0.25s ease',
+    }}>
+      <div style={{
+        width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
+        background: 'rgba(245,158,11,0.15)', border: '2px solid #F59E0B',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem',
+      }}>
+        🔒
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#92400E', marginBottom: 4 }}>
+          Section Locked — Time Remaining
+        </div>
+        <div style={{ fontSize: '0.85rem', color: '#78350F', lineHeight: 1.6 }}>
+          <strong>{sectionTitle}</strong> has a time limit. You cannot move to the next section until the timer reaches zero.
+          <br />
+          <span style={{ fontFamily: 'monospace', fontWeight: 800, fontSize: '1rem', color: '#B45309', marginTop: 4, display: 'inline-block' }}>
+            ⏱ {formatTime(sectionTimeLeft)} remaining
+          </span>
+        </div>
+        <div style={{ fontSize: '0.78rem', color: '#A16207', marginTop: 6 }}>
+          Use this time to review your answers or revisit any questions you skipped.
+        </div>
+      </div>
+      <button
+        onClick={onClose}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#B45309', fontSize: '1.1rem', padding: 4, flexShrink: 0 }}
+        title="Dismiss"
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function AssessmentTaker() {
   const { id } = useParams();
@@ -93,12 +237,40 @@ export default function AssessmentTaker() {
     };
   }, [assessment]);
   const [answers, setAnswers] = useState({});
+  const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
+
+  const sections = React.useMemo(() => {
+    if (!assessment?.sections || assessment.sections.length === 0) return [];
+    const definedSections = assessment.sections;
+    const hasUncategorized = assessment.questions.some(q => !q.section_id);
+    if (hasUncategorized) {
+      return [...definedSections, { id: 'uncategorized', title: 'General Questions', time_limit_minutes: null }];
+    }
+    return definedSections;
+  }, [assessment]);
+  const currentSection = sections.length > 0 ? sections[currentSectionIndex] : null;
+
+  const sectionQuestions = React.useMemo(() => {
+    if (!assessment) return [];
+    if (sections.length === 0) return assessment.questions.map((q, i) => ({ ...q, originalIndex: i }));
+    return assessment.questions
+      .map((q, i) => ({ ...q, originalIndex: i }))
+      .filter(q => {
+        if (currentSection?.id === 'uncategorized') return !q.section_id;
+        return q.section_id === currentSection?.id;
+      });
+  }, [assessment, sections, currentSection]);
+
   const [currentQ, setCurrentQ] = useState(0);
   const [timeLeft, setTimeLeft] = useState(null);
+  const [sectionTimeLeft, setSectionTimeLeft] = useState(null);
+  const [sectionComplete, setSectionComplete] = useState(false); // drives the transition banner
+  const [sectionLockedMsg, setSectionLockedMsg] = useState(false); // inline "time not up yet" banner
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [fileUploading, setFileUploading] = useState({});
   const [consoleTab, setConsoleTab] = useState('testcase');
+  const [runningCode, setRunningCode] = useState(false);
   const [selectedCase, setSelectedCase] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -141,6 +313,9 @@ export default function AssessmentTaker() {
   const lastStrikeTime = useRef(0);
   const violationCooldownsRef = useRef({});
   const faceDetectorRef = useRef(null);
+  // Guard: prevents the section timer from double-firing when currentSectionIndex
+  // updates and sectionTimeLeft is still 0 on the same render cycle.
+  const sectionTransitioningRef = useRef(false);
   const MAX_STRIKES = 5;
   const PROCTORING_START_GRACE_MS = 8000;
 
@@ -185,7 +360,7 @@ export default function AssessmentTaker() {
     }).finally(() => setLoading(false));
   }, [id, nav]);
 
-  // Timer — ONLY ticks when the candidate has actually started (entered fullscreen).
+  // Global Timer — ONLY ticks when the candidate has actually started (entered fullscreen).
   // This prevents the pre-start gate from silently consuming time on reload.
   useEffect(() => {
     if (!hasStarted) return;   // ← KEY GUARD: no ticking until user clicks Start
@@ -194,6 +369,52 @@ export default function AssessmentTaker() {
     const t = setTimeout(() => setTimeLeft(s => s - 1), 1000);
     return () => clearTimeout(t);
   }, [timeLeft, hasStarted]);
+
+  // Section Timer — ticks down the section-specific time limit.
+  // IMPORTANT: currentSectionIndex and sections.length are intentionally NOT in the
+  // dependency array here. Adding them caused the effect to re-run the moment
+  // setCurrentSectionIndex was called (index changed but sectionTimeLeft was still 0),
+  // which made it double-fire and skip the next section. We use sectionTransitioningRef
+  // as a one-shot guard instead.
+  useEffect(() => {
+    if (!hasStarted || sectionTimeLeft === null) return;
+    if (sectionTimeLeft <= 0) {
+      // Already handling this transition — bail out immediately
+      if (sectionTransitioningRef.current) return;
+      sectionTransitioningRef.current = true;
+
+      // Grab the section index synchronously via the state updater to avoid stale closure
+      setCurrentSectionIndex(prev => {
+        const nextIdx = prev + 1;
+        if (nextIdx < sections.length) {
+          // Show the section-complete banner; actual navigation happens inside it
+          setSectionComplete(true);
+        } else {
+          // Final section — submit
+          setSectionComplete(true);
+        }
+        return prev; // don't change index yet — the banner handles it
+      });
+      return;
+    }
+    const t = setTimeout(() => setSectionTimeLeft(s => s - 1), 1000);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionTimeLeft, hasStarted]);
+
+  // Set sectionTimeLeft when section changes (also resets the transition guard)
+  useEffect(() => {
+    sectionTransitioningRef.current = false;
+    setSectionComplete(false);
+    if (sections.length > 0 && currentSectionIndex < sections.length) {
+      const section = sections[currentSectionIndex];
+      if (section.time_limit_minutes) {
+        setSectionTimeLeft(section.time_limit_minutes * 60);
+      } else {
+        setSectionTimeLeft(null);
+      }
+    }
+  }, [currentSectionIndex, sections]);
 
   // Webcam & Audio proctoring
   useEffect(() => {
@@ -512,14 +733,14 @@ export default function AssessmentTaker() {
         try {
           const faces = await faceDetectorRef.current.detect(vid);
           const frameArea = (vid.videoWidth || 1) * (vid.videoHeight || 1);
-          // Minimum face area raised to 3 % of frame (was 0.6 %).
-          // At 0.6 % a blurry poster, a reflection, or a distant face in the
-          // background would count. At 3 % the face must be close and prominent
-          // — a real person in the same room in front of the camera.
+
+          // Min face area = 5% of frame (raised from 3%).
+          // At 5% a face must be close and prominent. Distant background people,
+          // reflections in glasses, posters, and phone screens are excluded.
           const sigFaces = faces.filter(f => {
             const box = f.boundingBox;
             if (!box) return false;
-            return (box.width * box.height) / frameArea >= 0.030;
+            return (box.width * box.height) / frameArea >= 0.050;
           });
 
           if (sigFaces.length >= 1) {
@@ -535,16 +756,27 @@ export default function AssessmentTaker() {
           }
 
           if (sigFaces.length >= 2 && proctoringConfig.multiple_people) {
-            // Sustained 5 s before flagging (was 2 s).
-            // Someone briefly walking past or a transient reflection won't accumulate
-            // 5 full seconds of detections sampled every 1.8 s.
-            if (!multipleFacesTimerRef.current) multipleFacesTimerRef.current = Date.now();
-            else if (Date.now() - multipleFacesTimerRef.current > 5000) {
-              handleCheatAttemptRef.current?.(`Multiple People in Camera (${sigFaces.length} faces)`, 'proctoring_violation', 45000);
-              multipleFacesTimerRef.current = null;
+            // Require 10 continuous seconds of detections (≈5 samples at 1.8s interval)
+            // before flagging. A single bad frame or glitch never accumulates this.
+            if (!multipleFacesTimerRef.current) {
+              multipleFacesTimerRef.current = Date.now();
+              multipleFacesTimerRef._count = 1;
+            } else {
+              multipleFacesTimerRef._count = (multipleFacesTimerRef._count || 0) + 1;
+              // Must be sustained for 10 s AND seen in at least 4 consecutive samples
+              if (
+                Date.now() - multipleFacesTimerRef.current > 10000 &&
+                multipleFacesTimerRef._count >= 4
+              ) {
+                handleCheatAttemptRef.current?.(`Multiple People in Camera (${sigFaces.length} faces)`, 'proctoring_violation', 60000);
+                multipleFacesTimerRef.current = null;
+                multipleFacesTimerRef._count = 0;
+              }
             }
           } else {
+            // Reset as soon as we drop below 2 faces
             multipleFacesTimerRef.current = null;
+            multipleFacesTimerRef._count = 0;
           }
           return; // FaceDetector handled — skip pixel heuristics
         } catch (_) { /* fall through */ }
@@ -570,13 +802,17 @@ export default function AssessmentTaker() {
         motionViolationTimer.current = null;
       }
 
-      // ── Multiple people: tuned histogram peak detection (pixel-heuristic fallback) ──
+      // ── Multiple people: histogram peak detection (pixel-heuristic fallback) ──
+      // NOTE: This path only runs when the browser's native FaceDetector API is
+      // unavailable. It is intentionally conservative to avoid false positives.
       const smoothed = [...skinHistogram];
       for (let x = 2; x < W - 2; x++) {
         smoothed[x] = (skinHistogram[x-2] + skinHistogram[x-1] + skinHistogram[x] + skinHistogram[x+1] + skinHistogram[x+2]) / 5;
       }
 
-      const peakThreshold = faceZoneH * 0.15; // lowered to catch less prominent faces
+      // Raised from 0.15 → 0.35: each column must have many skin pixels to count
+      // as a "face blob". Shoulders, arms, hair at the edge of frame won't qualify.
+      const peakThreshold = faceZoneH * 0.35;
       const peaks = [];
       let inPeak = false, pkStart = 0;
       for (let x = 0; x < W; x++) {
@@ -589,30 +825,34 @@ export default function AssessmentTaker() {
       }
       if (inPeak) peaks.push({ start: pkStart, end: W, width: W - pkStart });
 
-      // Identify peaks that look like faces
-      const MIN_PEAK_W = 15; // smaller faces accepted
-      const MAX_PEAK_W = 90; // larger max width in case they stand close together
+      // A face at 160px canvas is typically 25-70px wide.
+      // MIN_PEAK_W raised from 15→28 (eliminates narrow shoulder/hair blobs).
+      // MAX_PEAK_W lowered from 90→75 (a single face won't exceed 75px at 160px canvas).
+      const MIN_PEAK_W = 28;
+      const MAX_PEAK_W = 75;
       const facePeaks = peaks.filter(p => p.width >= MIN_PEAK_W && p.width <= MAX_PEAK_W);
 
       let multipleDetected = false;
-      // Condition A: Two distinct peaks with a small gap
-      const MIN_GAP_PX = 15; // relaxed gap
+      // Two distinct face-sized peaks with a meaningful gap between them.
+      // MIN_GAP_PX raised from 15→35: a real gap between two separate people's
+      // faces at webcam distances. A single face with highlight/shadow variation
+      // splits into blobs only a few pixels apart — those are now ignored.
+      const MIN_GAP_PX = 35;
       for (let i = 0; i < facePeaks.length - 1; i++) {
         if (facePeaks[i + 1].start - facePeaks[i].end >= MIN_GAP_PX) {
           multipleDetected = true;
           break;
         }
       }
-      
-      // Condition B: A single massive blob (two faces merged) that isn't the whole screen
-      if (peaks.some(p => p.width >= 90 && p.width < 140)) {
-        multipleDetected = true;
-      }
+      // Condition B (merged-faces blob) removed — it was the primary source of
+      // false positives because one person's face+hair+shoulders easily spans 90px.
 
-      if (multipleDetected && avgBright > 16 && overallRatio > 0.05 && proctoringConfig.multiple_people) {
+      // Additional guards: room must be well-lit AND significant skin area present.
+      // overallRatio guard raised from 0.05→0.12 so a faint blob doesn't count.
+      if (multipleDetected && avgBright > 20 && overallRatio > 0.12 && proctoringConfig.multiple_people) {
         if (!backgroundMovementTimer.current) backgroundMovementTimer.current = Date.now();
-        else if (Date.now() - backgroundMovementTimer.current > 6000) {
-          handleCheatAttemptRef.current?.('Multiple People Detected in Camera', 'proctoring_violation', 45000);
+        else if (Date.now() - backgroundMovementTimer.current > 10000) {
+          handleCheatAttemptRef.current?.('Multiple People Detected in Camera', 'proctoring_violation', 60000);
           backgroundMovementTimer.current = null;
         }
       } else {
@@ -815,9 +1055,35 @@ export default function AssessmentTaker() {
               {(proctoringConfig.full_screen || proctoringConfig.multiple_people || proctoringConfig.face_not_visible || proctoringConfig.audio_detect || proctoringConfig.tab_switch) && (
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>⚠️</span> {MAX_STRIKES} violations = automatic termination</div>
               )}
-              {assessment.time_limit_minutes && <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>⏱️</span> Time limit: <strong>{assessment.time_limit_minutes} minutes</strong></div>}
+              {assessment.time_limit_minutes && <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>⏱️</span> Total time: <strong>{assessment.time_limit_minutes} minutes</strong></div>}
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>📝</span> {(assessment.questions || []).length} questions</div>
             </div>
+            {/* Section breakdown */}
+            {sections.length > 0 && (
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(255,255,255,0.5)', marginBottom: 10 }}>
+                  Assessment Sections
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {sections.filter(s => s.id !== 'uncategorized').map((sec, idx) => {
+                    const secQCount = (assessment.questions || []).filter(q => q.section_id === sec.id).length;
+                    return (
+                      <div key={sec.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, fontSize: '0.85rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(124,58,237,0.3)', border: '1px solid rgba(124,58,237,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 700 }}>{idx + 1}</div>
+                          <span style={{ color: 'rgba(255,255,255,0.9)', fontWeight: 500 }}>{sec.title}</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>
+                          {secQCount > 0 && <span>{secQCount} Q</span>}
+                          {sec.time_limit_minutes && <span style={{ color: '#A78BFA' }}>⏱ {sec.time_limit_minutes} min</span>}
+                          {sec.time_limit_minutes && <span style={{ background: 'rgba(239,68,68,0.2)', color: '#fca5a5', padding: '1px 6px', borderRadius: 4, fontSize: '0.7rem' }}>🔒 Locked</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           <button
             className="btn btn-primary btn-lg btn-block"
@@ -840,7 +1106,8 @@ export default function AssessmentTaker() {
     );
   }
 
-  const questions = assessment.questions || [];
+
+  const questions = sectionQuestions; // Alias for compatibility with rest of file
   const q = questions[currentQ];
 
   // Parse test cases from string if needed
@@ -854,8 +1121,10 @@ export default function AssessmentTaker() {
 
   const codingState = q?.question_type === 'coding' ? getCodingAnswerState(answers[q.id], q) : null;
   const answered = Object.keys(answers).length;
-  const isLast = currentQ === questions.length - 1;
+  const isLastQuestionInSection = currentQ === questions.length - 1;
+  const isLastSection = sections.length === 0 || currentSectionIndex === sections.length - 1;
   const timerClass = timeLeft === null ? '' : timeLeft < 60 ? 'danger' : timeLeft < 300 ? 'warning' : '';
+  const sectionTimerClass = sectionTimeLeft === null ? '' : sectionTimeLeft < 60 ? 'danger' : sectionTimeLeft < 300 ? 'warning' : '';
   const formatTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
   return (
@@ -890,6 +1159,26 @@ export default function AssessmentTaker() {
 
       <div className="page-bg" />
 
+      {/* ── Section Complete Overlay ──────────────────────────────────────────
+          Shows when a section's time expires. Gives the candidate a 3-second
+          countdown before advancing, so it never feels abrupt or buggy.      */}
+      {sectionComplete && (
+        <SectionCompleteOverlay
+          sections={sections}
+          currentSectionIndex={currentSectionIndex}
+          isFinalSection={currentSectionIndex === sections.length - 1}
+          onAdvance={() => {
+            setSectionComplete(false);
+            if (currentSectionIndex < sections.length - 1) {
+              setCurrentSectionIndex(i => i + 1);
+              setCurrentQ(0);
+            } else {
+              handleSubmit(false);
+            }
+          }}
+        />
+      )}
+
       {/* ── Top Bar ────────────────────────────────────────────────────────── */}
       <div style={{ background: 'white', borderBottom: '1px solid var(--border)', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 64, position: 'sticky', top: 0, zIndex: 50 }}>
         <div>
@@ -900,12 +1189,89 @@ export default function AssessmentTaker() {
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 999, background: strikeCount > 0 ? '#FEF2F2' : '#F1F5F9', color: strikeCount > 0 ? '#B91C1C' : '#475569', fontSize: '0.78rem', fontWeight: 700 }}>
             <AlertTriangle size={14} /> Strikes {strikeCount}/{MAX_STRIKES}
           </span>
-          {timeLeft !== null && <div className={`timer ${timerClass}`}><Clock size={16} /> {formatTime(timeLeft)}</div>}
+          {sectionTimeLeft !== null && (
+            <div className={`timer ${sectionTimerClass}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.1, padding: '4px 12px' }}>
+              <div style={{ fontSize: '0.9rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}><Clock size={14} /> {formatTime(sectionTimeLeft)}</div>
+              <div style={{ fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Section</div>
+            </div>
+          )}
+          {timeLeft !== null && (
+            <div className={`timer ${timerClass}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.1, padding: '4px 12px' }}>
+              <div style={{ fontSize: '0.9rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}><Clock size={14} /> {formatTime(timeLeft)}</div>
+              <div style={{ fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total</div>
+            </div>
+          )}
         </div>
-        <button className="btn btn-primary" onClick={() => handleSubmit(false)} disabled={submitting}><Send size={15} /> {submitting ? 'Submitting…' : 'Submit'}</button>
+        <button className="btn btn-primary" onClick={() => {
+          if (currentSection?.time_limit_minutes && sectionTimeLeft > 0) {
+            setSectionLockedMsg(true);
+            return;
+          }
+          handleSubmit(false);
+        }} disabled={submitting}><Send size={15} /> {submitting ? 'Submitting…' : 'Submit'}</button>
       </div>
 
       <div style={{ maxWidth: q?.question_type === 'coding' ? 1400 : 860, width: '100%', margin: '0 auto', padding: q?.question_type === 'coding' ? '24px' : '32px 24px', transition: 'max-width 0.3s ease' }}>
+        {sections.length > 0 && (
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 24, flexWrap: 'wrap', alignItems: 'center' }}>
+            {sections.map((sec, idx) => {
+              const isDone = idx < currentSectionIndex;
+              const isActive = idx === currentSectionIndex;
+              const isFuture = idx > currentSectionIndex;
+              // Level 2: no timers → all pills are freely clickable
+              // Level 3: timer on current section → future pills trigger lock banner
+              const isFreeSwitchable = !sec.time_limit_minutes && !currentSection?.time_limit_minutes;
+              const isClickable = !isActive && (isDone || isFreeSwitchable);
+              return (
+                <div
+                  key={sec.id}
+                  onClick={() => {
+                    if (isActive) return;
+                    if (isFreeSwitchable) {
+                      // Level 2 — jump directly to clicked section
+                      setCurrentSectionIndex(idx);
+                      setCurrentQ(0);
+                    } else if (isFuture && currentSection?.time_limit_minutes && sectionTimeLeft > 0) {
+                      // Level 3 — section is time-locked
+                      setSectionLockedMsg(true);
+                    }
+                  }}
+                  style={{
+                    padding: '6px 16px',
+                    borderRadius: 20,
+                    fontSize: '0.85rem',
+                    fontWeight: isActive ? 700 : 500,
+                    background: isActive ? 'var(--primary)' : isDone ? 'var(--success)' : 'var(--bg-card)',
+                    color: isActive ? '#fff' : isDone ? '#fff' : 'var(--text-muted)',
+                    border: isActive ? 'none' : isDone ? 'none' : '1px solid var(--border)',
+                    opacity: isFuture && !isFreeSwitchable ? 0.55 : 1,
+                    boxShadow: isActive ? '0 4px 12px rgba(124, 58, 237, 0.25)' : 'none',
+                    display: 'flex', alignItems: 'center', gap: 7,
+                    transition: 'all 0.2s ease',
+                    cursor: isClickable ? 'pointer' : 'default',
+                    userSelect: 'none',
+                    transform: isClickable ? undefined : undefined,
+                  }}
+                  onMouseEnter={e => { if (isClickable) e.currentTarget.style.transform = 'scale(1.04)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+                >
+                  <div style={{
+                    width: 20, height: 20, borderRadius: '50%',
+                    background: isActive ? 'rgba(255,255,255,0.2)' : isDone ? 'rgba(255,255,255,0.25)' : 'var(--bg-page)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.68rem', fontWeight: 800
+                  }}>
+                    {isDone ? '✓' : isFuture && sec.time_limit_minutes ? '🔒' : idx + 1}
+                  </div>
+                  {sec.title}
+                  {sec.time_limit_minutes && isActive && sectionTimeLeft !== null && (
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, opacity: 0.8 }}>· {Math.ceil(sectionTimeLeft / 60)}m left</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Progress bar */}
         <div className="progress-bar" style={{ marginBottom: 24 }}>
           <div className="progress-fill" style={{ width: `${(answered / questions.length) * 100}%` }} />
@@ -1146,10 +1512,14 @@ export default function AssessmentTaker() {
                           }
                         } catch (e) {
                           toast.error(e?.response?.data?.detail || e?.message || 'Execution failed', { id: 'run-code', duration: 5000 });
+                        } finally {
+                          setRunningCode(false);
                         }
                       }}
                     >
-                      <Play size={12} fill="currentColor" /> Run Code
+                      {runningCode 
+                        ? <><div className="spinner" style={{ width: 10, height: 10, borderWidth: 2 }} /> Running…</>
+                        : <><Play size={12} fill="currentColor" /> Run Code</>}
                     </button>
                   </div>
 
@@ -1296,18 +1666,58 @@ export default function AssessmentTaker() {
           </div>
         )}
 
+        {/* Section Locked Banner — shown when candidate tries to leave before time is up */}
+        {sectionLockedMsg && currentSection?.time_limit_minutes && sectionTimeLeft > 0 && (
+          <SectionLockedBanner
+            sectionTitle={currentSection.title}
+            sectionTimeLeft={sectionTimeLeft}
+            formatTime={formatTime}
+            onClose={() => setSectionLockedMsg(false)}
+          />
+        )}
+
         {/* Navigation */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 24 }}>
           <button className="btn btn-secondary" onClick={() => setCurrentQ(q => q - 1)} disabled={currentQ === 0}><ChevronLeft size={16} /> Previous</button>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-            {questions.map((qItem, i) => (
-              <button key={i} onClick={() => setCurrentQ(i)} style={{ width: 36, height: 36, borderRadius: '50%', border: `2px solid ${i === currentQ ? 'var(--primary)' : answers[qItem.id] ? 'var(--success)' : 'var(--border)'}`, background: i === currentQ ? 'var(--primary)' : answers[qItem.id] ? '#DCFCE7' : 'white', color: i === currentQ ? 'white' : answers[qItem.id] ? 'var(--success)' : 'var(--text-muted)', fontWeight: 700, cursor: 'pointer', fontSize: '0.8rem', transition: 'var(--transition)' }}>
-                {i + 1}
-              </button>
-            ))}
+            {questions.map((qItem, i) => {
+              const isAnswered = !!answers[qItem.id];
+              const isCurrent = i === currentQ;
+              return (
+                <button
+                  key={i}
+                  onClick={() => setCurrentQ(i)}
+                  style={{
+                    width: 36, height: 36, borderRadius: '50%',
+                    border: `2px solid ${isCurrent ? 'var(--primary)' : isAnswered ? 'var(--success)' : 'var(--border)'}`,
+                    background: isCurrent ? 'var(--primary)' : isAnswered ? '#DCFCE7' : 'white',
+                    color: isCurrent ? 'white' : isAnswered ? 'var(--success)' : 'var(--text-muted)',
+                    fontWeight: 700, cursor: 'pointer', fontSize: '0.8rem', transition: 'var(--transition)',
+                  }}
+                >
+                  {i + 1}
+                </button>
+              );
+            })}
           </div>
-          {isLast
-            ? <button className="btn btn-primary" onClick={() => handleSubmit(false)} disabled={submitting}><Send size={15} /> Submit</button>
+          {isLastQuestionInSection
+            ? (isLastSection
+                ? <button className="btn btn-primary" onClick={() => {
+                    if (currentSection?.time_limit_minutes && sectionTimeLeft > 0) {
+                      setSectionLockedMsg(true);
+                      return;
+                    }
+                    handleSubmit(false);
+                  }} disabled={submitting}><Send size={15} /> Submit Assessment</button>
+                : <button className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => {
+                    if (currentSection?.time_limit_minutes && sectionTimeLeft > 0) {
+                      setSectionLockedMsg(true);
+                      return;
+                    }
+                    setCurrentSectionIndex(i => i + 1);
+                    setCurrentQ(0);
+                  }}>Next Section <ChevronRight size={16} /></button>
+              )
             : <button className="btn btn-primary" onClick={() => setCurrentQ(q => q + 1)}>Next <ChevronRight size={16} /></button>
           }
         </div>

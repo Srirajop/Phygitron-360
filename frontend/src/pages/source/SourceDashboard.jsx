@@ -634,12 +634,12 @@ export default function SourceDashboard() {
                 value={filters.limit}
                 onChange={e => setFilters(f => ({ ...f, limit: parseInt(e.target.value) }))}
               >
+                <option value="5">Top 5</option>
+                <option value="10">Top 10</option>
+                <option value="15">Top 15</option>
                 <option value="20">Top 20</option>
                 <option value="50">Top 50</option>
                 <option value="100">Top 100</option>
-                <option value="5">Top 5 {filters.role_id && sortCriteria.includes('fit_score') ? '(Best Fit)' : ''}</option>
-                <option value="10">Top 10 {filters.role_id && sortCriteria.includes('fit_score') ? '(Best Fit)' : ''}</option>
-                <option value="15">Top 15</option>
               </select>
             </div>
             <div style={{ flex: 1, minWidth: 200 }}>
@@ -697,6 +697,24 @@ export default function SourceDashboard() {
                   {/* Checkbox */}
                   <input type="checkbox" style={{ accentColor: 'var(--primary)', width: 16, height: 16, flexShrink: 0 }}
                     checked={selected.has(candidateKey(c))} onChange={() => toggleSelect(c)} />
+
+                  {/* Profile Number / Index */}
+                  <span style={{ 
+                    fontWeight: 700, 
+                    fontSize: '0.85rem', 
+                    color: 'var(--primary)', 
+                    minWidth: 26, 
+                    height: 26, 
+                    borderRadius: 6, 
+                    background: 'rgba(124, 58, 237, 0.08)', 
+                    border: '1px solid rgba(124, 58, 237, 0.18)',
+                    display: 'inline-flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    flexShrink: 0 
+                  }} title={`Candidate #${i + 1}`}>
+                    {i + 1}
+                  </span>
 
                   {/* Avatar */}
                   <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'linear-gradient(135deg, var(--primary), var(--primary-light))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: '0.9rem', flexShrink: 0 }}>

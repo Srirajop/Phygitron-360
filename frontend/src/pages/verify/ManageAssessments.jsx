@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { verifyApi, adminApi } from '../../api';
-import { BarChart2, PlusCircle, Send, Calendar, Trash2, Play, Pause, LayoutGrid, List } from 'lucide-react';
+import { PlusCircle, Send, Calendar, Trash2, Play, Pause, LayoutGrid, List, Users, Edit2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
 
@@ -168,13 +168,19 @@ export default function ManageAssessments() {
           <Play size={14} />
         </button>
       )}
+      {/* Edit button — available for all statuses including published */}
+      {canCreateOrAssign && (
+        <Link to={`/verify/build?edit=${a.id}`} className="btn btn-ghost btn-sm" title="Edit Assessment">
+          <Edit2 size={14} />
+        </Link>
+      )}
       {canCreateOrAssign && (
         <button className="btn btn-ghost btn-sm text-danger" onClick={() => deleteAssessment(a.id)} title="Delete">
           <Trash2 size={14} />
         </button>
       )}
       {canViewAnalytics && (
-        <Link to={`/verify/analytics/${a.id}`} className="btn btn-ghost btn-sm" title="Analytics"><BarChart2 size={14} /></Link>
+        <Link to={`/verify/submissions/${a.id}`} className="btn btn-ghost btn-sm" title="View Submissions"><Users size={14} /></Link>
       )}
     </div>
   );
@@ -398,7 +404,7 @@ export default function ManageAssessments() {
                       { key: 'tab_switch', label: 'Detect Tab Switching' },
                       { key: 'multiple_people', label: 'Detect Multiple People in Camera' },
                       { key: 'face_not_visible', label: 'Detect Face Not Visible' },
-                      { key: 'audio_detect', label: 'Detect Audio / Background Noise' },
+                      { key: 'audio_detect', label: 'Detect Speaking / Background Audio' },
                     ].map(feat => (
                       <label key={feat.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                         <input

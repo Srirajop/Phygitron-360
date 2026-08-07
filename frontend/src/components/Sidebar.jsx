@@ -22,13 +22,13 @@ const roleNavItems = {
       { to: '/source', label: 'Talent Vault', icon: Users },
       { to: '/source/repo', label: 'Resume Repo', icon: Folder },
       { to: '/source/roles', label: 'Job Roles', icon: Briefcase },
-      { to: '/source/active', label: 'Trainee Dashboard', icon: UserCheck },
       { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
     ]},
     { section: 'Verify', module: 'verify', items: [
       { to: '/verify/build', label: 'Assessment Builder', icon: PlusCircle },
       { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
       { to: '/verify/bank', label: 'Question Bank', icon: Database },
+      { to: '/verify/analytics', label: 'Analytics Dashboard', icon: BarChart2 },
     ]},
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'Directory', icon: Briefcase },
@@ -49,13 +49,13 @@ const roleNavItems = {
       { to: '/source', label: 'Talent Vault', icon: Users },
       { to: '/source/repo', label: 'Resume Repo', icon: Folder },
       { to: '/source/roles', label: 'Job Roles', icon: Briefcase },
-      { to: '/source/active', label: 'Trainee Dashboard', icon: UserCheck },
       { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
     ]},
     { section: 'Verify', module: 'verify', items: [
       { to: '/verify/build', label: 'Assessment Builder', icon: PlusCircle },
       { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
       { to: '/verify/bank', label: 'Question Bank', icon: Database },
+      { to: '/verify/analytics', label: 'Analytics Dashboard', icon: BarChart2 },
     ]},
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'Directory', icon: Briefcase },
@@ -92,11 +92,11 @@ const roleNavItems = {
       { to: '/source', label: 'Talent Vault', icon: Users },
       { to: '/source/repo', label: 'Resume Repo', icon: Folder },
       { to: '/source/roles', label: 'Job Roles', icon: Briefcase },
-      { to: '/source/active', label: 'Trainee Dashboard', icon: UserCheck },
       { to: '/source/offers', label: 'Offer Approvals', icon: FileText },
     ]},
     { section: 'Verify', module: 'verify', items: [
       { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
+      { to: '/verify/analytics', label: 'Analytics Dashboard', icon: BarChart2 },
     ]},
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'My Team', icon: Users },
