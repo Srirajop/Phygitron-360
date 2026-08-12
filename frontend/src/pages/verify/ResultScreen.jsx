@@ -2,12 +2,33 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { verifyApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
-import { CheckCircle, XCircle, Trophy, BookOpen, BarChart2, Download, ExternalLink, FileText, Trash2 } from 'lucide-react';
+import { CheckCircle, XCircle, Trophy, BookOpen, BarChart2, Download, ExternalLink, FileText, Trash2, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const CONFETTI_COLORS = ['#7C3AED', '#A855F7', '#EC4899', '#06B6D4', '#F59E0B', '#10B981'];
 const PROCTORING_EVIDENCE_TYPES = new Set(['screenshot', 'audio_snippet']);
 const MAX_STRIKES = 5;
+
+// Human-friendly labels for proctoring flag types (replaces naive underscore strip).
+const PROCTORING_LABELS = {
+  tab_switch: 'Tab Switch',
+  copy_paste: 'Copy / Paste',
+  timing_anomaly: 'Timing Anomaly',
+  screenshot: 'Screenshot',
+  camera_denied: 'Camera Denied',
+  proctoring_violation: 'Proctoring Violation',
+  audio_detected: 'Audio Detected',
+  audio_snippet: 'Audio Snippet',
+  camera_disabled: 'Camera Disabled',
+  camera_obstructed: 'Camera Obstructed',
+  person_not_visible: 'Face Not Visible',
+  background_movement: 'Background Movement',
+  significant_motion: 'Significant Motion',
+  hardware_denied: 'Hardware Denied',
+  gaze_averted: 'Looking Away',
+  head_turn: 'Head Turn',
+};
+const labelFor = (t) => PROCTORING_LABELS[t] || String(t).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
 function Confetti() {
   return (
@@ -34,6 +55,7 @@ export default function ResultScreen() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [appealText, setAppealText] = useState('');
   const [appealSubmitting, setAppealSubmitting] = useState(false);
+  const [selectedScreenshot, setSelectedScreenshot] = useState(null);
 
   useEffect(() => {
     let interval;
@@ -86,7 +108,16 @@ export default function ResultScreen() {
   const appealQuery = result.appeal_query;
   const proctoringFlags = Array.isArray(result.proctoring_flags) ? result.proctoring_flags : [];
   const violationFlags = proctoringFlags.filter(flag => !PROCTORING_EVIDENCE_TYPES.has(flag.type));
+  const screenshotFlags = proctoringFlags.filter(flag => flag.type === 'screenshot' && flag.details?.startsWith('data:image'));
   const isAdmin = ['super_admin', 'org_admin', 'hr'].includes(user?.role);
+
+  const Q_STATUS_PILL = {
+    correct: { label: 'Correct', color: 'var(--success)', bg: 'var(--success-light)' },
+    partial: { label: 'Partial', color: '#B45309', bg: '#FEF3C7' },
+    wrong: { label: 'Incorrect', color: 'var(--danger)', bg: 'var(--danger-light)' },
+    pending: { label: 'Pending Review', color: '#6B7280', bg: 'var(--bg-hover)' },
+    unanswered: { label: 'Unanswered', color: 'var(--text-muted)', bg: 'var(--bg-hover)' },
+  };
 
   const handleDeleteFlag = async (flagId) => {
     if (!window.confirm("Delete this screenshot?")) return;
@@ -347,32 +378,27 @@ export default function ResultScreen() {
             questions = result.assessment.questions;
           }
           let right = 0;
+          let partial = 0;
           let wrong = 0;
           let unanswered = 0;
 
-          questions.forEach(q => {
+          const getQStatus = (q) => {
             const answer = result.answers?.[q.id];
-            if (answer === undefined || answer === null || answer === '' || (Array.isArray(answer) && answer.length === 0)) {
-              unanswered++;
-              return;
-            }
-            const score = result.scores_per_question?.[q.id];
-            if (score !== undefined) {
-              if (Number(score) > 0) right++;
-              else wrong++;
-            } else {
-              if (q.question_type === 'mcq') {
-                if (answer === q.correct_answer) right++;
-                else wrong++;
-              } else if (q.question_type === 'mcq_multi') {
-                const ansArr = Array.isArray(answer) ? answer : [];
-                let corrArr = [];
-                try { corrArr = typeof q.correct_answer === 'string' && q.correct_answer.startsWith('[') ? JSON.parse(q.correct_answer) : [q.correct_answer]; } catch(e) { corrArr = [q.correct_answer]; }
-                const isRight = ansArr.length === corrArr.length && ansArr.every(x => corrArr.includes(x));
-                if (isRight) right++;
-                else wrong++;
-              }
-            }
+            if (answer === undefined || answer === null || answer === '' || (Array.isArray(answer) && answer.length === 0)) return 'unanswered';
+            const qScore = result.scores_per_question?.[q.id];
+            const earned = qScore && typeof qScore === 'object' ? qScore.score : qScore;
+            const max = qScore && typeof qScore === 'object' ? qScore.max : undefined;
+            if (earned === null || earned === undefined) return 'pending';
+            if (Number(earned) > 0) return (max && Number(earned) >= Number(max)) ? 'correct' : 'partial';
+            return 'wrong';
+          };
+
+          questions.forEach(q => {
+            const st = getQStatus(q);
+            if (st === 'correct') right++;
+            else if (st === 'partial') partial++;
+            else if (st === 'wrong') wrong++;
+            else if (st === 'unanswered') unanswered++;
           });
 
           return (
@@ -380,7 +406,8 @@ export default function ResultScreen() {
               <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
                 <h4 style={{ margin: 0 }}>📂 Candidate Responses</h4>
                 <div style={{ fontSize: '0.8rem', display: 'flex', gap: 12, alignItems: 'center' }}>
-                  <span style={{ color: 'var(--success)' }}><b>{right}</b> Right</span>
+                  <span style={{ color: 'var(--success)' }}><b>{right}</b> Correct</span>
+                  <span style={{ color: '#B45309' }}><b>{partial}</b> Partial</span>
                   <span style={{ color: 'var(--danger)' }}><b>{wrong}</b> Wrong</span>
                   <span style={{ color: 'var(--text-muted)' }}><b>{unanswered}</b> Unanswered</span>
                   <span style={{ color: 'var(--primary)', fontWeight: 600 }}><b>{questions.length}</b> Total</span>
@@ -392,7 +419,13 @@ export default function ResultScreen() {
 
                 return (
                   <div key={idx} style={{ padding: 20, borderBottom: idx < result.assessment.questions.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8 }}>QUESTION {idx + 1} ({q.question_type.toUpperCase()})</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>QUESTION {idx + 1} ({q.question_type.toUpperCase()})</div>
+                      {(() => {
+                        const pill = Q_STATUS_PILL[getQStatus(q)];
+                        return <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999, color: pill.color, background: pill.bg }}>{pill.label}</span>;
+                      })()}
+                    </div>
                     <div style={{ fontSize: '0.9rem', marginBottom: 12, fontWeight: 500 }}>{q.question_text}</div>
                     
                     {q.question_type === 'mcq' && (
@@ -455,44 +488,113 @@ export default function ResultScreen() {
                     )}
 
                     {q.question_type === 'file_upload' && (
-                      <div style={{ background: 'var(--bg-page)', padding: 16, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: '1px solid var(--border)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          <div style={{ background: 'var(--primary-light)', color: 'var(--primary)', width: 40, height: 40, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <FileText size={20} />
+                      <div>
+                        <div style={{ background: 'var(--bg-page)', padding: 16, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                            <div style={{ background: 'var(--primary-light)', color: 'var(--primary)', width: 40, height: 40, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <FileText size={20} />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Submitted Attachment</div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{typeof answer === 'string' ? answer.split('/').pop().split('_').slice(1).join('_') : 'Candidate_Submission'}</div>
+                            </div>
                           </div>
-                          <div>
-                            <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Submitted Attachment</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{typeof answer === 'string' ? answer.split('/').pop().split('_').slice(1).join('_') : 'Candidate_Submission'}</div>
-                          </div>
+                          {answer ? (
+                            <a href={answer} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm" style={{ gap: 8 }}>
+                              <Download size={14} /> Download
+                            </a>
+                          ) : (
+                            <span className="text-muted" style={{ fontSize: '0.8rem' }}>No file uploaded</span>
+                          )}
                         </div>
-                        {answer ? (
-                          <a href={answer} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm" style={{ gap: 8 }}>
-                            <Download size={14} /> Download
-                          </a>
-                        ) : (
-                          <span className="text-muted" style={{ fontSize: '0.8rem' }}>No file uploaded</span>
-                        )}
+                        {(() => {
+                          const qScore = result.scores_per_question?.[q.id];
+                          const earned = qScore && typeof qScore === 'object' ? qScore.score : qScore;
+                          if (earned === null || earned === undefined) {
+                            if (answer) return <div style={{ marginTop: 8 }}><span className="badge badge-info">Pending manual review</span></div>;
+                            return null;
+                          }
+                          return (
+                            <div style={{ marginTop: 8 }}>
+                              <span className="badge" style={{ background: Number(earned) > 0 ? 'var(--success-light)' : 'var(--danger-light)', color: Number(earned) > 0 ? 'var(--success)' : 'var(--danger)', border: '1px solid ' + (Number(earned) > 0 ? 'var(--success)' : 'var(--danger)') }}>
+                                Score: {Number(earned).toFixed(1)} / {qScore?.max ?? q.marks} marks
+                              </span>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
 
                     {q.question_type === 'written' && (
-                      <div style={{ background: 'var(--bg-page)', padding: 16, borderRadius: 8, fontSize: '0.85rem', whiteSpace: 'pre-wrap', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                        {answer || <span style={{ color: 'var(--text-muted)' }}>No answer provided</span>}
+                      <div>
+                        <div style={{ background: 'var(--bg-page)', padding: 16, borderRadius: 8, fontSize: '0.85rem', whiteSpace: 'pre-wrap', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                          {answer || <span style={{ color: 'var(--text-muted)' }}>No answer provided</span>}
+                        </div>
+                        <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                          {(() => {
+                            const qScore = result.scores_per_question?.[q.id];
+                            const earned = qScore && typeof qScore === 'object' ? qScore.score : qScore;
+                            if (earned === null || earned === undefined) return <span className="badge badge-info">Pending AI / manual review</span>;
+                            const full = Number(qScore?.max ?? 0) > 0 && Number(earned) >= Number(qScore.max);
+                            return (
+                              <>
+                                <span className="badge" style={{ background: Number(earned) > 0 ? 'var(--success-light)' : 'var(--danger-light)', color: Number(earned) > 0 ? 'var(--success)' : 'var(--danger)', border: '1px solid ' + (Number(earned) > 0 ? 'var(--success)' : 'var(--danger)') }}>
+                                  {full ? '✅ Fully graded' : Number(earned) > 0 ? '🟡 Partially graded' : '❌ Incorrect'}
+                                </span>
+                                <span className="badge badge-muted">Score: {Number(earned).toFixed(1)} / {qScore?.max ?? q.marks} marks</span>
+                              </>
+                            );
+                          })()}
+                        </div>
+                        {isAdmin && q.model_answer && (
+                          <div style={{ marginTop: 8, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            <span style={{ fontWeight: 700 }}>Model Answer: </span>
+                            <span style={{ whiteSpace: 'pre-wrap' }}>{q.model_answer}</span>
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {q.question_type === 'coding' && (
-                      <div style={{ position: 'relative' }}>
-                        <pre style={{ background: '#1E1B4B', padding: 16, borderRadius: 8, color: '#A5B4FC', fontSize: '0.8rem', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>
-                          {(() => {
-                            try {
-                              const parsed = typeof answer === 'string' ? JSON.parse(answer) : answer;
-                              return parsed?.code || answer || 'No code provided';
-                            } catch { return answer || 'No code provided'; }
-                          })()}
-                        </pre>
-                      </div>
-                    )}
+                    {q.question_type === 'coding' && (() => {
+                      let code;
+                      try {
+                        const parsed = typeof answer === 'string' ? JSON.parse(answer) : answer;
+                        code = parsed?.code || answer || 'No code provided';
+                      } catch { code = answer || 'No code provided'; }
+                      const qScore = result.scores_per_question?.[q.id];
+                      const tp = qScore && typeof qScore === 'object' ? qScore.tests_passed : undefined;
+                      const tt = qScore && typeof qScore === 'object' ? qScore.tests_total : undefined;
+                      const earned = qScore && typeof qScore === 'object' ? qScore.score : qScore;
+                      let testLabel = null;
+                      let testColor = 'var(--success)';
+                      let testBg = 'var(--success-light)';
+                      let testBorder = 'var(--success)';
+                      if (tp !== undefined && tt !== undefined) {
+                        if (tp === tt) { testLabel = 'Passed all test cases (' + tp + '/' + tt + ')'; }
+                        else if (tp > 0) { testLabel = 'Partial test cases (' + tp + '/' + tt + ')'; testColor = '#B45309'; testBg = '#FEF3C7'; testBorder = '#F59E0B'; }
+                        else { testLabel = 'Failed all test cases (' + tp + '/' + tt + ')'; testColor = 'var(--danger)'; testBg = 'var(--danger-light)'; testBorder = 'var(--danger)'; }
+                      } else if (earned !== null && earned !== undefined) {
+                        testLabel = Number(earned) > 0 ? 'Solved' : 'Not solved';
+                        testColor = Number(earned) > 0 ? 'var(--success)' : 'var(--danger)';
+                        testBg = Number(earned) > 0 ? 'var(--success-light)' : 'var(--danger-light)';
+                        testBorder = Number(earned) > 0 ? 'var(--success)' : 'var(--danger)';
+                      }
+                      return (
+                        <div style={{ position: 'relative' }}>
+                          <pre style={{ background: '#1E1B4B', padding: 16, borderRadius: 8, color: '#A5B4FC', fontSize: '0.8rem', overflowX: 'auto', margin: 0, fontFamily: 'monospace' }}>{code}</pre>
+                          <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                            {testLabel && (
+                              <span className="badge" style={{ background: testBg, color: testColor, border: '1px solid ' + testBorder }}>
+                                {testLabel}
+                              </span>
+                            )}
+                            {earned !== null && earned !== undefined && (
+                              <span className="badge badge-muted">Score: {Number(earned).toFixed(1)} / {qScore?.max ?? q.marks} marks</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}
@@ -506,8 +608,8 @@ export default function ResultScreen() {
               <h4>📹 Proctoring Report</h4>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 {isAdmin && proctoringFlags.some(f => f.type === 'screenshot') && (
-                  <button className="btn btn-danger btn-sm" onClick={handleDeleteAllScreenshots} title="Delete all screenshots" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Trash2 size={14} /> Delete All
+                  <button className="btn btn-danger btn-sm" onClick={handleDeleteAllScreenshots} title="Delete screenshots from this assessment" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Trash2 size={14} /> Delete Screenshots
                   </button>
                 )}
                 {violationFlags.length === 0 ? (
@@ -518,16 +620,29 @@ export default function ResultScreen() {
               </div>
             </div>
             <div className="card-body">
+              {isAdmin && screenshotFlags.length > 0 && (
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, marginBottom: 8 }}>Screenshots ({screenshotFlags.length})</div>
+                  <div style={{ display: 'flex', gap: 10, overflowX: 'auto', padding: '2px 2px 8px' }}>
+                    {screenshotFlags.map((flag, index) => (
+                      <button key={flag.id || index} type="button" onClick={() => setSelectedScreenshot(flag)} title="Open screenshot" style={{ position: 'relative', padding: 0, flex: '0 0 132px', height: 82, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', cursor: 'zoom-in', background: 'var(--bg-page)' }}>
+                        <img src={flag.details} alt={`Proctor snapshot ${index + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                        <span style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '3px 5px', background: 'rgba(0,0,0,.58)', color: '#fff', fontSize: '0.65rem' }}>{new Date(flag.flagged_at).toLocaleTimeString()}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {proctoringFlags.length === 0 ? (
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <CheckCircle size={16} color="var(--success)" /> No proctoring events were recorded.
                 </div>
               ) : (
                 <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.875rem', color: 'var(--text-primary)' }}>
-                  {[...proctoringFlags].sort((a, b) => new Date(a.flagged_at) - new Date(b.flagged_at)).map((flag, idx) => (
+                  {[...proctoringFlags].filter(flag => flag.type !== 'screenshot').sort((a, b) => new Date(a.flagged_at) - new Date(b.flagged_at)).map((flag, idx) => (
                     <li key={flag.id || idx} style={{ marginBottom: 12 }}>
                       <span className={`badge ${PROCTORING_EVIDENCE_TYPES.has(flag.type) ? 'badge-muted' : 'badge-danger'}`} style={{ marginRight: 8, fontSize: '0.7rem' }}>
-                        {flag.type.replace('_', ' ').toUpperCase()}
+                        {labelFor(flag.type).toUpperCase()}
                       </span>
                       at {new Date(flag.flagged_at).toLocaleTimeString()}: 
                       {PROCTORING_EVIDENCE_TYPES.has(flag.type) ? (
@@ -574,6 +689,14 @@ export default function ResultScreen() {
           <Link to="/verify/dashboard" className="btn btn-ghost"><BarChart2 size={15} /> Back to Dashboard</Link>
         </div>
       </div>
+      {selectedScreenshot && (
+        <div role="dialog" aria-modal="true" onClick={() => setSelectedScreenshot(null)} style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,.82)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}>
+          <div onClick={e => e.stopPropagation()} style={{ position: 'relative', maxWidth: 'min(96vw, 1100px)', maxHeight: '92vh' }}>
+            <img src={selectedScreenshot.details} alt="Expanded proctor snapshot" style={{ maxWidth: '100%', maxHeight: '88vh', display: 'block', borderRadius: 10 }} />
+            <button type="button" onClick={() => setSelectedScreenshot(null)} aria-label="Close screenshot" className="btn btn-secondary btn-sm" style={{ position: 'absolute', top: 10, right: 10, padding: 6 }}><X size={16} /></button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

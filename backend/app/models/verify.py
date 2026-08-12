@@ -50,6 +50,8 @@ class ProctoringFlagType(str, enum.Enum):
     background_movement = "background_movement"
     significant_motion = "significant_motion"
     hardware_denied = "hardware_denied"
+    gaze_averted = "gaze_averted"
+    head_turn = "head_turn"
 
 
 class Assessment(Base):
@@ -188,6 +190,19 @@ class ProctoringFlag(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     result = relationship("AssessmentResult", back_populates="proctoring_flags")
+
+
+class ProctoringStrike(Base):
+    __tablename__ = "proctoring_strikes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    assignment_id = Column(Integer, ForeignKey("assessment_assignments.id"), nullable=False)
+    violation_name = Column(String(255), nullable=False)
+    flag_type = Column(String(50), nullable=True)
+    strike_index = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    assignment = relationship("AssessmentAssignment")
 
 
 class AssessmentQuery(Base):

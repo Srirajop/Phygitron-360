@@ -4,6 +4,8 @@ import { verifyApi, adminApi } from '../../api';
 import { PlusCircle, Send, Calendar, Trash2, Play, Pause, LayoutGrid, List, Users, Edit2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
+import { buildProctoringConfig, PROCTORING_FEATURES, STRICTNESS_LEVELS } from './proctoringConfig';
+import ProctoringStrictness from './ProctoringStrictness';
 
 const STATUS_BADGE = { 
   draft: 'badge-muted', 
@@ -24,9 +26,7 @@ export default function ManageAssessments() {
   // Assignment Modal State
   const [candidates, setCandidates] = useState([]);
   const [assignModal, setAssignModal] = useState({ open: false, assessmentId: null, deadline: '', loading: false });
-  const [proctoringConfig, setProctoringConfig] = useState({ 
-    full_screen: true, tab_switch: true, multiple_people: true, face_not_visible: true, audio_detect: true 
-  });
+  const [proctoringConfig, setProctoringConfig] = useState(() => buildProctoringConfig('balanced', {}));
   const [selectedCandidates, setSelectedCandidates] = useState([]);
   const [search, setSearch] = useState('');
   
@@ -78,7 +78,7 @@ export default function ManageAssessments() {
     setSearch('');
     setShowSubset(false);
     setSelectedQuestionIds([]);
-    setProctoringConfig({ full_screen: true, tab_switch: true, multiple_people: true, face_not_visible: true, audio_detect: true });
+    setProctoringConfig(buildProctoringConfig('balanced', {}));
     
     // Load users
     if (candidates.length === 0) {
@@ -148,6 +148,17 @@ export default function ManageAssessments() {
     }
   };
 
+  const deleteOrgScreenshots = async () => {
+    if (!window.confirm('Delete screenshots from every assessment in this organisation? This cannot be undone.')) return;
+    try {
+      const response = await verifyApi.deleteOrganisationScreenshots();
+      const count = response.data?.data?.count || 0;
+      toast.success(`${count} screenshots deleted`);
+    } catch {
+      toast.error('Failed to delete organisation screenshots');
+    }
+  };
+
   const renderAssessmentActions = (a) => (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       {canCreateOrAssign && a.status === 'draft' && (
@@ -194,6 +205,11 @@ export default function ManageAssessments() {
             <button className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '6px 10px' }} onClick={() => setViewMode('list')} title="List view"><List size={16} /></button>
             <button className={`btn btn-sm ${viewMode === 'grid' ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '6px 10px' }} onClick={() => setViewMode('grid')} title="Card view"><LayoutGrid size={16} /></button>
           </div>
+          {['super_admin', 'org_admin', 'hr'].includes(user?.role) && (
+            <button className="btn btn-danger btn-sm" onClick={deleteOrgScreenshots} title="Delete screenshots from all assessments in this organisation">
+              <Trash2 size={16} /> Delete Screenshots
+            </button>
+          )}
           {canCreateOrAssign && <Link to="/verify/build" className="btn btn-shimmer"><PlusCircle size={16} /> Create Assessment</Link>}
         </div>
       </div>
@@ -394,22 +410,27 @@ export default function ManageAssessments() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                     <label className="form-label" style={{ marginBottom: 0 }}>Proctoring Settings</label>
                     <div style={{ display: 'flex', gap: '8px' }}>
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setProctoringConfig({ full_screen: true, tab_switch: true, multiple_people: true, face_not_visible: true, audio_detect: true })}>Enable All</button>
-                      <button type="button" className="btn btn-ghost btn-sm text-danger" onClick={() => setProctoringConfig({ full_screen: false, tab_switch: false, multiple_people: false, face_not_visible: false, audio_detect: false })}>Disable All</button>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setProctoringConfig(c => buildProctoringConfig(c.strictness, Object.fromEntries(PROCTORING_FEATURES.map(f => [f.key, true]))))}>Enable All</button>
+                      <button type="button" className="btn btn-ghost btn-sm text-danger" onClick={() => setProctoringConfig(c => buildProctoringConfig(c.strictness, Object.fromEntries(PROCTORING_FEATURES.map(f => [f.key, false]))))}>Disable All</button>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {[
-                      { key: 'full_screen', label: 'Enforce Full Screen' },
-                      { key: 'tab_switch', label: 'Detect Tab Switching' },
-                      { key: 'multiple_people', label: 'Detect Multiple People in Camera' },
-                      { key: 'face_not_visible', label: 'Detect Face Not Visible' },
-                      { key: 'audio_detect', label: 'Detect Speaking / Background Audio' },
-                    ].map(feat => (
+
+                  <ProctoringStrictness
+                    value={proctoringConfig.strictness}
+                    onChange={(level) => setProctoringConfig(c => buildProctoringConfig(level, c))}
+                    descriptions={{
+                      lenient: STRICTNESS_LEVELS.lenient.description,
+                      balanced: STRICTNESS_LEVELS.balanced.description,
+                      strict: STRICTNESS_LEVELS.strict.description,
+                    }}
+                  />
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: 14 }}>
+                    {PROCTORING_FEATURES.map(feat => (
                       <label key={feat.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                         <input
                           type="checkbox"
-                          checked={proctoringConfig[feat.key]}
+                          checked={!!proctoringConfig[feat.key]}
                           onChange={(e) => setProctoringConfig(p => ({ ...p, [feat.key]: e.target.checked }))}
                         />
                         <span style={{ fontSize: '0.9rem' }}>{feat.label}</span>

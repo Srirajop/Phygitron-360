@@ -119,6 +119,7 @@ export const verifyApi = {
   releaseResult: (id) => api.post(`/api/v1/verify/result/${id}/release`),
   deleteProctoringFlag: (resultId, flagId) => api.delete(`/api/v1/verify/result/${resultId}/flags/${flagId}`),
   deleteAllScreenshots: (resultId) => api.delete(`/api/v1/verify/result/${resultId}/screenshots`),
+  deleteOrganisationScreenshots: () => api.delete('/api/v1/verify/screenshots'),
   importQuestions: (formData) => api.post('/api/v1/verify/import-questions', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   importFromUrl: (url, includeImages = false) => api.post('/api/v1/verify/import-url', { url, include_images: includeImages }),
   randomizeAssessment: (data) => api.post('/api/v1/verify/randomize-assessment', data),

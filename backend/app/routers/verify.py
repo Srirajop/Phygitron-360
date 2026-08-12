@@ -1,7 +1,7 @@
 import json
 import logging
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, BackgroundTasks
@@ -16,7 +16,7 @@ from app.models.source import Candidate
 from app.models.verify import (
     Assessment, AssessmentQuestion, AssessmentAssignment,
     AssessmentResult, ProctoringFlag, ProctoringFlagType, AssessmentStatus, AssignmentStatus, AssessmentQuery,
-    QuestionBankItem
+    ProctoringStrike, QuestionBankItem
 )
 from app.utils.auth import get_current_user, require_role, require_module
 from app.utils.email import send_assignment_notification_email
@@ -682,6 +682,7 @@ async def publish_assessment(
 class RecordStrikeRequest(BaseModel):
     assignment_id: int
     violation_name: str
+    flag_type: str = "proctoring_violation"
     is_terminal: bool = False  # True when MAX_STRIKES is reached
 
 
@@ -707,8 +708,21 @@ async def record_strike(
         return success({"strike_count": assgn.strike_count, "terminated": True})
 
     assgn.strike_count = (assgn.strike_count or 0) + 1
+    strike_index = assgn.strike_count
     if body.is_terminal:
         assgn.terminated_by_proctor = True
+
+    # Persist the human-readable violation reason so the audit trail shows WHY
+    # a strike was issued (previously only the count survived).
+    try:
+        db.add(ProctoringStrike(
+            assignment_id=assgn.id,
+            violation_name=body.violation_name or "proctoring_violation",
+            flag_type=body.flag_type or "proctoring_violation",
+            strike_index=strike_index,
+        ))
+    except Exception as e:  # never block submission if the log write fails
+        logger.warning("Failed to persist proctoring strike detail: %s", e)
 
     await db.commit()
     return success({"strike_count": assgn.strike_count, "terminated": assgn.terminated_by_proctor})
@@ -1691,6 +1705,10 @@ def _supports_batch_harness(code: str, language: str) -> bool:
         return _extract_python_entry(code)[0] is not None
     if language == "javascript":
         return _extract_javascript_entry(code) is not None
+    if language == "cpp":
+        # Batch harness supported for LeetCode-style Solution classes whose
+        # entry method can be extracted (falls back to per-test execution otherwise).
+        return _is_solution_class(code, "cpp") and _extract_cpp_solution_method(code)[1] is not None
     return False
 
 
@@ -1949,6 +1967,158 @@ int main() {{
     }} catch(exception& e) {{ cerr << e.what() << endl; }}
     return 0;
 }}"""
+
+
+def _cpp_ret_to_str(t):
+    t = (t or "").strip()
+    if "vector<vector" in t: return "__fmtVVI(__r)"
+    if "vector" in t: return "__fmtVI(__r)"
+    if t == "bool": return "(stringstream() << boolalpha << __r).str()"
+    if t == "string": return "__r"
+    if t == "char": return "string(1, __r)"
+    return "to_string(__r)"
+
+
+def _cpp_escape_cpp_string(s):
+    # Escape a test-case input so it can be embedded as a C++ string literal.
+    return (s.replace("\\", "\\\\")
+             .replace("\n", "\\n")
+             .replace("\r", "\\r")
+             .replace("\t", "\\t")
+             .replace('"', '\\"'))
+
+
+_CPP_BATCH_TEMPLATE = '''#include <iostream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <sstream>
+#include <map>
+#include <unordered_map>
+#include <set>
+#include <unordered_set>
+#include <queue>
+#include <stack>
+#include <numeric>
+#include <climits>
+#include <cmath>
+#include <stdexcept>
+using namespace std;
+
+__CODE__
+
+vector<int> __parseVecInt(string s) {
+    s.erase(remove(s.begin(),s.end(),'['),s.end());
+    s.erase(remove(s.begin(),s.end(),']'),s.end());
+    vector<int> v; stringstream ss(s); string t;
+    while(getline(ss,t,',')) { t.erase(remove(t.begin(),t.end(),' '),t.end()); if(!t.empty()) v.push_back(stoi(t)); }
+    return v;
+}
+vector<string> __parseVecStr(string s) {
+    s.erase(remove(s.begin(),s.end(),'['),s.end());
+    s.erase(remove(s.begin(),s.end(),']'),s.end());
+    s.erase(remove(s.begin(),s.end(),'"'),s.end());
+    vector<string> v; stringstream ss(s); string t;
+    while(getline(ss,t,',')) { t.erase(remove(t.begin(),t.end(),' '),t.end()); if(!t.empty()) v.push_back(t); }
+    return v;
+}
+vector<vector<int>> __parseVecVecInt(string s) {
+    vector<vector<int>> r; int d=0; string cur="";
+    for(char c:s) { if(c=='['&&d++>0) cur+=c; else if(c==']'&&--d>0) cur+=c; else if(c==']'&&d==0) { r.push_back(__parseVecInt(cur)); cur=""; } else if(c==','&&d==1) { } else if(d>0) cur+=c; }
+    return r;
+}
+string __parseStr(string s) {
+    if(!s.empty() && (s.front()=='"' || s.front()==char(39))) s.erase(0, 1);
+    if(!s.empty() && (s.back()=='"' || s.back()==char(39))) s.pop_back();
+    return s;
+}
+char __parseChar(string s) {
+    string p = __parseStr(s);
+    return p.empty() ? ' ' : p[0];
+}
+string __fmtVI(vector<int>& v) { string s="["; for(int i=0;i<(int)v.size();i++) { if(i) s+=","; s+=to_string(v[i]); } return s+"]"; }
+string __fmtVVI(vector<vector<int>>& v) { string s="["; for(int i=0;i<(int)v.size();i++) { if(i) s+=","; string t="["; for(int j=0;j<(int)v[i].size();j++) { if(j) t+=","; t+=to_string(v[i][j]); } s+=t+"]"; } return s+"]"; }
+
+string __jsonEscape(const string& s) {
+  string o = "\\"";
+  for (char c : s) {
+    if (c == '"' || c == '\\\\') o += '\\\\';
+    if (c == '\\n') { o += "\\\\n"; continue; }
+    if (c == '\\r') { o += "\\\\r"; continue; }
+    if (c == '\\t') { o += "\\\\t"; continue; }
+    o += c;
+  }
+  o += "\\"";
+  return o;
+}
+
+vector<string> __INPUTS = {
+__INPUTS__
+};
+
+int main() {
+  try {
+    Solution sol;
+    int __K = __K__;
+    string __json = "[";
+    for (int __tc = 0; __tc < (int)__INPUTS.size(); __tc++) {
+      stringstream __ss(__INPUTS[__tc]);
+      vector<string> __lines; string __l;
+      while (getline(__ss, __l)) __lines.push_back(__l);
+      string __out = "";
+      string __err = "";
+      if ((int)__lines.size() >= __K) {
+        try {
+__PARAMS__
+__CALL__
+        } catch (exception& e) {
+          __err = e.what();
+        } catch (...) {
+          __err = "unknown error";
+        }
+      } else {
+        __err = "input line count mismatch";
+      }
+      if (__tc) __json += ",";
+      __json += "{\\"stdout\\":" + __jsonEscape(__out) + ",\\"stderr\\":" + __jsonEscape(__err) + "}";
+    }
+    __json += "]";
+    cout << "---BATCH_RESULTS_START---" << endl << __json << endl << "---BATCH_RESULTS_END---" << endl;
+  } catch (exception& e) {
+    cerr << e.what() << endl;
+  }
+  return 0;
+}
+'''
+
+
+def _wrap_cpp_solution_batch(code, test_cases):
+    """Wrap a LeetCode-style C++ Solution class so ALL test cases run in ONE
+    process (one compile, one run) — mirrors the Python/JS batch harness and
+    avoids the slow per-test-case remote execution that made C++ time out."""
+    ret, name, params_str = _extract_cpp_solution_method(code)
+    if not name:
+        return code
+    params = _parse_type_params(params_str)
+    K = len(params)
+    param_decls = []
+    call_args = []
+    for i, (ptype, pname) in enumerate(params):
+        clean = ptype.replace("&", "").replace("const ", "").strip()
+        param_decls.append(f"      {clean} {pname} = {_cpp_parse(ptype, f'__lines[{i}]')};")
+        call_args.append(pname)
+    param_block = "\n".join(param_decls)
+    if ret and ret != "void":
+        call_block = f"      auto __r = sol.{name}({', '.join(call_args)});\n      __out = {_cpp_ret_to_str(ret)};"
+    else:
+        call_block = f"      sol.{name}({', '.join(call_args)});\n      __out = \"\";"
+    inputs = "\n".join('  "' + _cpp_escape_cpp_string(str(tc.get("input", ""))) + '",' for tc in test_cases)
+    return (_CPP_BATCH_TEMPLATE
+            .replace("__CODE__", code)
+            .replace("__PARAMS__", param_block)
+            .replace("__CALL__", call_block)
+            .replace("__K__", str(K))
+            .replace("__INPUTS__", inputs))
 
 
 def wrap_code_for_execution(code: str, language: str, test_cases: list = None) -> str:
@@ -2213,7 +2383,16 @@ __runBatchHarness();
 """
         return code + "\n" + wrapper
 
+    if language == "cpp" and _is_solution_class(code, "cpp") and _extract_cpp_solution_method(code)[1]:
+        return _wrap_cpp_solution_batch(code, test_cases or [])
+
     return code
+
+
+import threading
+# Guards one-time precompiled-header (PCH) build so concurrent C++ runs don't
+# rebuild it. The PCH makes MinGW g++ compiles ~10x faster (cold ~4s -> ~0.5s).
+_CPP_PCH_LOCK = threading.Lock()
 
 
 async def _execute_locally(language: str, wrapped_code: str, stdin: str = ""):
@@ -2258,6 +2437,41 @@ async def _execute_locally(language: str, wrapped_code: str, stdin: str = ""):
     os.makedirs(base_exec_dir, exist_ok=True)
     temp_dir = os.path.join(base_exec_dir, f"{language}_{uuid.uuid4().hex}")
     os.makedirs(temp_dir, exist_ok=True)
+
+    # Precompiled header: build the C++ standard library once (cached on disk)
+    # so every C++ submission compiles in ~0.5s instead of 3-5s. Without this,
+    # candidates wait several seconds per run and assume the app is broken.
+    if language == "cpp" and shutil.which("g++") is not None:
+        pch_dir = os.path.join(base_exec_dir, ".cpp_pch")
+        os.makedirs(pch_dir, exist_ok=True)
+        pch_h = os.path.join(pch_dir, "pch.h")
+        pch_gch = pch_h + ".gch"
+        if not os.path.exists(pch_gch):
+            with _CPP_PCH_LOCK:
+                if not os.path.exists(pch_gch):
+                    pch_src = (
+                        "#include <iostream>\n#include <vector>\n#include <string>\n"
+                        "#include <sstream>\n#include <algorithm>\n#include <stdexcept>\n"
+                        "#include <climits>\n#include <cmath>\n#include <map>\n"
+                        "#include <unordered_map>\n#include <set>\n#include <unordered_set>\n"
+                        "#include <queue>\n#include <stack>\n#include <numeric>\n"
+                    )
+                    try:
+                        with open(pch_h, "w", encoding="utf-8") as fh:
+                            fh.write(pch_src)
+                        subprocess.run(
+                            ["g++", "-std=c++17", "-O0", "-x", "c++-header", pch_h, "-o", pch_gch],
+                            capture_output=True, text=True, timeout=120,
+                        )
+                    except Exception as pch_exc:
+                        logger.warning("C++ PCH build failed (%s); compiling without it.", pch_exc)
+        if os.path.exists(pch_gch):
+            compiler_map["cpp"] = [
+                "g++", "main.cpp", "-std=c++17", "-O0",
+                "-I", pch_dir, "-include", "pch.h", "-o", "main.exe",
+            ]
+        else:
+            compiler_map["cpp"] = ["g++", "main.cpp", "-O2", "-std=c++17", "-o", "main.exe"]
 
     try:
         source_path = os.path.join(temp_dir, file_map[language])
@@ -2506,7 +2720,17 @@ async def _execute_code(language: str, wrapped_code: str, stdin: str = "") -> di
             logger.warning("Local JS failed (%s). Trying Piston...", local_exc)
             return await _execute_via_piston(language, wrapped_code, stdin)
 
-    # C++ / Java: Piston first, local as fallback
+    # C++: try fast LOCAL g++ first (one compile/run for the whole batch),
+    # fall back to Piston only if g++ is unavailable. Avoids the old behaviour
+    # of N slow remote compilations (one per test case).
+    if language == "cpp":
+        try:
+            return await _execute_locally(language, wrapped_code, stdin)
+        except Exception as local_exc:
+            logger.warning("Local C++ failed (%s). Trying Piston...", local_exc)
+            return await _execute_via_piston(language, wrapped_code, stdin)
+
+    # Java: Piston first (no reliable local javac assumed), local as fallback.
     try:
         return await _execute_via_piston(language, wrapped_code, stdin)
     except Exception as piston_exc:
@@ -2698,7 +2922,10 @@ async def perform_grading_task(result_id: int, answers_dict: dict, assessment_id
                 if isinstance(test_cases, str):
                     try: test_cases = json.loads(test_cases)
                     except: test_cases = []
-                if not test_cases or not candidate_answer: return 0.0
+                if not test_cases:
+                    return {"score": 0.0, "tests_passed": 0, "tests_total": 0}
+                if not candidate_answer:
+                    return {"score": 0.0, "tests_passed": 0, "tests_total": min(len(test_cases), 10)}
                 try:
                     lang = (q.programming_language or "python").lower()
                     code = ""
@@ -2713,15 +2940,19 @@ async def perform_grading_task(result_id: int, answers_dict: dict, assessment_id
                         lang = candidate_answer.get("language", lang).lower()
                         code = candidate_answer.get("code", "")
                     if not code.strip():
-                        return 0.0
+                        return {"score": 0.0, "tests_passed": 0, "tests_total": min(len(test_cases), 10)}
                     p_lang = _normalize_language(lang)
                     tests_to_run = test_cases[:10]
                     _data, structured = await _run_test_cases(p_lang, code, tests_to_run)
                     passed = sum(1 for item in structured if item["passed"])
-                    return (passed / len(tests_to_run)) * marks if tests_to_run else 0.0
+                    return {
+                        "score": (passed / len(tests_to_run)) * marks if tests_to_run else 0.0,
+                        "tests_passed": passed,
+                        "tests_total": len(tests_to_run),
+                    }
                 except Exception as e:
                     logger.warning(f"Grading coding {q.id} failed: {e}")
-                    return 0.0
+                    return {"score": 0.0, "tests_passed": 0, "tests_total": min(len(test_cases), 10)}
 
             grading_tasks = []
             coding_indices = []
@@ -2762,11 +2993,17 @@ async def perform_grading_task(result_id: int, answers_dict: dict, assessment_id
             if grading_tasks:
                 import asyncio
                 coding_scores = await asyncio.gather(*grading_tasks)
-                for i, score in enumerate(coding_scores):
+                for i, sc in enumerate(coding_scores):
                     q_idx = coding_indices[i]
-                    scores_per_q[str(question_data_for_feedback[q_idx]["id"])] = {"score": score, "max": question_data_for_feedback[q_idx]["marks"]}
-                    earned_marks += score
-                    question_data_for_feedback[q_idx]["earned"] = score
+                    qid = str(question_data_for_feedback[q_idx]["id"])
+                    scores_per_q[qid] = {
+                        "score": sc["score"],
+                        "max": question_data_for_feedback[q_idx]["marks"],
+                        "tests_passed": sc["tests_passed"],
+                        "tests_total": sc["tests_total"],
+                    }
+                    earned_marks += sc["score"]
+                    question_data_for_feedback[q_idx]["earned"] = sc["score"]
 
             written_indices = [i for i, q in enumerate(question_data_for_feedback) if q["type"] == "written"]
             if written_indices:
@@ -2856,7 +3093,7 @@ async def submit_assessment(
             user_id=current_user.id,
             answers=body.answers,
             time_taken_seconds=body.time_taken_seconds,
-            submitted_at=datetime.utcnow(),
+            submitted_at=datetime.now(timezone.utc),
             score=0.0 if body.is_malpractice else None, 
             pass_status=False,
             is_malpractice=body.is_malpractice,
@@ -3146,6 +3383,28 @@ async def delete_all_screenshots(
         
     await db.commit()
     return success(data={"count": len(flags)}, message="All screenshots deleted successfully")
+
+
+@router.delete("/screenshots")
+async def delete_organisation_screenshots(
+    current_user: User = Depends(require_role(["super_admin", "org_admin", "hr"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently remove screenshot evidence for every assessment in this organisation."""
+    statement = (
+        delete(ProctoringFlag)
+        .where(ProctoringFlag.flag_type == "screenshot")
+        .where(
+            ProctoringFlag.assessment_result_id.in_(
+                select(AssessmentResult.id)
+                .join(Assessment, Assessment.id == AssessmentResult.assessment_id)
+                .where(Assessment.org_id == current_user.org_id)
+            )
+        )
+    )
+    result = await db.execute(statement)
+    await db.commit()
+    return success(data={"count": result.rowcount or 0}, message="All organisation screenshots deleted successfully")
 
 
 @router.get("/assessments/{assessment_id}/queries")

@@ -6,6 +6,22 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import Editor from '@monaco-editor/react';
 import toast from 'react-hot-toast';
+import { FilesetResolver, FaceLandmarker } from '@mediapipe/tasks-vision';
+import { normalizeProctoringConfig } from './proctoringConfig';
+
+// Build a { categoryName: score } map from MediaPipe FaceLandmarker blendshapes.
+// Blendshapes include purpose-built eye-gaze scores (eyeLookDown/Up/Out/In…)
+// which are far more reliable for "looking away from screen" than iris geometry.
+function getBlendshapes(result) {
+  const list = result?.faceBlendshapes;
+  if (!list || list.length === 0) return null;
+  const cats = Array.isArray(list[0]) ? list[0] : list;
+  const map = {};
+  for (const c of cats) {
+    if (c && c.categoryName) map[c.categoryName] = c.score || 0;
+  }
+  return map;
+}
 
 // ── Utility: extract test cases from markdown problem text ─────────────────────
 const smartExtractTestCases = (markdown) => {
@@ -231,11 +247,7 @@ export default function AssessmentTaker() {
   const isAssessmentTestMode = searchParams.get('testMode') === '1' || localStorage.getItem('assessment_test_mode') === 'true';
 
   const [assessment, setAssessment] = useState(null);
-  const proctoringConfig = useMemo(() => {
-    return assessment?.proctoring_config || {
-      full_screen: true, tab_switch: true, multiple_people: true, face_not_visible: true, audio_detect: true
-    };
-  }, [assessment]);
+  const proctoringConfig = useMemo(() => normalizeProctoringConfig(assessment?.proctoring_config), [assessment]);
   const [answers, setAnswers] = useState({});
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
 
@@ -275,6 +287,9 @@ export default function AssessmentTaker() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
   const [strikeCount, setStrikeCount] = useState(0);
+  // Live debug overlay (only populated in testMode) so we can verify what the
+  // MediaPipe model actually returns for face count / gaze signals.
+  const [proctorDebug, setProctorDebug] = useState(null);
   // Resume-session state: true if candidate previously started this assessment
   const [sessionAlreadyStarted, setSessionAlreadyStarted] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
@@ -293,31 +308,38 @@ export default function AssessmentTaker() {
 
   // Proctoring Refs
   const speechRecognitionRef = useRef(null);
-  const speechSustainTimer = useRef(null);
   const audioCtxRef = useRef(null);          // Web Audio API — catches murmurs
   const analyserRef = useRef(null);
   const audioCalibrationRef = useRef({ samples: [], baseline: null });
   const audioStateRef = useRef({ quietSamples: 0, lockedUntil: 0 });
   const lastSpeechStrikeRef = useRef({ transcript: '', time: 0 });
-  const lastFrameRef = useRef(null);
   const audioViolationTimer = useRef(null);
-  const cameraViolationTimer = useRef(null);
-  const motionViolationTimer = useRef(null);
-  const backgroundMovementTimer = useRef(null);
   const cameraTrackViolationTimer = useRef(null);
-  const multipleFacesTimerRef = useRef(null);
+  const cameraObstructedTimerRef = useRef(null);
   const seenFaceOnceRef = useRef(false);
   const strikes = useRef(0);
   const submitRef = useRef(null);
   const handleCheatAttemptRef = useRef(null);
   const lastStrikeTime = useRef(0);
   const violationCooldownsRef = useRef({});
-  const faceDetectorRef = useRef(null);
+  // Mediapipe FaceLandmarker — real ML face/landmark model replacing the dead
+  // native FaceDetector API. Provides 478 landmarks (with iris/eye centres)
+  // used for face presence, multi-face, gaze and head-pose detection.
+  const faceLandmarkerRef = useRef(null);
+  const faceLandmarkerReadyRef = useRef(false);
+  const faceLandmarkResultRef = useRef(null);
+  const gazeStrikeTimerRef = useRef(null);
+  const gazeSamplesRef = useRef(0);
+  const headTurnStrikeTimerRef = useRef(null);
+  const faceMissingTimerRef = useRef(null);
+  const multiFaceStartRef = useRef(0);
+  const multiFaceSamplesRef = useRef(0);
   // Guard: prevents the section timer from double-firing when currentSectionIndex
   // updates and sectionTimeLeft is still 0 on the same render cycle.
   const sectionTransitioningRef = useRef(false);
-  const MAX_STRIKES = 5;
-  const PROCTORING_START_GRACE_MS = 8000;
+  // Proctoring thresholds are driven by the assignment's strictness config.
+  const MAX_STRIKES = proctoringConfig.max_strikes || 5;
+  const PROCTORING_START_GRACE_MS = proctoringConfig.grace_ms || 8000;
 
   // Load assessment
   useEffect(() => {
@@ -460,7 +482,7 @@ export default function AssessmentTaker() {
     if (hasStarted && videoRef.current && streamRef.current) videoRef.current.srcObject = streamRef.current;
   }, [hasStarted]);
 
-  const captureScreenshot = useCallback((label = 'Snapshot') => {
+  const captureScreenshot = useCallback(() => {
     if (videoRef.current && canvasRef.current) {
       const vid = videoRef.current;
       const can = canvasRef.current;
@@ -516,14 +538,16 @@ export default function AssessmentTaker() {
     }
 
     pgEvents.current.push({ type: eventType, details: `${actionName} (Strike #${strikes.current})`, time: new Date().toISOString() });
-    
+
     const isTerminal = strikes.current >= MAX_STRIKES;
-    
-    // Persist strike state to the backend so a refresh doesn't reset it to 0
+
+    // Persist strike state to the backend so a refresh doesn't reset it to 0.
+    // Include the flag_type so the audit trail records WHY the strike happened.
     if (assessment && assessment.assignment_id) {
       verifyApi.recordStrike({
         assignment_id: assessment.assignment_id,
         violation_name: actionName,
+        flag_type: eventType,
         is_terminal: isTerminal,
       }).catch(e => console.error('Failed to record strike on server', e));
     }
@@ -537,31 +561,65 @@ export default function AssessmentTaker() {
     return true;  // strike was issued
   }, [captureScreenshot, hasStarted, assessment]);
 
-  // ── Proctoring Analysis ───────────────────────────────────────────────────
+  // ── Proctoring Analysis (Mediapipe FaceLandmarker) ────────────────────────
+  //
+  // Replaces the previous native-FaceDetector + hand-rolled pixel heuristics.
+  // We use Google's MediaPipe Tasks-Vision FaceLandmarker (free & open source,
+  // runs fully client-side via WASM) which returns 478 facial landmarks per
+  // detected face, including iris/eye centres. From these landmarks we derive:
+  //   • face presence      (>=1 face detected)
+  //   • multiple people    (>=2 faces detected)
+  //   • eye/gaze off-screen (iris position relative to eye corners)
+  //   • head turn          (nose vs face-centre horizontal offset / yaw proxy)
+  // All thresholds are pulled from the assignment's strictness config.
   useEffect(() => {
     if (!hasStarted) return;
 
+    let cancelled = false;
+
     // ── Auto-seed seenFaceOnceRef after 10 s ─────────────────────────────────
-    // If the camera is open and the assessment started, we assume the candidate
-    // was present at the beginning. This ensures face-missing strikes fire
-    // even when the initial pixel scan doesn't confidently detect a face.
     const seedTimer = setTimeout(() => {
       if (!seenFaceOnceRef.current) seenFaceOnceRef.current = true;
     }, 10000);
 
-    // ── Initialise native FaceDetector (Chrome, behind flag) ─────────────────
-    if ('FaceDetector' in window && !faceDetectorRef.current) {
-      try { faceDetectorRef.current = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 4 }); }
-      catch (_) { faceDetectorRef.current = null; }
-    }
+    // ── Load the MediaPipe FaceLandmarker model (WASM + .task weights) ────────
+    // The model is fetched from the official CDN. It is cached by the browser so
+    // subsequent assessments load instantly. OUTPUT_FACE_BLENDSHAPES is enabled so
+    // blendshape scores (e.g. eyeLook* / headYaw) can be used as an extra signal.
+    (async () => {
+      try {
+        const fileset = await FilesetResolver.forVisionTasks('/proctoring/wasm/');
+        if (cancelled) return;
+        const landmarker = await FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: {
+            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numFaces: 4,
+          // Lower the confidence floors so a second (often smaller / partially
+          // framed) person is actually detected instead of being filtered out.
+          minFaceDetectionConfidence: 0.3,
+          minFacePresenceConfidence: 0.3,
+          minTrackingConfidence: 0.3,
+          outputFaceBlendshapes: true,
+        });
+        if (cancelled) { landmarker.close?.(); return; }
+        faceLandmarkerRef.current = landmarker;
+        faceLandmarkerReadyRef.current = true;
+      } catch (err) {
+        console.error('Failed to load FaceLandmarker, proctoring CV disabled:', err);
+        toast.error('Advanced proctoring model failed to load; basic monitoring only.', { duration: 5000 });
+      }
+    })();
 
-    // ── LAYER 1: SpeechRecognition ───────────────────────────────────────────
+    // ── LAYER 1: SpeechRecognition (clear spoken utterances) ─────────────────
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition && proctoringConfig.audio_detect) {
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = '';
+      recognition.lang = navigator.language || 'en-US';
       recognition.maxAlternatives = 1;
       recognition.onresult = (event) => {
         const last = event.results[event.results.length - 1];
@@ -584,14 +642,20 @@ export default function AssessmentTaker() {
       recognition.onerror = (e) => {
         if (e.error !== 'no-speech' && e.error !== 'aborted') console.warn('SR error:', e.error);
       };
-      recognition.onend = () => { try { recognition.start(); } catch (_) {} };
-      try { recognition.start(); } catch (_) {}
+      recognition.onend = () => { try { recognition.start(); } catch { /* ignore */ } };
+      try { recognition.start(); } catch { /* ignore */ }
       speechRecognitionRef.current = recognition;
     }
 
-    // ── LAYER 2: Web Audio — catches murmurs / whispers ──────────────────────
+    // ── LAYER 2: Web Audio FFT — catches murmurs / whispers ─────────────────
     const audioInterval = setInterval(() => {
       if (!analyserRef.current || !proctoringConfig.audio_detect) return;
+      // The AudioContext is created on mount but only starts producing data once
+      // resumed (requires a user gesture). If it's still suspended (e.g. resume in
+      // requestFS didn't take), nudge it now so the analyser actually receives audio.
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
       const fftSize = analyserRef.current.fftSize;
       const sampleRate = audioCtxRef.current?.sampleRate || 44100;
       const binHz = sampleRate / fftSize;
@@ -610,7 +674,6 @@ export default function AssessmentTaker() {
       const rms = Math.sqrt(rmsSum / timeBuf.length);
 
       const cal = audioCalibrationRef.current;
-      // Calibrate for 4 s (8 samples × 500 ms) — captures room ambience
       if (cal.samples.length < 8) {
         cal.samples.push(voiceAvg);
         cal.baseline = cal.samples.reduce((a, b) => a + b, 0) / cal.samples.length;
@@ -621,14 +684,16 @@ export default function AssessmentTaker() {
       if (audioState.quietSamples === 0 && !audioState.lockedUntil) audioState.quietSamples = 6;
       const now = Date.now();
 
-      // Treat generic loudness as evidence only when the spectrum looks voice-like.
-      // This avoids repeated unfair strikes from fan noise, keyboard taps, mic AGC,
-      // or one residual audio spike after the candidate has stopped speaking.
-      const voiceFloor = Math.max(baseline + 22, 30);
-      const voiceSpreadLooksHuman = voiceRatio >= 0.18 && voiceRatio <= 0.72;
-      const energeticVoice = voiceAvg > voiceFloor && voiceSpreadLooksHuman && rms > 0.035;
-      const veryLoudVoiceBand = voiceAvg > Math.max(baseline + 32, 42) && voiceSpreadLooksHuman && rms > 0.055;
-      const isVoiceLike = energeticVoice || veryLoudVoiceBand;
+      // Looser, more robust voice detection. A clear sustained voice near the mic
+      // should be flagged even when the surrounding room is not perfectly quiet.
+      const voiceFloor = Math.max(baseline + 14, 18);
+      const voiceSpreadLooksHuman = voiceRatio >= 0.10 && voiceRatio <= 0.85;
+      const energeticVoice = voiceAvg > voiceFloor && voiceSpreadLooksHuman && rms > 0.018;
+      const veryLoudVoiceBand = voiceAvg > Math.max(baseline + 22, 30) && rms > 0.03;
+      // Fallback: any clearly loud, sustained sound in the voice band (covers mics
+      // with aggressive AGC that flatten the spectrum into a non-"human" shape).
+      const loudSustain = voiceAvg > Math.max(baseline + 30, 40) && rms > 0.02;
+      const isVoiceLike = energeticVoice || veryLoudVoiceBand || loudSustain;
 
       if (!isVoiceLike) {
         audioState.quietSamples = Math.min(audioState.quietSamples + 1, 20);
@@ -636,19 +701,14 @@ export default function AssessmentTaker() {
         cal.baseline = baseline * 0.95 + voiceAvg * 0.05;
       }
 
-      // After one audio strike, require both time and multiple quiet samples before
-      // another low-level mic strike can be issued. SpeechRecognition can still catch
-      // a new, clear utterance separately with its own longer cooldown.
-      if (now < audioState.lockedUntil || audioState.quietSamples < 6) {
-        return;
-      }
+      if (now < audioState.lockedUntil || audioState.quietSamples < 6) return;
 
       if (isVoiceLike) {
         if (!audioViolationTimer.current) audioViolationTimer.current = now;
-        if (now - audioViolationTimer.current > 3200) {
-          const fired = handleCheatAttemptRef.current?.('Sustained Voice Detected Near Microphone', 'audio_detected', 45000);
+        if (now - audioViolationTimer.current > (proctoringConfig.voice_sustain_ms || 3200)) {
+          const fired = handleCheatAttemptRef.current?.('Sustained Voice Detected Near Microphone', 'audio_detected', proctoringConfig.audio_cooldown_ms || 45000);
           if (fired) {
-            audioState.lockedUntil = now + 45000;
+            audioState.lockedUntil = now + (proctoringConfig.audio_cooldown_ms || 45000);
             audioState.quietSamples = 0;
           }
           audioViolationTimer.current = null;
@@ -656,13 +716,13 @@ export default function AssessmentTaker() {
       }
     }, 500);
 
-    // ── CV / FACE: check every 1800 ms ───────────────────────────────────────
-    const cvInterval = setInterval(async () => {
+    // ── CV / FACE loop — runs every 700 ms (light enough for VIDEO mode) ─────
+    const cvInterval = setInterval(() => {
       const vid = videoRef.current;
       const videoTrack = streamRef.current?.getVideoTracks?.()[0];
       const trackDead = !videoTrack || videoTrack.readyState !== 'live' || videoTrack.muted || !videoTrack.enabled;
 
-      // Camera track died / disabled by OS (hardware lid switch)
+      // Camera track died / disabled by OS (hardware lid switch / privacy shutter)
       if (trackDead) {
         if (!cameraTrackViolationTimer.current) cameraTrackViolationTimer.current = Date.now();
         if (Date.now() - cameraTrackViolationTimer.current > 1500) {
@@ -672,210 +732,202 @@ export default function AssessmentTaker() {
         return;
       }
       cameraTrackViolationTimer.current = null;
-      if (!vid || vid.readyState < 2 || vid.videoWidth === 0) return;
+      if (!vid || vid.readyState < 2 || vid.videoWidth === 0 || !faceLandmarkerReadyRef.current) return;
 
-      // ── Draw to canvas for pixel analysis ────────────────────────────────────
+      // ── Camera covered / lid closed: brightness drops sharply ─────────────
       const can = canvasRef.current;
       if (!can) return;
       const ctx = can.getContext('2d', { willReadFrequently: true });
-      const W = 160, H = 120;
-      can.width = W; can.height = H;
-      ctx.drawImage(vid, 0, 0, W, H);
-      const data = ctx.getImageData(0, 0, W, H).data;
-
-      // Brightness
+      can.width = 160; can.height = 120;
+      ctx.drawImage(vid, 0, 0, 160, 120);
+      const data = ctx.getImageData(0, 0, 160, 120).data;
       let brightness = 0;
       for (let i = 0; i < data.length; i += 4) brightness += (data[i] + data[i+1] + data[i+2]) / 3;
-      const avgBright = brightness / (W * H);
-
-      // Camera covered / lid closed: brightness drops sharply
+      const avgBright = brightness / (160 * 120);
       if (avgBright < 15) {
-        if (!cameraViolationTimer.current) cameraViolationTimer.current = Date.now();
-        if (Date.now() - cameraViolationTimer.current > 2000) {
+        if (!cameraObstructedTimerRef.current) cameraObstructedTimerRef.current = Date.now();
+        if (Date.now() - cameraObstructedTimerRef.current > 2000) {
           handleCheatAttemptRef.current?.('Camera Obstructed / Covered', 'camera_obstructed', 15000);
-          cameraViolationTimer.current = null;
+          cameraObstructedTimerRef.current = null;
         }
       } else {
-        cameraViolationTimer.current = null;
+        cameraObstructedTimerRef.current = null;
       }
 
-      // ── Skin-pixel analysis ───────────────────────────────────────────────────
-      const faceZoneH = Math.floor(H * 0.70);   // top 70% — face + shoulders
-      const skinHistogram = new Array(W).fill(0);
-      let totalSkinPixels = 0;
-      let centerSkinPixels = 0;
-      const cStartX = Math.floor(W * 0.20);
-      const cEndX   = Math.floor(W * 0.80);
+      // ── Run the ML landmarker ──────────────────────────────────────────────
+      let result;
+      try {
+        result = faceLandmarkerRef.current.detectForVideo(vid, performance.now());
+      } catch { /* ignore */ return; }
+      const faces = result?.faceLandmarks || [];
+      faceLandmarkResultRef.current = result;
+      const now = Date.now();
 
-      for (let i = 0; i < data.length; i += 4) {
-        const px = i / 4, x = px % W, y = Math.floor(px / W);
-        if (y >= faceZoneH) continue;
-        const r = data[i], g = data[i+1], b = data[i+2];
-        // Broad skin heuristic — works for light, medium and dark skin tones
-        const isSkin = (
-          r > 50 && g > 20 && b > 10 &&
-          r > g && r > b &&
-          (r - Math.min(g, b)) > 10 &&
-          Math.max(r, g, b) - Math.min(r, g, b) > 10
-        );
-        if (isSkin) {
-          skinHistogram[x]++;
-          totalSkinPixels++;
-          if (x >= cStartX && x < cEndX) centerSkinPixels++;
-        }
-      }
-
-      const overallRatio = totalSkinPixels / (W * faceZoneH);
-      const centerRatio  = centerSkinPixels / ((cEndX - cStartX) * faceZoneH);
-
-      // ── Native FaceDetector path (when available) ─────────────────────────
-      if (faceDetectorRef.current && vid.readyState >= 2) {
-        try {
-          const faces = await faceDetectorRef.current.detect(vid);
-          const frameArea = (vid.videoWidth || 1) * (vid.videoHeight || 1);
-
-          // Min face area = 5% of frame (raised from 3%).
-          // At 5% a face must be close and prominent. Distant background people,
-          // reflections in glasses, posters, and phone screens are excluded.
-          const sigFaces = faces.filter(f => {
-            const box = f.boundingBox;
-            if (!box) return false;
-            return (box.width * box.height) / frameArea >= 0.050;
-          });
-
-          if (sigFaces.length >= 1) {
-            seenFaceOnceRef.current = true;
-            motionViolationTimer.current = null;
-          } else if (seenFaceOnceRef.current && proctoringConfig.face_not_visible) {
-            if (!motionViolationTimer.current) motionViolationTimer.current = Date.now();
-            else if (Date.now() - motionViolationTimer.current > 7000) {
-              handleCheatAttemptRef.current?.('Face Not Visible — Please Stay in Frame', 'person_not_visible', 12000);
-              captureScreenshot('Face Not Visible');
-              motionViolationTimer.current = null;
-            }
-          }
-
-          if (sigFaces.length >= 2 && proctoringConfig.multiple_people) {
-            // Require 10 continuous seconds of detections (≈5 samples at 1.8s interval)
-            // before flagging. A single bad frame or glitch never accumulates this.
-            if (!multipleFacesTimerRef.current) {
-              multipleFacesTimerRef.current = Date.now();
-              multipleFacesTimerRef._count = 1;
-            } else {
-              multipleFacesTimerRef._count = (multipleFacesTimerRef._count || 0) + 1;
-              // Must be sustained for 10 s AND seen in at least 4 consecutive samples
-              if (
-                Date.now() - multipleFacesTimerRef.current > 10000 &&
-                multipleFacesTimerRef._count >= 4
-              ) {
-                handleCheatAttemptRef.current?.(`Multiple People in Camera (${sigFaces.length} faces)`, 'proctoring_violation', 60000);
-                multipleFacesTimerRef.current = null;
-                multipleFacesTimerRef._count = 0;
-              }
-            }
-          } else {
-            // Reset as soon as we drop below 2 faces
-            multipleFacesTimerRef.current = null;
-            multipleFacesTimerRef._count = 0;
-          }
-          return; // FaceDetector handled — skip pixel heuristics
-        } catch (_) { /* fall through */ }
-      }
-
-      // ── Pixel-heuristic path (FaceDetector unavailable) ───────────────────
-      // Face present: enough skin pixels in top portion of frame
-      const facePresent = avgBright > 12 && overallRatio > 0.007;
-      // Face strongly missing: very low skin presence when room is lit
-      const faceMissing = avgBright > 16 && overallRatio < 0.003;
-
-      if (facePresent) {
+      // ── Face presence ──────────────────────────────────────────────────────
+      if (faces.length >= 1) {
         seenFaceOnceRef.current = true;
-        motionViolationTimer.current = null;
-      } else if (seenFaceOnceRef.current && faceMissing) {
-        if (!motionViolationTimer.current) motionViolationTimer.current = Date.now();
-        else if (Date.now() - motionViolationTimer.current > 7000) {
+        faceMissingTimerRef.current = null;
+      } else if (seenFaceOnceRef.current && proctoringConfig.face_not_visible) {
+        if (!faceMissingTimerRef.current) faceMissingTimerRef.current = now;
+        else if (now - faceMissingTimerRef.current > (proctoringConfig.face_missing_sustain_ms || 7000)) {
           handleCheatAttemptRef.current?.('Face Not Visible — Please Stay in Frame', 'person_not_visible', 12000);
           captureScreenshot('Face Not Visible');
-          motionViolationTimer.current = null;
-        }
-      } else if (!faceMissing) {
-        motionViolationTimer.current = null;
-      }
-
-      // ── Multiple people: histogram peak detection (pixel-heuristic fallback) ──
-      // NOTE: This path only runs when the browser's native FaceDetector API is
-      // unavailable. It is intentionally conservative to avoid false positives.
-      const smoothed = [...skinHistogram];
-      for (let x = 2; x < W - 2; x++) {
-        smoothed[x] = (skinHistogram[x-2] + skinHistogram[x-1] + skinHistogram[x] + skinHistogram[x+1] + skinHistogram[x+2]) / 5;
-      }
-
-      // Raised from 0.15 → 0.35: each column must have many skin pixels to count
-      // as a "face blob". Shoulders, arms, hair at the edge of frame won't qualify.
-      const peakThreshold = faceZoneH * 0.35;
-      const peaks = [];
-      let inPeak = false, pkStart = 0;
-      for (let x = 0; x < W; x++) {
-        if (smoothed[x] > peakThreshold) {
-          if (!inPeak) { inPeak = true; pkStart = x; }
-        } else if (inPeak) {
-          inPeak = false;
-          peaks.push({ start: pkStart, end: x, width: x - pkStart });
+          faceMissingTimerRef.current = null;
         }
       }
-      if (inPeak) peaks.push({ start: pkStart, end: W, width: W - pkStart });
 
-      // A face at 160px canvas is typically 25-70px wide.
-      // MIN_PEAK_W raised from 15→28 (eliminates narrow shoulder/hair blobs).
-      // MAX_PEAK_W lowered from 90→75 (a single face won't exceed 75px at 160px canvas).
-      const MIN_PEAK_W = 28;
-      const MAX_PEAK_W = 75;
-      const facePeaks = peaks.filter(p => p.width >= MIN_PEAK_W && p.width <= MAX_PEAK_W);
-
-      let multipleDetected = false;
-      // Two distinct face-sized peaks with a meaningful gap between them.
-      // MIN_GAP_PX raised from 15→35: a real gap between two separate people's
-      // faces at webcam distances. A single face with highlight/shadow variation
-      // splits into blobs only a few pixels apart — those are now ignored.
-      const MIN_GAP_PX = 35;
-      for (let i = 0; i < facePeaks.length - 1; i++) {
-        if (facePeaks[i + 1].start - facePeaks[i].end >= MIN_GAP_PX) {
-          multipleDetected = true;
-          break;
-        }
-      }
-      // Condition B (merged-faces blob) removed — it was the primary source of
-      // false positives because one person's face+hair+shoulders easily spans 90px.
-
-      // Additional guards: room must be well-lit AND significant skin area present.
-      // overallRatio guard raised from 0.05→0.12 so a faint blob doesn't count.
-      if (multipleDetected && avgBright > 20 && overallRatio > 0.12 && proctoringConfig.multiple_people) {
-        if (!backgroundMovementTimer.current) backgroundMovementTimer.current = Date.now();
-        else if (Date.now() - backgroundMovementTimer.current > 10000) {
-          handleCheatAttemptRef.current?.('Multiple People Detected in Camera', 'proctoring_violation', 60000);
-          backgroundMovementTimer.current = null;
+      // ── Multiple people ───────────────────────────────────────────────────
+      if (faces.length >= 2 && proctoringConfig.multiple_people) {
+        if (!multiFaceStartRef.current) {
+          multiFaceStartRef.current = now;
+          multiFaceSamplesRef.current = 1;
+        } else {
+          multiFaceSamplesRef.current += 1;
+          if (
+            now - multiFaceStartRef.current > (proctoringConfig.multiple_people_sustain_ms || 10000) &&
+            multiFaceSamplesRef.current >= (proctoringConfig.multiple_people_min_samples || 4)
+          ) {
+            handleCheatAttemptRef.current?.(`Multiple People in Camera (${faces.length} faces)`, 'proctoring_violation', 60000);
+            multiFaceStartRef.current = 0;
+            multiFaceSamplesRef.current = 0;
+          }
         }
       } else {
-        backgroundMovementTimer.current = null;
+        multiFaceStartRef.current = 0;
+        multiFaceSamplesRef.current = 0;
       }
-    }, 1800);
+
+      // ── Gaze (eyes off screen) & head turn, per primary face ───────────────
+      if (faces.length >= 1) {
+        const lm = faces[0];
+        const noseTip  = lm[1];
+        const leftFace = lm[234];  // face left edge
+        const rightFace = lm[454]; // face right edge
+
+        // Gaze detection uses TWO complementary signals so brief "here and there"
+        // glances are caught reliably:
+        //  (a) MediaPipe blendshapes — trained eye-gaze scores (down/up/out/in).
+        //      When glancing sideways, one eye looks OUT and the OTHER looks IN,
+        //      so we must combine both directions to capture side glances.
+        //  (b) Iris geometry — how far the pupil sits from the eye centre.
+        //      A very direct proxy: pupil near the corner => looking that way.
+        const bs = getBlendshapes(result);
+        if (proctoringConfig.eye_tracking) {
+          // (a) blendshapes
+          const down = (bs?.eyeLookDownLeft || 0) + (bs?.eyeLookDownRight || 0);
+          const up   = (bs?.eyeLookUpLeft || 0) + (bs?.eyeLookUpRight || 0);
+          // look LEFT => left eye out + right eye in ; look RIGHT => right eye out + left eye in
+          const left  = (bs?.eyeLookOutLeft || 0) + (bs?.eyeLookInRight || 0);
+          const right = (bs?.eyeLookOutRight || 0) + (bs?.eyeLookInLeft || 0);
+          const bsHoriz = Math.max(left, right);
+          const bsVert  = down + up;
+          // Thresholds tuned to catch real "eyes off screen" glances while
+          // ignoring the tiny saccades of normal reading.
+          const bsAway = bsHoriz > 0.15 || bsVert > 0.20;
+
+          // (b) iris geometry — normalised pupil offset within the eye opening.
+          let irisAway = false;
+          let irisDir = '';
+          let gxVal = 0, gyVal = 0, irisAvail = false;
+          // Calculate each pupil against its own eye, not the entire face.
+          // This catches eye-only side glances while the head is still centred.
+          const rightOuter = lm[33], rightInner = lm[133], leftInner = lm[362], leftOuter = lm[263];
+          const rightIris = lm[468], leftIris = lm[473];
+          const rightTop = lm[159], rightBottom = lm[145], leftTop = lm[386], leftBottom = lm[374];
+          if (rightOuter && rightInner && leftInner && leftOuter && rightIris && leftIris && rightTop && rightBottom && leftTop && leftBottom) {
+            irisAvail = true;
+            const pupilOffset = (iris, outer, inner, top, bottom) => ({
+              x: (iris.x - (outer.x + inner.x) / 2) / (Math.abs(inner.x - outer.x) || 1),
+              y: (iris.y - (top.y + bottom.y) / 2) / (Math.abs(bottom.y - top.y) || 1),
+            });
+            const rightEye = pupilOffset(rightIris, rightOuter, rightInner, rightTop, rightBottom);
+            const leftEye = pupilOffset(leftIris, leftOuter, leftInner, leftTop, leftBottom);
+            const gx = (rightEye.x + leftEye.x) / 2;
+            const gxClamped = Math.max(-0.5, Math.min(0.5, gx));
+            const gy = (rightEye.y + leftEye.y) / 2;
+            gxVal = gxClamped; gyVal = gy;
+            irisAway = Math.abs(gxClamped) > 0.12 || Math.abs(gy) > 0.16;
+            irisDir = Math.abs(gxClamped) > Math.abs(gy) ? (gxClamped > 0 ? 'right' : 'left') : (gy > 0 ? 'down' : 'up');
+          }
+
+          const gazeOff = bsAway || irisAway;
+          if (isAssessmentTestMode) {
+            setProctorDebug({
+              faces: faces.length,
+              model: faceLandmarkerReadyRef.current,
+              bsLen: result?.faceBlendshapes?.length ?? -1,
+              bsCount: bs ? Object.keys(bs).length : 0,
+              L: +left.toFixed(2), R: +right.toFixed(2), D: +down.toFixed(2), U: +up.toFixed(2),
+              bsAway,
+              irisAvail, gx: +gxVal.toFixed(2), gy: +gyVal.toFixed(2), irisAway,
+              gazeOff,
+              nose: noseTip ? +noseTip.x.toFixed(2) : null,
+            });
+          }
+          if (gazeOff) {
+            gazeSamplesRef.current += 1;
+            if (!gazeStrikeTimerRef.current) {
+              gazeStrikeTimerRef.current = now;
+            } else if (now - gazeStrikeTimerRef.current > (proctoringConfig.gaze_averted_sustain_ms || 4000) && gazeSamplesRef.current >= 4) {
+              const dir = irisAway ? irisDir
+                : (bsHoriz > bsVert ? (left > right ? 'left' : 'right') : (down >= up ? 'down' : 'up'));
+              handleCheatAttemptRef.current?.(`Candidate Looking Away From Screen (${dir})`, 'gaze_averted', 20000);
+              gazeStrikeTimerRef.current = null;
+              gazeSamplesRef.current = 0;
+            }
+          } else {
+            gazeStrikeTimerRef.current = null;
+            gazeSamplesRef.current = 0;
+          }
+        } else {
+          gazeStrikeTimerRef.current = null;
+          gazeSamplesRef.current = 0;
+        }
+
+        if (noseTip && leftFace && rightFace) {
+          // Head turn proxy: nose horizontal offset from the face centre,
+          // normalised by face width. Large offset => head turned sideways.
+          const faceCentreX = (leftFace.x + rightFace.x) / 2;
+          const faceW = Math.abs(rightFace.x - leftFace.x) || 1;
+          const headTurn = (noseTip.x - faceCentreX) / faceW;
+
+          if (Math.abs(headTurn) > 0.40 && proctoringConfig.head_turn) {
+            if (!headTurnStrikeTimerRef.current) headTurnStrikeTimerRef.current = now;
+            else if (now - headTurnStrikeTimerRef.current > (proctoringConfig.head_turn_sustain_ms || 6000)) {
+              handleCheatAttemptRef.current?.(`Excessive Head Turning Detected (${headTurn > 0 ? 'right' : 'left'})`, 'head_turn', 20000);
+              headTurnStrikeTimerRef.current = null;
+            }
+          } else {
+            headTurnStrikeTimerRef.current = null;
+          }
+        }
+      } else {
+        gazeStrikeTimerRef.current = null;
+        gazeSamplesRef.current = 0;
+        headTurnStrikeTimerRef.current = null;
+      }
+    }, 700);
 
     return () => {
+      cancelled = true;
       clearTimeout(seedTimer);
       clearInterval(audioInterval);
       clearInterval(cvInterval);
       if (speechRecognitionRef.current) {
         speechRecognitionRef.current.onend = null;
-        try { speechRecognitionRef.current.abort(); } catch (_) {}
+        try { speechRecognitionRef.current.abort(); } catch { /* ignore */ }
         speechRecognitionRef.current = null;
       }
       audioViolationTimer.current = null;
       audioStateRef.current = { quietSamples: 0, lockedUntil: 0 };
-      cameraViolationTimer.current = null;
       cameraTrackViolationTimer.current = null;
-      motionViolationTimer.current = null;
-      multipleFacesTimerRef.current = null;
-      backgroundMovementTimer.current = null;
+      cameraObstructedTimerRef.current = null;
+      faceMissingTimerRef.current = null;
+      gazeStrikeTimerRef.current = null;
+      headTurnStrikeTimerRef.current = null;
+      multiFaceStartRef.current = 0;
+      multiFaceSamplesRef.current = 0;
+      faceLandmarkerReadyRef.current = false;
     };
   }, [hasStarted, handleCheatAttempt, captureScreenshot]);
 
@@ -885,7 +937,7 @@ export default function AssessmentTaker() {
     const handler = () => {
       if (!proctoringConfig.tab_switch) return;
       if (!hasStarted || submittingRef.current) return;
-      if (document.hidden) handleCheatAttempt('Tab Switching');
+      if (document.hidden) handleCheatAttempt('Tab Switching', 'tab_switch', proctoringConfig.tab_switch_cooldown_ms || 15000);
     };
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
@@ -897,7 +949,7 @@ export default function AssessmentTaker() {
       setIsFullscreen(isFS);
       if (!proctoringConfig.full_screen) return;
       if (!hasStarted || submittingRef.current) return;
-      if (!isFS) handleCheatAttempt('Exiting Fullscreen');
+      if (!isFS) handleCheatAttempt('Exiting Fullscreen', 'proctoring_violation', 15000);
     };
     document.addEventListener('fullscreenchange', onFSChange);
     return () => document.removeEventListener('fullscreenchange', onFSChange);
@@ -1051,6 +1103,8 @@ export default function AssessmentTaker() {
                   <span>📹</span> {proctoringConfig.audio_detect ? 'Webcam and 🎤 Microphone' : 'Webcam'} will be monitored
                 </div>
               )}
+              {proctoringConfig.eye_tracking && <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>👁️</span> You must keep your eyes on the screen</div>}
+              {proctoringConfig.head_turn && <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>🙆</span> Excessive head turning is not allowed</div>}
               {proctoringConfig.tab_switch && <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>🚫</span> Tab switching is restricted</div>}
               {(proctoringConfig.full_screen || proctoringConfig.multiple_people || proctoringConfig.face_not_visible || proctoringConfig.audio_detect || proctoringConfig.tab_switch) && (
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span>⚠️</span> {MAX_STRIKES} violations = automatic termination</div>
@@ -1112,7 +1166,7 @@ export default function AssessmentTaker() {
 
   // Parse test cases from string if needed
   if (q && q.question_type === 'coding' && typeof q.test_cases === 'string') {
-    try { q.test_cases = JSON.parse(q.test_cases); } catch (e) { q.test_cases = []; }
+    try { q.test_cases = JSON.parse(q.test_cases); } catch { q.test_cases = []; }
   }
   // Smart-extract test cases from problem text if none in DB
   if (q && q.question_type === 'coding' && (!q.test_cases || q.test_cases.length === 0)) {
@@ -1463,6 +1517,7 @@ export default function AssessmentTaker() {
                       className="btn btn-primary btn-sm"
                       style={{ padding: '4px 12px', fontSize: '0.75rem', gap: 6 }}
                       onClick={async () => {
+                        if (runningCode) return;
                         // ── Key fix: read code DIRECTLY from Monaco, not from React state ──
                         const selectedLanguage = answers[q.id]?.language || codingState?.language || q.programming_language || 'python';
                         const codeStr = editorRef.current?.getValue() || answers[q.id]?.code || starterForLanguage(selectedLanguage, q.starter_code) || '';
@@ -1476,7 +1531,8 @@ export default function AssessmentTaker() {
                         }
 
                         try {
-                          toast.loading('Running test cases...', { id: 'run-code' });
+                          setRunningCode(true);
+                          toast.loading(lang === 'cpp' ? 'Compiling C++ and running test cases…' : 'Running test cases…', { id: 'run-code' });
                           const res = await verifyApi.runCode({ language: lang, code: codeStr, test_cases: testCases });
 
                           const structuredResults = Array.isArray(res.data?.data?.test_results) ? res.data.data.test_results : [];
@@ -1735,6 +1791,19 @@ export default function AssessmentTaker() {
           Session ID: {id}-{assessment?.id}
         </div>
       </div>
+
+      {/* Live proctoring debug HUD — only in testMode so we can verify signals */}
+      {isAssessmentTestMode && proctorDebug && (
+        <div style={{ position: 'fixed', bottom: 24, left: 24, zIndex: 1000, background: 'rgba(0,0,0,0.82)', color: '#0f0', fontFamily: 'monospace', fontSize: '0.7rem', padding: '10px 12px', borderRadius: 8, lineHeight: 1.5, border: '1px solid #0f0', maxWidth: 260 }}>
+          <div style={{ color: '#fff', fontWeight: 700, marginBottom: 4 }}>PROCTOR DEBUG</div>
+          model: {String(proctorDebug.model)}<br />
+          faces: {proctorDebug.faces}<br />
+          blendshapes present: len={proctorDebug.bsLen} keys={proctorDebug.bsCount}<br />
+          eyeLook L:{proctorDebug.L} R:{proctorDebug.R} D:{proctorDebug.D} U:{proctorDebug.U} away:{String(proctorDebug.bsAway)}<br />
+          iris avail:{String(proctorDebug.irisAvail)} gx:{proctorDebug.gx} gy:{proctorDebug.gy} away:{String(proctorDebug.irisAway)}<br />
+          <span style={{ color: proctorDebug.gazeOff ? '#ff0' : '#0f0' }}>GAZE_OFF: {String(proctorDebug.gazeOff)}</span>
+        </div>
+      )}
     </div>
   );
 }
