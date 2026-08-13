@@ -115,13 +115,15 @@ async def get_org_settings(
     org = result.scalar_one_or_none()
     if not org:
         raise HTTPException(status_code=404, detail="Organisation not found")
-    return success({"id": org.id, "name": org.name, "domain": org.domain, "logo_url": org.logo_url, "primary_color": org.primary_color})
+    return success({"id": org.id, "name": org.name, "domain": org.domain, "logo_url": org.logo_url, "primary_color": org.primary_color, "proctoring_defaults": org.proctoring_defaults})
 
 
 class OrgSettingsUpdate(BaseModel):
     name: Optional[str] = None
     domain: Optional[str] = None
     primary_color: Optional[str] = None
+    logo_url: Optional[str] = None
+    proctoring_defaults: Optional[dict] = None
 
 
 @router.put("/org-settings")
@@ -132,12 +134,18 @@ async def update_org_settings(
 ):
     result = await db.execute(select(Organisation).where(Organisation.id == current_user.org_id))
     org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
     if body.name:
         org.name = body.name
     if body.domain:
         org.domain = body.domain
     if body.primary_color:
         org.primary_color = body.primary_color
+    if body.logo_url is not None:
+        org.logo_url = body.logo_url
+    if body.proctoring_defaults is not None:
+        org.proctoring_defaults = body.proctoring_defaults
     await db.commit()
     return success(message="Settings updated")
 

@@ -898,6 +898,19 @@ async def start_session(
         # First time — stamp the start time
         assgn.started_at = datetime.utcnow()
         assgn.status = AssignmentStatus.started
+    else:
+        # Resuming a previous session — enforce max_resumes limit
+        cfg = assgn.proctoring_config or {}
+        limit_resumes = cfg.get("limit_resumes", False)
+        max_resumes = cfg.get("max_resumes", 0)
+        
+        if limit_resumes and (assgn.resume_count or 0) >= max_resumes:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Resume limit reached. You have already re-opened this test {assgn.resume_count} time(s). The maximum allowed is {max_resumes}."
+            )
+        # Increment resume counter
+        assgn.resume_count = (assgn.resume_count or 0) + 1
 
     await db.commit()
     await db.refresh(assgn)
@@ -908,9 +921,16 @@ async def start_session(
         total = asmt.time_limit_minutes * 60
         time_remaining_seconds = max(0, total - int(elapsed))
 
+    cfg = assgn.proctoring_config or {}
+    limit_resumes = cfg.get("limit_resumes", False)
+    max_resumes = cfg.get("max_resumes", 0)
+
     return success({
         "assignment_id": assgn.id,
         "is_resume": is_resume,
+        "resume_count": assgn.resume_count or 0,
+        "limit_resumes": limit_resumes,
+        "max_resumes": max_resumes,
         "time_remaining_seconds": time_remaining_seconds,
         "strike_count": assgn.strike_count or 0,
     })

@@ -146,6 +146,8 @@ class AssessmentAssignment(Base):
     # Proctoring strike persistence — survives page reloads / reconnects
     strike_count = Column(Integer, default=0, nullable=False)
     terminated_by_proctor = Column(Boolean, default=False, nullable=False)
+    # Resume tracking — incremented each time the candidate re-opens a started test
+    resume_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 

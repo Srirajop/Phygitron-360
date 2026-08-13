@@ -293,6 +293,8 @@ export default function AssessmentTaker() {
   // Resume-session state: true if candidate previously started this assessment
   const [sessionAlreadyStarted, setSessionAlreadyStarted] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
+  // Resume limit info — populated from start-session response
+  const [resumeInfo, setResumeInfo] = useState({ count: 0, max: 0, limited: false, limitReached: false });
   // assignment_id is returned by startSession and needed for recordStrike
   const assignmentIdRef = useRef(null);
 
@@ -821,9 +823,12 @@ export default function AssessmentTaker() {
           const right = (bs?.eyeLookOutRight || 0) + (bs?.eyeLookInLeft || 0);
           const bsHoriz = Math.max(left, right);
           const bsVert  = down + up;
-          // Thresholds tuned to catch real "eyes off screen" glances while
-          // ignoring the tiny saccades of normal reading.
-          const bsAway = bsHoriz > 0.15 || bsVert > 0.20;
+          // Thresholds come from proctoringConfig (set per-strictness level).
+          // Lower values = more sensitive; catches eyes-only glances while the
+          // head is still forward-facing. Previously hardcoded at 0.15/0.20 (too high).
+          const bsHorizThr = proctoringConfig.gaze_bs_horiz_threshold ?? 0.08;
+          const bsVertThr  = proctoringConfig.gaze_bs_vert_threshold  ?? 0.14;
+          const bsAway = bsHoriz > bsHorizThr || bsVert > bsVertThr;
 
           // (b) iris geometry — normalised pupil offset within the eye opening.
           let irisAway = false;
@@ -846,7 +851,9 @@ export default function AssessmentTaker() {
             const gxClamped = Math.max(-0.5, Math.min(0.5, gx));
             const gy = (rightEye.y + leftEye.y) / 2;
             gxVal = gxClamped; gyVal = gy;
-            irisAway = Math.abs(gxClamped) > 0.12 || Math.abs(gy) > 0.16;
+            const irisXThr = proctoringConfig.gaze_iris_x_threshold ?? 0.08;
+            const irisYThr = proctoringConfig.gaze_iris_y_threshold ?? 0.12;
+            irisAway = Math.abs(gxClamped) > irisXThr || Math.abs(gy) > irisYThr;
             irisDir = Math.abs(gxClamped) > Math.abs(gy) ? (gxClamped > 0 ? 'right' : 'left') : (gy > 0 ? 'down' : 'up');
           }
 
@@ -858,30 +865,30 @@ export default function AssessmentTaker() {
               bsLen: result?.faceBlendshapes?.length ?? -1,
               bsCount: bs ? Object.keys(bs).length : 0,
               L: +left.toFixed(2), R: +right.toFixed(2), D: +down.toFixed(2), U: +up.toFixed(2),
+              bsHorizThr: +(bsHorizThr).toFixed(2), bsVertThr: +(bsVertThr).toFixed(2),
               bsAway,
               irisAvail, gx: +gxVal.toFixed(2), gy: +gyVal.toFixed(2), irisAway,
               gazeOff,
               nose: noseTip ? +noseTip.x.toFixed(2) : null,
             });
           }
+          // Single debounce: sustain timer only. Previously had a redundant
+          // gazeSamplesRef >= 4 guard (2.8 s at 700ms/frame) on top of the sustain
+          // timer, causing eyes-only glances to be silently ignored. Removed.
           if (gazeOff) {
-            gazeSamplesRef.current += 1;
             if (!gazeStrikeTimerRef.current) {
               gazeStrikeTimerRef.current = now;
-            } else if (now - gazeStrikeTimerRef.current > (proctoringConfig.gaze_averted_sustain_ms || 4000) && gazeSamplesRef.current >= 4) {
+            } else if (now - gazeStrikeTimerRef.current > (proctoringConfig.gaze_averted_sustain_ms || 4000)) {
               const dir = irisAway ? irisDir
                 : (bsHoriz > bsVert ? (left > right ? 'left' : 'right') : (down >= up ? 'down' : 'up'));
               handleCheatAttemptRef.current?.(`Candidate Looking Away From Screen (${dir})`, 'gaze_averted', 20000);
               gazeStrikeTimerRef.current = null;
-              gazeSamplesRef.current = 0;
             }
           } else {
             gazeStrikeTimerRef.current = null;
-            gazeSamplesRef.current = 0;
           }
         } else {
           gazeStrikeTimerRef.current = null;
-          gazeSamplesRef.current = 0;
         }
 
         if (noseTip && leftFace && rightFace) {
@@ -1020,9 +1027,24 @@ export default function AssessmentTaker() {
         if (sdata.time_remaining_seconds !== null && sdata.time_remaining_seconds !== undefined) {
           setTimeLeft(sdata.time_remaining_seconds);
         }
+        // Track resume info for the start gate banner
+        if (sdata.is_resume) {
+          setResumeInfo({
+            count: sdata.resume_count || 0,
+            max: sdata.max_resumes || 0,
+            limited: sdata.limit_resumes || false,
+            limitReached: false,
+          });
+        }
       }
     } catch (err) {
       const detail = err?.response?.data?.detail;
+      if (err?.response?.status === 429) {
+        // Resume limit hit — show locked screen, don't proceed
+        setResumeInfo({ count: 0, max: 0, limitReached: true, message: detail || 'You have used all your allowed re-opens for this test.' });
+        setStartingSession(false);
+        return;
+      }
       if (err?.response?.status === 403) {
         toast.error(detail || 'This assessment was terminated due to proctoring violations.', { duration: 8000 });
         setStartingSession(false);
@@ -1066,6 +1088,29 @@ export default function AssessmentTaker() {
   // ── Mandatory Start Gate ───────────────────────────────────────────────────
   if (!hasStarted) {
     const resumeTimeStr = timeLeft !== null ? `${String(Math.floor(timeLeft / 60)).padStart(2, '0')}:${String(timeLeft % 60).padStart(2, '0')}` : null;
+
+    // ── Resume limit exceeded — show a locked screen ────────────────────────
+    if (resumeInfo.limitReached) {
+      return (
+        <div style={{ position: 'fixed', inset: 0, background: 'linear-gradient(135deg, #020108 0%, #1E1B4B 50%, #020108 100%)', zIndex: 9999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 24 }}>
+          <div className="animate-scale-in" style={{ maxWidth: 480 }}>
+            <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'rgba(239,68,68,0.2)', border: '2px solid rgba(239,68,68,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 28px' }}>
+              <AlertOctagon size={40} color="#ef4444" />
+            </div>
+            <h2 style={{ fontSize: '2rem', marginBottom: 12, color: '#ef4444', fontWeight: 800 }}>Test Access Locked</h2>
+            <p style={{ color: 'rgba(255,255,255,0.75)', marginBottom: 24, fontSize: '1rem', lineHeight: 1.7 }}>
+              {resumeInfo.message || 'You have used all your allowed re-opens for this test.'}
+            </p>
+            <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 12, padding: '16px 20px' }}>
+              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', lineHeight: 1.6 }}>
+                The maximum number of re-opens set by the test organiser has been reached. Please contact your assessment coordinator if you believe this is an error.
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div style={{ position: 'fixed', inset: 0, background: 'linear-gradient(135deg, #020108 0%, #1E1B4B 50%, #020108 100%)', zIndex: 9999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 24 }}>
         <div className="animate-scale-in" style={{ maxWidth: 540 }}>
@@ -1080,9 +1125,14 @@ export default function AssessmentTaker() {
                   You have already started this assessment. Your previous session is still active.
                   Closing and reopening the page does <strong style={{ color: '#ef4444' }}>not reset your timer or strikes</strong>.
                 </div>
-                <div style={{ marginTop: 10, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   {resumeTimeStr && <span style={{ background: 'rgba(239,68,68,0.2)', color: '#fca5a5', padding: '4px 12px', borderRadius: 8, fontSize: '0.8rem', fontWeight: 700, fontFamily: 'monospace' }}>⏱ {resumeTimeStr} remaining</span>}
                   <span style={{ background: 'rgba(239,68,68,0.2)', color: '#fca5a5', padding: '4px 12px', borderRadius: 8, fontSize: '0.8rem', fontWeight: 700 }}>⚡ {strikeCount}/{MAX_STRIKES} strikes carried over</span>
+                  {resumeInfo.limited && (
+                    <span style={{ background: 'rgba(251,191,36,0.2)', color: '#fbbf24', padding: '4px 12px', borderRadius: 8, fontSize: '0.8rem', fontWeight: 700 }}>
+                      🔄 {resumeInfo.count} of {resumeInfo.max} re-opens used
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

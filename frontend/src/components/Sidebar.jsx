@@ -29,6 +29,7 @@ const roleNavItems = {
       { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
       { to: '/verify/bank', label: 'Question Bank', icon: Database },
       { to: '/verify/analytics', label: 'Analytics Dashboard', icon: BarChart2 },
+      { to: '/verify/proctoring', label: 'Proctoring Settings', icon: Shield },
     ]},
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'Directory', icon: Briefcase },
@@ -56,6 +57,7 @@ const roleNavItems = {
       { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
       { to: '/verify/bank', label: 'Question Bank', icon: Database },
       { to: '/verify/analytics', label: 'Analytics Dashboard', icon: BarChart2 },
+      { to: '/verify/proctoring', label: 'Proctoring Settings', icon: Shield },
     ]},
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy', label: 'Directory', icon: Briefcase },
@@ -114,6 +116,7 @@ const roleNavItems = {
       { to: '/verify/build', label: 'Assessment Builder', icon: PlusCircle },
       { to: '/verify/manage', label: 'Manage Assessments', icon: CheckSquare },
       { to: '/verify/bank', label: 'Question Bank', icon: Database },
+      { to: '/verify/proctoring', label: 'Proctoring Settings', icon: Shield },
     ]},
     { section: 'Learning', module: 'forge', items: [
       { to: '/forge', label: 'Dashboard', icon: BookOpen },

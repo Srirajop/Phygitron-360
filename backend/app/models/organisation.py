@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, func
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, func
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -18,6 +18,10 @@ class Organisation(Base):
     has_verify = Column(Boolean, default=False)    # Assessments
     has_forge = Column(Boolean, default=False)     # LMS / Forge
     has_deploy = Column(Boolean, default=False)    # Employee Database
+
+    # Global proctoring defaults (JSON) — HR sets org-wide strictness and per-rule
+    # overrides here; the Assign modal pre-populates from these values.
+    proctoring_defaults = Column(JSON, nullable=True)
 
     # Tenant management
     is_active = Column(Boolean, default=True)

@@ -56,6 +56,7 @@ import ManageAssessments from './pages/verify/ManageAssessments';
 import AssessmentAnalytics from './pages/verify/AssessmentAnalytics';
 import QuestionBank from './pages/verify/QuestionBank';
 import SubmissionsReview from './pages/verify/SubmissionsReview';
+import ProctoringSettings from './pages/verify/ProctoringSettings';
 
 // Forge
 import ForgeDashboard from './pages/forge/ForgeDashboard';
@@ -194,6 +195,7 @@ export default function App() {
             <Route path="/verify/analytics/:id" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><AssessmentAnalytics /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/verify/bank" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','instructor']}><AppLayout><QuestionBank /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/verify/submissions/:id" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><SubmissionsReview /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/verify/proctoring" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin']}><AppLayout><ProctoringSettings /></AppLayout></PrivateRoute></ModuleGate>} />
 
             {/* Forge */}
             <Route path="/forge" element={<ModuleGate module="forge"><PrivateRoute><AppLayout><ForgeDashboard /></AppLayout></PrivateRoute></ModuleGate>} />

@@ -27,6 +27,8 @@ export default function ManageAssessments() {
   const [candidates, setCandidates] = useState([]);
   const [assignModal, setAssignModal] = useState({ open: false, assessmentId: null, deadline: '', loading: false });
   const [proctoringConfig, setProctoringConfig] = useState(() => buildProctoringConfig('balanced', {}));
+  const [limitResumes, setLimitResumes] = useState(false);
+  const [maxResumes, setMaxResumes] = useState(0);
   const [selectedCandidates, setSelectedCandidates] = useState([]);
   const [search, setSearch] = useState('');
   
@@ -78,6 +80,8 @@ export default function ManageAssessments() {
     setSearch('');
     setShowSubset(false);
     setSelectedQuestionIds([]);
+    setLimitResumes(false);
+    setMaxResumes(0);
     setProctoringConfig(buildProctoringConfig('balanced', {}));
     
     // Load users
@@ -108,7 +112,7 @@ export default function ManageAssessments() {
         user_ids: selectedCandidates,
         deadline: assignModal.deadline ? new Date(assignModal.deadline).toISOString() : null,
         question_ids: showSubset ? selectedQuestionIds : null,
-        proctoring_config: proctoringConfig,
+        proctoring_config: { ...proctoringConfig, limit_resumes: limitResumes, max_resumes: maxResumes },
       });
       toast.success('Assessment assigned successfully!');
       setAssignModal({ open: false, assessmentId: null, deadline: '', loading: false });
@@ -436,6 +440,37 @@ export default function ManageAssessments() {
                         <span style={{ fontSize: '0.9rem' }}>{feat.label}</span>
                       </label>
                     ))}
+                  </div>
+
+                  {/* Max re-opens per candidate */}
+                  <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
+                        Limit Test Re-opens
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                        <span style={{ fontSize: '0.8rem', color: limitResumes ? 'var(--primary)' : 'var(--text-muted)', fontWeight: limitResumes ? 600 : 400 }}>{limitResumes ? 'ON' : 'OFF (Unlimited)'}</span>
+                        <input type="checkbox" checked={limitResumes} onChange={e => setLimitResumes(e.target.checked)} style={{ transform: 'scale(1.2)' }} />
+                      </label>
+                    </div>
+                    
+                    {limitResumes && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-card-alt)', padding: 12, borderRadius: 8 }}>
+                        <input
+                          type="number"
+                          min={0}
+                          max={20}
+                          value={maxResumes}
+                          onChange={e => setMaxResumes(Math.max(0, parseInt(e.target.value) || 0))}
+                          style={{ width: 80, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: '0.9rem', textAlign: 'center' }}
+                        />
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>
+                          {maxResumes === 0
+                            ? '0 re-opens (once closed, candidate cannot return)'
+                            : `Can re-open up to ${maxResumes} time${maxResumes > 1 ? 's' : ''}`}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
