@@ -362,9 +362,9 @@ async def send_email(to_email: str, subject: str, html_content: str, attachment_
             server.login(smtp_email, smtp_password)
             server.send_message(msg)
             
-        print(f"✅ Email successfully sent to {to_email}")
+        print(f"SUCCESS: Email successfully sent to {to_email}")
     except Exception as e:
-        print(f"❌ Failed to send email to {to_email}: {e}")
+        print(f"ERROR: Failed to send email to {to_email}: {e}")
 
 
 async def send_invite_email(

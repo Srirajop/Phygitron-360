@@ -201,4 +201,11 @@ PHYGITRON _360_March 2026 (1).xlsx
 test_offer_letter.pdf
 test_pydantic.py
 test_redact.pdf
+*.patch
+*.diff
+diff.txt
+.freebuff/
+original_taker.jsx
+temp_test.json
+
 
