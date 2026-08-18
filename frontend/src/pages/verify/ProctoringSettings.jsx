@@ -3,7 +3,7 @@ import { adminApi } from '../../api';
 import {
   Save, Eye, Mic, User, Users, MonitorOff, ScreenShare,
   RotateCcw, Activity, CheckCircle,
-  AlertTriangle, SlidersHorizontal,
+  AlertTriangle, SlidersHorizontal, ClipboardX,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -38,6 +38,7 @@ const RULE_ICONS = {
   full_screen: ScreenShare, tab_switch: MonitorOff,
   multiple_people: Users, face_not_visible: User,
   eye_tracking: Eye, head_turn: Activity, audio_detect: Mic,
+  block_paste: ClipboardX,
 };
 
 const RULE_DESC = {
@@ -48,6 +49,7 @@ const RULE_DESC = {
   eye_tracking:     'Looking away from the screen triggers a violation after the timer below.',
   head_turn:        'Turning the head away from the screen triggers a violation after the timer below.',
   audio_detect:     'Speaking or sustained background audio triggers a violation after the timer below.',
+  block_paste:      'Stops candidates from pasting text into written and coding answers — prevents pre-copied answers from the web. Pasting triggers a violation.',
 };
 
 const RULE_PARAMS = {
@@ -395,10 +397,12 @@ export default function ProctoringSettings() {
             }}>
               <AlertTriangle size={15} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 2 }} />
               <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                <strong style={{ color: 'var(--text-primary)' }}>Full Screen</strong> and{' '}
-                <strong style={{ color: 'var(--text-primary)' }}>Tab Switch</strong>{' '}
-                fire instantly when a violation happens — there is no timer to adjust.
-                You can turn them on or off in Step 3 below.
+                 <strong style={{ color: 'var(--text-primary)' }}>Full Screen</strong>,{' '}
+                 <strong style={{ color: 'var(--text-primary)' }}>Tab Switch</strong>{' '}
+                 and{' '}
+                 <strong style={{ color: 'var(--text-primary)' }}>Block Copy/Paste</strong>{' '}
+                 fire instantly when a violation happens — there is no timer to adjust.
+                 You can turn them on or off in Step 3 below.
               </div>
             </div>
 

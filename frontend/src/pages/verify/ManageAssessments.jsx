@@ -152,14 +152,14 @@ export default function ManageAssessments() {
     }
   };
 
-  const deleteOrgScreenshots = async () => {
-    if (!window.confirm('Delete screenshots from every assessment in this organisation? This cannot be undone.')) return;
+  const deleteAssessmentScreenshots = async (id) => {
+    if (!window.confirm('Delete all screenshots from every candidate for this assessment? This cannot be undone.')) return;
     try {
-      const response = await verifyApi.deleteOrganisationScreenshots();
+      const response = await verifyApi.deleteAssessmentScreenshots(id);
       const count = response.data?.data?.count || 0;
       toast.success(`${count} screenshots deleted`);
     } catch {
-      toast.error('Failed to delete organisation screenshots');
+      toast.error('Failed to delete assessment screenshots');
     }
   };
 
@@ -197,6 +197,11 @@ export default function ManageAssessments() {
       {canViewAnalytics && (
         <Link to={`/verify/submissions/${a.id}`} className="btn btn-ghost btn-sm" title="View Submissions"><Users size={14} /></Link>
       )}
+      {['super_admin', 'org_admin', 'hr'].includes(user?.role) && (
+        <button className="btn btn-ghost btn-sm text-danger" onClick={() => deleteAssessmentScreenshots(a.id)} title="Delete all screenshots for this assessment">
+          <Trash2 size={14} />
+        </button>
+      )}
     </div>
   );
 
@@ -209,11 +214,6 @@ export default function ManageAssessments() {
             <button className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '6px 10px' }} onClick={() => setViewMode('list')} title="List view"><List size={16} /></button>
             <button className={`btn btn-sm ${viewMode === 'grid' ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '6px 10px' }} onClick={() => setViewMode('grid')} title="Card view"><LayoutGrid size={16} /></button>
           </div>
-          {['super_admin', 'org_admin', 'hr'].includes(user?.role) && (
-            <button className="btn btn-danger btn-sm" onClick={deleteOrgScreenshots} title="Delete screenshots from all assessments in this organisation">
-              <Trash2 size={16} /> Delete Screenshots
-            </button>
-          )}
           {canCreateOrAssign && <Link to="/verify/build" className="btn btn-shimmer"><PlusCircle size={16} /> Create Assessment</Link>}
         </div>
       </div>

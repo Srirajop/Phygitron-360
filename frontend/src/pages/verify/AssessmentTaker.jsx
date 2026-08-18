@@ -1234,10 +1234,10 @@ export default function AssessmentTaker() {
   return (
     <div
       style={{ minHeight: '100vh', background: 'var(--bg-page)', position: 'relative' }}
-      onCopy={isAssessmentTestMode ? undefined : (e => { if (isMonacoEvent(e)) return; e.preventDefault(); handleCheatAttempt('Copying text'); })}
-      onPaste={isAssessmentTestMode ? undefined : (e => { if (isMonacoEvent(e)) return; e.preventDefault(); handleCheatAttempt('Pasting text'); })}
-      onCut={isAssessmentTestMode ? undefined : (e => { if (isMonacoEvent(e)) return; e.preventDefault(); handleCheatAttempt('Cutting text'); })}
-      onContextMenu={isAssessmentTestMode ? undefined : (e => { if (isMonacoEvent(e)) return; e.preventDefault(); handleCheatAttempt('Right Click'); })}
+      onCopy={isAssessmentTestMode ? undefined : (e => { if (!proctoringConfig.block_paste || isMonacoEvent(e)) return; e.preventDefault(); handleCheatAttempt('Copying text'); })}
+      onPaste={isAssessmentTestMode ? undefined : (e => { if (!proctoringConfig.block_paste || isMonacoEvent(e)) return; e.preventDefault(); handleCheatAttempt('Pasting text'); })}
+      onCut={isAssessmentTestMode ? undefined : (e => { if (!proctoringConfig.block_paste || isMonacoEvent(e)) return; e.preventDefault(); handleCheatAttempt('Cutting text'); })}
+      onContextMenu={isAssessmentTestMode ? undefined : (e => { if (!proctoringConfig.block_paste || isMonacoEvent(e)) return; e.preventDefault(); handleCheatAttempt('Right Click'); })}
     >
       <style>{leetcodeStyle}</style>
 
@@ -1651,6 +1651,21 @@ export default function AssessmentTaker() {
                           // Move cursor to end
                           const lastLine = editor.getModel().getLineCount();
                           editor.setPosition({ lineNumber: lastLine, column: editor.getModel().getLineMaxColumn(lastLine) });
+                        }
+
+                        // ── Anti-paste (Block Copy/Paste proctoring feature) ──
+                        // Monaco handles paste internally, so the container-level
+                        // handler can't reliably block it. Capture the pre-paste
+                        // value on the raw paste event, then revert it on paste.
+                        if (proctoringConfig.block_paste) {
+                          let prePasteValue = editor.getValue();
+                          const domNode = editor.getDomNode();
+                          const onNativePaste = () => { prePasteValue = editor.getValue(); };
+                          domNode?.addEventListener('paste', onNativePaste, true);
+                          editor.onDidPaste(() => {
+                            editor.setValue(prePasteValue); // undo the pasted content
+                            handleCheatAttempt('Pasting text');
+                          });
                         }
                       }}
                       onChange={val => {

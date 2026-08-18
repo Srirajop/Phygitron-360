@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, BackgroundTasks
 from app.utils.import_utils import extract_text_from_file, parse_questions_with_ai
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from app.database import get_db
@@ -3425,6 +3425,35 @@ async def delete_organisation_screenshots(
     result = await db.execute(statement)
     await db.commit()
     return success(data={"count": result.rowcount or 0}, message="All organisation screenshots deleted successfully")
+
+
+@router.delete("/assessments/{assessment_id}/screenshots")
+async def delete_assessment_screenshots(
+    assessment_id: int,
+    current_user: User = Depends(require_role(["super_admin", "org_admin", "hr"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently remove all screenshot evidence for one assessment (every candidate)."""
+    result = await db.execute(
+        select(Assessment).where(Assessment.id == assessment_id, Assessment.org_id == current_user.org_id)
+    )
+    a = result.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="Assessment not found or access denied")
+
+    statement = (
+        delete(ProctoringFlag)
+        .where(ProctoringFlag.flag_type == "screenshot")
+        .where(
+            ProctoringFlag.assessment_result_id.in_(
+                select(AssessmentResult.id)
+                .where(AssessmentResult.assessment_id == assessment_id)
+            )
+        )
+    )
+    res = await db.execute(statement)
+    await db.commit()
+    return success(data={"count": res.rowcount or 0}, message="All assessment screenshots deleted successfully")
 
 
 @router.get("/assessments/{assessment_id}/queries")

@@ -77,11 +77,12 @@ export const PROCTORING_FEATURES = [
   { key: 'eye_tracking', label: 'Detect Candidate Looking Away from Screen (Gaze)' },
   { key: 'head_turn', label: 'Detect Excessive Head Turning' },
   { key: 'audio_detect', label: 'Detect Speaking / Background Audio' },
+  { key: 'block_paste', label: 'Block Copy / Paste into Answers (Anti-Cheat)' },
 ];
 
 // Features where strictness (sustain time / sensitivity) does NOT apply —
 // these are binary on/off controls with no threshold concept.
-export const NOT_APPLICABLE_STRICTNESS = new Set(['full_screen', 'tab_switch']);
+export const NOT_APPLICABLE_STRICTNESS = new Set(['full_screen', 'tab_switch', 'block_paste']);
 
 // Build a complete proctoring config from a strictness level + toggles.
 // Pass `current` to preserve earlier thresholds if present (merge-on-resume).
@@ -103,6 +104,7 @@ export function buildProctoringConfig(strictness = 'balanced', toggles = {}, cur
     eye_tracking: features.eye_tracking,
     head_turn: features.head_turn,
     audio_detect: features.audio_detect,
+    block_paste: features.block_paste,
     max_strikes: base.max_strikes,
     grace_ms: base.grace_ms,
     face_missing_sustain_ms: base.face_missing_sustain_ms,
