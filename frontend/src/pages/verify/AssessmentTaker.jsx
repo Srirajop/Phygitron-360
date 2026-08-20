@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { verifyApi } from '../../api';
-import { Terminal, TerminalSquare, Play, Info, CheckCircle, Upload, ChevronLeft, ChevronRight, Send, AlertTriangle, Clock, Maximize, AlertOctagon, Lock } from 'lucide-react';
+import { Terminal, TerminalSquare, Play, Info, CheckCircle, ChevronLeft, ChevronRight, Send, AlertTriangle, Clock, Maximize, AlertOctagon, Lock } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import Editor from '@monaco-editor/react';
@@ -280,7 +280,6 @@ export default function AssessmentTaker() {
   const [sectionLockedMsg, setSectionLockedMsg] = useState(false); // inline "time not up yet" banner
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [fileUploading, setFileUploading] = useState({});
   const [consoleTab, setConsoleTab] = useState('testcase');
   const [runningCode, setRunningCode] = useState(false);
   const [selectedCase, setSelectedCase] = useState(0);
@@ -1445,51 +1444,16 @@ export default function AssessmentTaker() {
                 onChange={e => setAnswers(a => ({ ...a, [q.id]: e.target.value }))} />
             )}
 
-            {/* File Upload */}
-            {q.question_type === 'file_upload' && (
-              <div className="form-group">
-                <div style={{ border: '2px dashed var(--border)', borderRadius: 'var(--radius)', padding: 32, textAlign: 'center', background: 'var(--bg-page)', position: 'relative' }}>
-                  <input type="file" id={`file-upload-${q.id}`} style={{ display: 'none' }} disabled={fileUploading[q.id]}
-                    onChange={async (e) => {
-                      const file = e.target.files[0];
-                      if (!file) return;
-                      const tId = q.id;
-                      setFileUploading(prev => ({ ...prev, [tId]: true }));
-                      try {
-                        toast.loading(`Uploading ${file.name}...`, { id: `up-${tId}` });
-                        const res = await verifyApi.uploadSubmissionFile(file);
-                        setAnswers(a => ({ ...a, [tId]: res.data.data.file_url }));
-                        toast.success('File uploaded!', { id: `up-${tId}` });
-                      } catch (err) {
-                        toast.error(err.response?.data?.detail || 'Upload failed', { id: `up-${tId}` });
-                      } finally {
-                        setFileUploading(prev => ({ ...prev, [tId]: false }));
-                      }
-                    }}
-                  />
-                  {fileUploading[q.id] ? (
-                    <div style={{ padding: 16 }}><div className="spinner" style={{ margin: '0 auto 16px' }} /><div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Uploading...</div></div>
-                  ) : (
-                    <>
-                      <label htmlFor={`file-upload-${q.id}`} className="btn btn-secondary" style={{ cursor: 'pointer' }}>
-                        <Upload size={16} style={{ marginRight: 8 }} /> {answers[q.id] ? 'Change File' : 'Choose File to Upload'}
-                      </label>
-                      {answers[q.id] && (
-                        <div style={{ marginTop: 16, border: '1px solid var(--success-light)', background: 'var(--success-lightest)', padding: '12px 20px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-                          <CheckCircle size={18} color="var(--success)" />
-                          <div style={{ textAlign: 'left' }}>
-                            <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--success)' }}>File attached</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {answers[q.id].split('/').pop().split('_').slice(1).join('_') || 'Submission Uploaded'}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-                  <p style={{ marginTop: 12, fontSize: '0.8rem', color: 'var(--text-muted)' }}>Accepted formats: PDF, DOCX, ZIP, JPG, PNG (Max 5MB)</p>
-                </div>
-              </div>
+            {/* Fill in the Blank */}
+            {q.question_type === 'fill_in' && (
+              <input
+                type="text"
+                className="form-control"
+                style={{ fontSize: '1rem', padding: '12px 14px' }}
+                placeholder="Type your answer here…"
+                value={answers[q.id] || ''}
+                onChange={e => setAnswers(a => ({ ...a, [q.id]: e.target.value }))}
+              />
             )}
 
             {/* ── Coding Question ─────────────────────────────────────────────── */}

@@ -8,7 +8,7 @@ const QTYPES = [
   { value: 'mcq_multi', label: 'MCQ Multi' },
   { value: 'written', label: 'Written' },
   { value: 'coding', label: 'Coding' },
-  { value: 'file_upload', label: 'File Upload' },
+  { value: 'fill_in', label: 'Fill in the Blank' },
 ];
 
 const TAG_COLORS = ['badge-primary','badge-success','badge-info','badge-warning'];
@@ -82,6 +82,13 @@ function AddItemModal({ onClose, onSaved }) {
             <div className="form-group">
               <label className="form-label">Model Answer</label>
               <textarea className="form-control" rows={2} value={form.model_answer} onChange={e=>set('model_answer',e.target.value)} placeholder="Ideal answer…"/>
+            </div>
+          )}
+          {form.question_type==='fill_in' && (
+            <div className="form-group">
+              <label className="form-label">Correct Answer(s) — one per line</label>
+              <textarea className="form-control" rows={3} value={form.correct_answer} onChange={e=>set('correct_answer',e.target.value)} placeholder={'42\nforty two\nForty Two'}/>
+              <p style={{fontSize:'0.72rem',color:'var(--text-muted)',marginTop:6}}>Numbers or words in any case accepted (e.g. 42 = forty two). Type <b>any</b> to accept all answers.</p>
             </div>
           )}
           <div className="form-group">

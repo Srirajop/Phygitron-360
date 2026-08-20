@@ -10,6 +10,7 @@ class AssessmentType(str, enum.Enum):
     mcq_multi = "mcq_multi"
     coding = "coding"
     written = "written"
+    fill_in = "fill_in"
     mixed = "mixed"
 
 
@@ -26,6 +27,7 @@ class QuestionType(str, enum.Enum):
     written = "written"
     coding = "coding"
     file_upload = "file_upload"
+    fill_in = "fill_in"
 
 
 class AssignmentStatus(str, enum.Enum):

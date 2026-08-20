@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import traceback
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -151,7 +152,7 @@ def _pick_python_starter_code(code_snippets: list, fallback_title: str = "soluti
 
 class QuestionCreate(BaseModel):
     question_text: str
-    question_type: str  # mcq, written, coding, file_upload
+    question_type: str  # mcq, mcq_multi, written, coding, fill_in
     options: Optional[list] = None
     correct_answer: Optional[str] = None
     model_answer: Optional[str] = None
@@ -2906,6 +2907,114 @@ class AssessmentQueryUpdateRequest(BaseModel):
     status: Optional[str] = None
     response: Optional[str] = None
 
+# ── Fill-in-the-blank answer normalization ────────────────────────────────────
+# Officials may provide several acceptable answers (one per line). A candidate
+# answer is correct if it matches ANY accepted answer under case-insensitive,
+# whitespace-normalized comparison that is also number/word aware:
+#   "42" == "forty two" == "Forty Two" == "FORTY TWO"
+# The literal token "any" (case-insensitive) accepts every non-empty answer.
+# Punctuation is NOT normalized — if a candidate's punctuation is wrong it is
+# their fault and they do not get the mark.
+
+_ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+         "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+         "sixteen", "seventeen", "eighteen", "nineteen"]
+_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+         "eighty", "ninety"]
+
+
+def _number_to_words(n: int) -> str:
+    if n < 0:
+        return "minus " + _number_to_words(-n)
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        t, r = divmod(n, 10)
+        return _TENS[t] + ("" if r == 0 else "-" + _ONES[r])
+    if n < 1000:
+        t, r = divmod(n, 100)
+        return _ONES[t] + " hundred" + ("" if r == 0 else " " + _number_to_words(r))
+    if n < 1_000_000:
+        t, r = divmod(n, 1000)
+        return _number_to_words(t) + " thousand" + ("" if r == 0 else " " + _number_to_words(r))
+    if n < 1_000_000_000:
+        t, r = divmod(n, 1_000_000)
+        return _number_to_words(t) + " million" + ("" if r == 0 else " " + _number_to_words(r))
+    t, r = divmod(n, 1_000_000_000)
+    return _number_to_words(t) + " billion" + ("" if r == 0 else " " + _number_to_words(r))
+
+
+def _words_to_number(text: str):
+    words = text.lower().replace("-", " ").replace(",", " ").split()
+    valid = set(_ONES) | set(_TENS) | {"hundred", "thousand", "million", "billion", "zero", "minus"}
+    if not any(w in valid for w in words):
+        return None
+    current = 0
+    total = 0
+    scales = {"thousand": 1000, "million": 1_000_000, "billion": 1_000_000_000}
+    try:
+        for w in words:
+            if w == "minus":
+                continue
+            if w in _ONES:
+                current += _ONES.index(w)
+            elif w in _TENS:
+                current += _TENS.index(w) * 10
+            elif w == "hundred":
+                current *= 100
+            elif w in scales:
+                total += current * scales[w]
+                current = 0
+            else:
+                return None
+        return total + current
+    except Exception:
+        return None
+
+
+def _parse_numeric(s: str):
+    cleaned = str(s).strip().replace(",", "").replace(" ", "")
+    if cleaned == "":
+        return None
+    if re.fullmatch(r"-?\d+(\.\d+)?", cleaned):
+        try:
+            val = float(cleaned)
+            return int(val) if val.is_integer() else val
+        except Exception:
+            return None
+    return None
+
+
+def _fill_tokens(s) -> set:
+    if s is None:
+        return set()
+    base = re.sub(r"\s+", " ", str(s).strip().lower())
+    if base == "":
+        return set()
+    tokens = {base}
+    num = _parse_numeric(base)
+    if num is not None:
+        tokens.add(f"n:{num}")
+        if isinstance(num, int):
+            tokens.add(f"w:{_number_to_words(num)}")
+    else:
+        wnum = _words_to_number(base)
+        if wnum is not None:
+            tokens.add(f"n:{wnum}")
+            tokens.add(f"w:{base}")
+    return tokens
+
+
+def _fill_in_correct(candidate, accepted_answers) -> bool:
+    cand_tokens = _fill_tokens(candidate)
+    if not cand_tokens:
+        return False
+    for acc in accepted_answers:
+        if cand_tokens & _fill_tokens(acc):
+            return True
+    return False
+
+
 async def perform_grading_task(result_id: int, answers_dict: dict, assessment_id: int, user_id: int):
     """Background task to handle AI grading and feedback generation."""
     from app.database import AsyncSessionLocal
@@ -3006,6 +3115,16 @@ async def perform_grading_task(result_id: int, answers_dict: dict, assessment_id
                     question_data_for_feedback.append({"id": q.id, "text": q.question_text, "type": qt, "candidate_answer": candidate_answer, "correct_answer": q.correct_answer, "marks": marks, "earned": 0, "skill_id": q.skill_id})
                 elif qt == "written":
                     question_data_for_feedback.append({"id": q.id, "text": q.question_text, "type": qt, "candidate_answer": candidate_answer, "correct_answer": q.correct_answer, "marks": marks, "earned": 0, "skill_id": q.skill_id})
+                elif qt == "fill_in":
+                    correct_raw = q.correct_answer or ""
+                    accepted = [line.strip() for line in correct_raw.split("\n") if line.strip()]
+                    if any(a.lower() == "any" for a in accepted):
+                        q_score = marks if str(candidate_answer).strip() else 0
+                    else:
+                        q_score = marks if _fill_in_correct(str(candidate_answer), accepted) else 0
+                    scores_per_q[q_id] = {"score": q_score, "max": marks}
+                    earned_marks += q_score
+                    question_data_for_feedback.append({"id": q.id, "text": q.question_text, "type": qt, "candidate_answer": candidate_answer, "correct_answer": q.correct_answer, "marks": marks, "earned": q_score, "skill_id": q.skill_id})
                 elif qt == "file_upload":
                     scores_per_q[q_id] = {"score": None, "status": "pending_review"}
                     question_data_for_feedback.append({"id": q.id, "text": q.question_text, "type": qt, "candidate_answer": candidate_answer, "correct_answer": q.correct_answer, "marks": marks, "earned": None, "skill_id": q.skill_id})

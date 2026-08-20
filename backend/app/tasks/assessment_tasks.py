@@ -2,6 +2,7 @@ import logging
 import json
 from app.tasks.celery_app import celery_app
 from app.config import settings
+from app.routers.verify import _fill_in_correct
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,13 @@ def grade_assessment_task(self, assessment_result_id: int):
                 elif q.question_type == "written":
                     # Collected for batching later
                     pass
+                elif q.question_type == "fill_in":
+                    correct_raw = q.correct_answer or ""
+                    accepted = [line.strip() for line in correct_raw.split("\n") if line.strip()]
+                    if any(a.lower() == "any" for a in accepted):
+                        q_score = marks if str(candidate_answer).strip() else 0
+                    else:
+                        q_score = marks if _fill_in_correct(str(candidate_answer), accepted) else 0
                 elif q.question_type == "file_upload":
                     scores_per_q[q_id] = {"score": None, "status": "pending_review"}
                     question_data_for_feedback.append({

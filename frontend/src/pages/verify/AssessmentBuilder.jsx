@@ -9,7 +9,7 @@ const QUESTION_TYPES = [
   { value: 'mcq_multi', label: '✅ Multiple Selection (MCQ-Multi)' },
   { value: 'written', label: '✍️ Written / Essay' },
   { value: 'coding', label: '💻 Coding Challenge' },
-  { value: 'file_upload', label: '📎 File Upload' },
+  { value: 'fill_in', label: '✏️ Fill in the Blank' },
 ];
 
 function QuestionForm({ q, index, sections, onChange, onRemove, onAutoGenerate, onSaveToBank, generating }) {
@@ -52,24 +52,24 @@ function QuestionForm({ q, index, sections, onChange, onRemove, onAutoGenerate, 
           )}
         </div>
         <div className="form-group">
-          <label className="form-label">{q.question_type === 'file_upload' ? 'Upload Instructions (e.g., "Upload your project zip")' : 'Question Text *'}</label>
-          <textarea 
-            className="form-control" 
-            rows={3} 
-            value={q.question_text} 
-            onChange={e => onChange('question_text', e.target.value)} 
-            onPaste={() => {
-              if (q.question_type === 'coding' && !q.starter_code?.trim()) {
-                setTimeout(() => onAutoGenerate(index), 100);
-              }
-            }}
-            onBlur={() => {
-              if (q.question_type === 'coding' && !q.starter_code?.trim() && (q.test_cases?.length === 0 || !q.test_cases)) {
-                onAutoGenerate(index);
-              }
-            }}
-            placeholder={q.question_type === 'file_upload' ? 'Enter instructions for the candidate regarding the file upload…' : 'Enter your question…'} 
-          />
+            <label className="form-label">Question Text *</label>
+            <textarea 
+              className="form-control" 
+              rows={3} 
+              value={q.question_text} 
+              onChange={e => onChange('question_text', e.target.value)} 
+              onPaste={() => {
+                if (q.question_type === 'coding' && !q.starter_code?.trim()) {
+                  setTimeout(() => onAutoGenerate(index), 100);
+                }
+              }}
+              onBlur={() => {
+                if (q.question_type === 'coding' && !q.starter_code?.trim() && (q.test_cases?.length === 0 || !q.test_cases)) {
+                  onAutoGenerate(index);
+                }
+              }}
+              placeholder={'Enter your question…'} 
+            />
           
           <div style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 8 }}>
@@ -209,6 +209,21 @@ function QuestionForm({ q, index, sections, onChange, onRemove, onAutoGenerate, 
                 })()}
               </p>
             )}
+          </div>
+        )}
+        {q.question_type === 'fill_in' && (
+          <div className="form-group">
+            <label className="form-label">Correct Answer(s) — one per line</label>
+            <textarea
+              className="form-control"
+              rows={3}
+              value={q.correct_answer || ''}
+              onChange={e => onChange('correct_answer', e.target.value)}
+              placeholder={'42\nforty two\nForty Two'}
+            />
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 8 }}>
+              Accepts numbers or words in any letter-case (e.g. <b>42</b> = <b>forty two</b> = <b>Forty Two</b>). Punctuation is strict for candidates. Type <b>any</b> on a line to accept every answer.
+            </p>
           </div>
         )}
         {q.question_type === 'written' && (
@@ -424,6 +439,14 @@ export default function AssessmentBuilder() {
   const handleSave = async (publish = false) => {
     if (!title.trim()) { toast.error('Title is required'); return; }
     if (questions.some(q => !q.question_text.trim())) { toast.error('All questions need text'); return; }
+
+    const invalidFill = questions.findIndex(
+      q => q.question_type === 'fill_in' && !(q.correct_answer || '').split('\n').map(s => s.trim()).filter(Boolean).length
+    );
+    if (invalidFill !== -1) {
+      toast.error(`Q${invalidFill + 1}: Fill in the Blank needs at least one correct answer.`);
+      return;
+    }
 
     if (sections && sections.length > 0) {
       const totalSectionTime = sections.reduce((acc, s) => acc + (s.time_limit_minutes || 0), 0);

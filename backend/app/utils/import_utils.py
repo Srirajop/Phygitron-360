@@ -54,7 +54,7 @@ async def parse_questions_with_ai(text: str) -> List[Dict]:
     - 'mcq': Multiple choice (must have 'options' and 'correct_answer')
     - 'written': Essay/Written type where the candidate provides a text response.
     - 'coding': A programming challenge that requires the candidate to write code.
-    - 'file_upload': An instruction requiring the candidate to upload a document or file.
+    - 'fill_in': A short-answer question with a single correct value. Provide 'correct_answer' as the accepted answer(s).
     
     Specific Rules for 'coding' questions:
     1. CRITICAL: If the question text describes a computational problem (e.g., "Given an array...", "Return the sum..."), classify it as 'coding'.
@@ -95,7 +95,7 @@ async def parse_questions_with_ai(text: str) -> List[Dict]:
       "questions": [
       {
         "question_text": "string (The COMPLETE, detailed problem description WITH Examples and Constraints. DO NOT SUMMARIZE.)",
-        "question_type": "mcq|written|coding|file_upload",
+        "question_type": "mcq|written|coding|fill_in",
         "marks": number,
         "options": ["string", "string", ...],
         "correct_answer": "string",
@@ -145,7 +145,7 @@ async def parse_questions_with_ai(text: str) -> List[Dict]:
                         if isinstance(q, dict) and 'question_text' in q:
                             # Ensure type is valid
                             q_type = q.get('question_type', '').lower()
-                            if q_type not in ['mcq', 'written', 'coding', 'file_upload']:
+                            if q_type not in ['mcq', 'written', 'coding', 'fill_in']:
                                 q['question_type'] = 'mcq' if 'options' in q else 'written'
                             else:
                                 q['question_type'] = q_type

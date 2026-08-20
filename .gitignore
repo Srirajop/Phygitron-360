@@ -192,6 +192,8 @@ backend/*.txt
 .verify_exec/
 
 # Scratch & Temporary local files
+scratch/
+scratch_notes.txt
 backend/scratch/
 backend/app/assets/new_logo.jpeg
 backend/app/assets/new_page1_img_0.jpeg
@@ -207,5 +209,6 @@ diff.txt
 .freebuff/
 original_taker.jsx
 temp_test.json
+
 
 

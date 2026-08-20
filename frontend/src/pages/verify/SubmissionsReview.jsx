@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { verifyApi } from '../../api';
-import { ChevronLeft, Users, CheckCircle, XCircle, Clock, FileText, Download, ChevronDown, ChevronUp, Eye, Send } from 'lucide-react';
+import { ChevronLeft, Users, CheckCircle, XCircle, Clock, ChevronDown, ChevronUp, Eye, Send } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import toast from 'react-hot-toast';
 
@@ -103,16 +103,10 @@ function AnswerBlock({ question, answer, score: scoreObj }) {
         </div>
       )}
 
-      {/* File Upload */}
-      {qt === 'file_upload' && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <FileText size={18} color="var(--primary)" />
-            <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Submitted File</div>
-          </div>
-          {answer
-            ? <a href={answer} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm"><Download size={13} /> Download</a>
-            : <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No file uploaded</span>}
+      {/* Fill in the Blank */}
+      {qt === 'fill_in' && (
+        <div style={{ background: 'white', border: '1px solid var(--border)', borderRadius: 8, padding: 12, fontSize: '0.87rem', whiteSpace: 'pre-wrap', color: 'var(--text-secondary)', minHeight: 48 }}>
+          {answer || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No answer provided</span>}
         </div>
       )}
 

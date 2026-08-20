@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { verifyApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
-import { CheckCircle, XCircle, Trophy, BookOpen, BarChart2, Download, ExternalLink, FileText, Trash2, X } from 'lucide-react';
+import { CheckCircle, XCircle, Trophy, BookOpen, BarChart2, ExternalLink, Trash2, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const CONFETTI_COLORS = ['#7C3AED', '#A855F7', '#EC4899', '#06B6D4', '#F59E0B', '#10B981'];
@@ -487,33 +487,21 @@ export default function ResultScreen() {
                       </div>
                     )}
 
-                    {q.question_type === 'file_upload' && (
+                    {q.question_type === 'fill_in' && (
                       <div>
-                        <div style={{ background: 'var(--bg-page)', padding: 16, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: '1px solid var(--border)' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                            <div style={{ background: 'var(--primary-light)', color: 'var(--primary)', width: 40, height: 40, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                              <FileText size={20} />
+                        <div style={{ background: 'var(--bg-page)', padding: 16, borderRadius: 8, border: '1px solid var(--border)' }}>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 6 }}>Candidate Answer</div>
+                          <div style={{ fontSize: '0.9rem', whiteSpace: 'pre-wrap' }}>{typeof answer === 'string' && answer.trim() ? answer : <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No answer provided</span>}</div>
+                          {q.correct_answer ? (
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 8 }}>
+                              <b>Accepted:</b> {String(q.correct_answer).split('\n').filter(Boolean).join('  ·  ')}
                             </div>
-                            <div>
-                              <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Submitted Attachment</div>
-                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{typeof answer === 'string' ? answer.split('/').pop().split('_').slice(1).join('_') : 'Candidate_Submission'}</div>
-                            </div>
-                          </div>
-                          {answer ? (
-                            <a href={answer} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm" style={{ gap: 8 }}>
-                              <Download size={14} /> Download
-                            </a>
-                          ) : (
-                            <span className="text-muted" style={{ fontSize: '0.8rem' }}>No file uploaded</span>
-                          )}
+                          ) : null}
                         </div>
                         {(() => {
                           const qScore = result.scores_per_question?.[q.id];
                           const earned = qScore && typeof qScore === 'object' ? qScore.score : qScore;
-                          if (earned === null || earned === undefined) {
-                            if (answer) return <div style={{ marginTop: 8 }}><span className="badge badge-info">Pending manual review</span></div>;
-                            return null;
-                          }
+                          if (earned === null || earned === undefined) return null;
                           return (
                             <div style={{ marginTop: 8 }}>
                               <span className="badge" style={{ background: Number(earned) > 0 ? 'var(--success-light)' : 'var(--danger-light)', color: Number(earned) > 0 ? 'var(--success)' : 'var(--danger)', border: '1px solid ' + (Number(earned) > 0 ? 'var(--success)' : 'var(--danger)') }}>
