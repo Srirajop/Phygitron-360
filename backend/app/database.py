@@ -81,6 +81,15 @@ def _ensure_source_columns(sync_conn):
     if "resume_hash" not in candidate_columns:
         sync_conn.exec_driver_sql("ALTER TABLE candidates ADD COLUMN resume_hash VARCHAR(64) NULL")
 
+    if "upload_year" not in candidate_columns:
+        sync_conn.exec_driver_sql("ALTER TABLE candidates ADD COLUMN upload_year INT NULL")
+
+    if "upload_month" not in candidate_columns:
+        sync_conn.exec_driver_sql("ALTER TABLE candidates ADD COLUMN upload_month INT NULL")
+
+    if "role_folder" not in candidate_columns:
+        sync_conn.exec_driver_sql("ALTER TABLE candidates ADD COLUMN role_folder VARCHAR(255) NULL")
+
     try:
         cand_indexes = {idx["name"] for idx in inspector.get_indexes("candidates")}
     except Exception:

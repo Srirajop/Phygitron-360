@@ -72,6 +72,12 @@ class Candidate(Base):
     exp_years = Column(Integer, default=0)
     availability = Column(String(100), nullable=True)
     status = Column(Enum(CandidateStatus), default=CandidateStatus.invited)
+    # Manual role folder label (e.g. "Java Developer"). NULL = Unassigned.
+    # Combined with upload_year/upload_month, lets HR organise resumes by
+    # month timeline + manual role tag without relying on AI inference.
+    upload_year = Column(Integer, nullable=True, index=True)
+    upload_month = Column(Integer, nullable=True, index=True)
+    role_folder = Column(String(255), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -80,6 +86,27 @@ class Candidate(Base):
     skills = relationship("CandidateSkill", back_populates="candidate", cascade="all, delete-orphan")
     invites = relationship("CandidateInvite", back_populates="candidate")
     ai_scores = relationship("AIScore", primaryjoin="and_(AIScore.entity_type=='candidate', AIScore.entity_id==Candidate.id)", foreign_keys="[AIScore.entity_id]", viewonly=True)
+
+
+class RoleFolder(Base):
+    """A manually-created role folder scoped to (org, year, month).
+
+    Lets HR organise resumes under a Month folder by role label
+    (e.g. "Java Developer") without any AI auto-extraction.
+    """
+
+    __tablename__ = "role_folders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organisations.id"), nullable=False, index=True)
+    year = Column(Integer, nullable=False, index=True)
+    month = Column(Integer, nullable=False, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    organisation = relationship("Organisation")
 
 
 class CandidateSkill(Base):

@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { sourceApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
-import { Search, Filter, Upload, Users, Send, Star, Trash2, Layers, BarChart2, Zap, X, ChevronDown, ArrowUpDown, Edit, Folder, CalendarDays, ArrowLeft, Check } from 'lucide-react';
+import { Search, Filter, Upload, Users, Send, Star, Trash2, Layers, BarChart2, Zap, X, ChevronDown, ArrowUpDown, Edit, Folder, CalendarDays, ArrowLeft, Check, Tag, FileText, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
+import SearchReportModal from './SearchReportModal';
 
-function MultiSelectDropdown({ label, options, selectedValues = [], onChange, placeholder = "Select..." }) {
+function MultiSelectDropdown({ label, options, selectedValues = [], onChange, placeholder = "Select...", disabled = false }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
   
@@ -22,39 +23,63 @@ function MultiSelectDropdown({ label, options, selectedValues = [], onChange, pl
     else onChange([...selectedValues, val]);
   };
 
-  const display = selectedValues.length === 0 ? placeholder : selectedValues.length === 1 ? options.find(o => o.value === selectedValues[0])?.label : `${selectedValues.length} Selected`;
+  const display = selectedValues.length === 0 
+    ? placeholder 
+    : selectedValues.length === 1 
+      ? (options.find(o => o.value === selectedValues[0])?.label || selectedValues[0])
+      : `${selectedValues.length} Selected`;
 
   return (
     <div ref={ref} style={{ position: 'relative', width: '100%', minWidth: 140 }}>
       <label className="form-label">{label}</label>
       <div 
         className="form-control" 
-        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none', padding: '12px 18px', minHeight: 46 }}
-        onClick={() => setOpen(!open)}
+        style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center', 
+          cursor: disabled ? 'not-allowed' : 'pointer', 
+          userSelect: 'none', 
+          padding: '12px 18px', 
+          minHeight: 46,
+          opacity: disabled ? 0.6 : 1,
+          background: disabled ? 'var(--bg-secondary, #f8fafc)' : 'inherit'
+        }}
+        onClick={() => { if (!disabled) setOpen(!open); }}
       >
-        <span style={{ fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{display}</span>
+        <span style={{ fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: disabled ? 'var(--text-muted)' : 'inherit' }}>
+          {display}
+        </span>
         <ChevronDown size={14} style={{ opacity: 0.6, flexShrink: 0 }} />
       </div>
-      {open && (
+      {open && !disabled && (
         <div style={{ position: 'absolute', top: '100%', left: 0, minWidth: '100%', marginTop: 4, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 0', zIndex: 50, maxHeight: 250, overflowY: 'auto', boxShadow: 'var(--shadow-lg)' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 4 }}>
-            <input 
-              type="checkbox" 
-              checked={selectedValues.length === 0}
-              onChange={() => { onChange([]); setOpen(false); }}
-            />
-            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>All</span>
-          </label>
-          {options.map(opt => (
-            <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', transition: 'background 0.2s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-card-hover)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-              <input 
-                type="checkbox" 
-                checked={selectedValues.includes(opt.value)}
-                onChange={() => toggle(opt.value)}
-              />
-              <span style={{ fontSize: '0.85rem' }}>{opt.label}</span>
-            </label>
-          ))}
+          {options.length === 0 ? (
+            <div style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>
+              No items in selected period
+            </div>
+          ) : (
+            <>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 4 }}>
+                <input 
+                  type="checkbox" 
+                  checked={selectedValues.length === 0}
+                  onChange={() => { onChange([]); setOpen(false); }}
+                />
+                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>All</span>
+              </label>
+              {options.map(opt => (
+                <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', transition: 'background 0.2s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-card-hover)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <input 
+                    type="checkbox" 
+                    checked={selectedValues.includes(opt.value)}
+                    onChange={() => toggle(opt.value)}
+                  />
+                  <span style={{ fontSize: '0.85rem' }}>{opt.label}</span>
+                </label>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -98,6 +123,82 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
   if (!candidates || candidates.length < 2) return null;
   const levelRank = { expert: 4, advanced: 3, intermediate: 2, beginner: 1 };
   const levelColor = { expert: '#7C3AED', advanced: '#10B981', intermediate: '#3B82F6', beginner: '#F59E0B' };
+
+  const exportCompareCsv = () => {
+    try {
+      const escape = (val) => {
+        if (val == null) return '""';
+        const s = String(val);
+        if (s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r')) {
+          return `"${s.replace(/"/g, '""')}"`;
+        }
+        return `"${s}"`;
+      };
+
+      const rows = [
+        ['PHYGITRON 360 - TALENT DUEL COMPARISON ANALYSIS'],
+        ['Generated At', new Date().toLocaleString()],
+        [],
+        ['Metric / Criterion', ...candidates.map(c => c.name || 'Unknown')],
+        ['Candidate Type', ...candidates.map(c => c.type || 'Candidate')],
+        ['Experience', ...candidates.map(c => `${c.exp_years || 0} yrs`)],
+        ['Role Tag', ...candidates.map(c => c.role_folder || 'Unassigned')],
+        ['Fit Score', ...candidates.map(c => c.ats_score != null ? `${Math.round(c.ats_score)}%` : 'N/A')],
+        [],
+        ['REQUIRED SKILLS BREAKDOWN'],
+      ];
+
+      for (const req of requiredSkills) {
+        const reqName = req.skill?.toLowerCase()?.trim();
+        const row = [`${req.skill} (${req.level})`];
+        for (const c of candidates) {
+          const candSkill = (c.skills || []).find(s => {
+            const sName = s.name?.toLowerCase()?.trim();
+            return sName === reqName || sName?.includes(reqName);
+          });
+          if (!candSkill) {
+            row.push('NOT DETECTED');
+          } else if ((levelRank[candSkill.level?.toLowerCase()] ?? 0) >= (levelRank[req.level?.toLowerCase()] ?? 0)) {
+            row.push(`ALIGNED (${candSkill.level})`);
+          } else {
+            row.push(`GAP (${candSkill.level} vs req ${req.level})`);
+          }
+        }
+        rows.push(row);
+      }
+
+      rows.push([]);
+      rows.push(['BONUS / UNIQUE VALUE PROPS']);
+      const reqNames = requiredSkills.map(r => r.skill?.toLowerCase()?.trim()).filter(Boolean);
+      const bonusRow = ['Extra Value Props'];
+      for (const c of candidates) {
+        const bonus = (c.skills || [])
+          .filter(s => {
+            const sName = s.name?.toLowerCase()?.trim();
+            return sName && !reqNames.some(rn => sName.includes(rn) || rn.includes(sName));
+          })
+          .map(s => `${s.name} (${s.level})`)
+          .join('; ');
+        bonusRow.push(bonus || 'None detected');
+      }
+      rows.push(bonusRow);
+
+      const csvContent = '\uFEFF' + rows.map(r => r.map(escape).join(',')).join('\r\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Talent_Duel_Comparison_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success('Comparison analysis exported to CSV!');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to export comparison analysis');
+    }
+  };
 
   return (
     <div className="modal-overlay" onClick={onClose} style={{ backdropFilter: 'blur(12px)', backgroundColor: 'rgba(15, 23, 42, 0.7)' }}>
@@ -246,7 +347,9 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
         <div className="modal-footer" style={{ padding: '20px 32px', background: '#f8fafc', borderRadius: '0 0 24px 24px', borderTop: '1px solid var(--border)' }}>
           <button className="btn btn-ghost" onClick={onClose} style={{ fontWeight: 600 }}>Close Duel</button>
           <div style={{ display: 'flex', gap: 12 }}>
-            <button className="btn btn-secondary" disabled style={{ opacity: 0.5 }}>Export Analysis</button>
+            <button className="btn btn-secondary" onClick={exportCompareCsv} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Download size={15} /> Export Analysis
+            </button>
             <button className="btn btn-primary" onClick={onClose} style={{ padding: '10px 24px' }}>Finalize Review</button>
           </div>
         </div>
@@ -262,6 +365,8 @@ const DEFAULT_FILTERS = {
   sort_by: 'newest',
   limit: 20,
   role_id: '',
+  role_folder: '',
+  role_tags: [],
   search: '',
   location: '',
   exp_range: '',
@@ -273,6 +378,9 @@ export default function SourceDashboard() {
   const { user } = useAuth();
   const [candidates, setCandidates] = useState([]);
   const [jobRoles, setJobRoles] = useState([]);
+  const [availableRoleTags, setAvailableRoleTags] = useState([]);
+  const [unassignedCount, setUnassignedCount] = useState(0);
+  const [loadingRoleTags, setLoadingRoleTags] = useState(false);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
@@ -285,6 +393,7 @@ export default function SourceDashboard() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [scoring, setScoring] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
   const [sortCriteria, setSortCriteria] = useState(() => {
     try {
       const saved = sessionStorage.getItem('talentVaultSort');
@@ -333,6 +442,56 @@ export default function SourceDashboard() {
     sourceApi.candidateStats().then(r => setStats(r.data.data || null)).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    setLoadingRoleTags(true);
+    const params = {};
+    if (filters.upload_years && filters.upload_years.length > 0) {
+      params.years = filters.upload_years.join(',');
+    }
+    if (filters.upload_months && filters.upload_months.length > 0) {
+      params.months = filters.upload_months.join(',');
+    }
+    sourceApi.getRoleFolders(params).then(r => {
+      const tags = r.data.data || [];
+      const meta = r.data.meta || {};
+      setAvailableRoleTags(tags);
+      setUnassignedCount(meta.unassigned_count ?? 0);
+
+      // Auto-prune any selected tags that no longer exist in this new time scope
+      const validTagValues = new Set(['Unassigned', 'Untagged', ...tags.map(t => t.name)]);
+      setFilters(prev => {
+        const currentSelected = prev.role_tags || [];
+        const pruned = currentSelected.filter(t => validTagValues.has(t));
+        if (pruned.length !== currentSelected.length) {
+          return { ...prev, role_tags: pruned };
+        }
+        return prev;
+      });
+    }).catch(() => {
+      setAvailableRoleTags([]);
+      setUnassignedCount(0);
+    }).finally(() => {
+      setLoadingRoleTags(false);
+    });
+  }, [filters.upload_years, filters.upload_months]);
+
+  const roleTagOptions = useMemo(() => {
+    const opts = [];
+    if (unassignedCount > 0) {
+      opts.push({
+        label: `Unassigned (${unassignedCount})`,
+        value: 'Unassigned',
+      });
+    }
+    for (const tag of availableRoleTags) {
+      opts.push({
+        label: `${tag.name} (${tag.count})`,
+        value: tag.name,
+      });
+    }
+    return opts;
+  }, [availableRoleTags, unassignedCount]);
+
   const fetchCandidates = useCallback(() => {
     try {
       const apiParams = { ...filters };
@@ -348,7 +507,14 @@ export default function SourceDashboard() {
       apiParams.search = searchInput;
       if (!apiParams.search) delete apiParams.search;
       if (!apiParams.location) delete apiParams.location;
-      if (!apiParams.exp_range) delete apiParams.exp_range;
+      if (apiParams.role_tags && apiParams.role_tags.length > 0) {
+        apiParams.role_folder = apiParams.role_tags.join(',');
+      } else if (apiParams.role_folder) {
+        // keep string
+      } else {
+        delete apiParams.role_folder;
+      }
+      delete apiParams.role_tags;
       
       // Clean up frontend-only params
       if (apiParams.upload_years && apiParams.upload_years.length > 0) {
@@ -521,6 +687,15 @@ export default function SourceDashboard() {
           <p>Search, compare, and score candidates against roles</p>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button 
+            className="btn btn-secondary" 
+            onClick={() => setShowReportModal(true)} 
+            disabled={candidates.length === 0}
+            title={candidates.length === 0 ? "Perform a search first to generate a report" : "Download Search & Screening Report"}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: candidates.length === 0 ? 0.6 : 1 }}
+          >
+            <FileText size={16} /> Download Report
+          </button>
           {canManageRoles && <Link to="/source/upload" className="btn btn-shimmer"><Upload size={16} /> Upload Resumes</Link>}
         </div>
       </div>
@@ -593,16 +768,6 @@ export default function SourceDashboard() {
               </select>
             </div>
 
-            <div style={{ minWidth: 150 }}>
-              <label className="form-label">Experience</label>
-              <select className="form-control" value={filters.exp_range} onChange={e => setFilters(f => ({ ...f, exp_range: e.target.value }))}>
-                <option value="">Any Experience</option>
-                <option value="fresher">Fresher (0 yrs)</option>
-                <option value="1-2">1-2 Years</option>
-                <option value="2-5">2-5 Years</option>
-                <option value="5+">5+ Years</option>
-              </select>
-            </div>
             <div style={{ display: 'flex', gap: 12 }}>
               <MultiSelectDropdown
                 label="Upload Year"
@@ -622,6 +787,28 @@ export default function SourceDashboard() {
                 selectedValues={filters.upload_months}
                 onChange={(months) => setFilters(f => ({ ...f, upload_months: months }))}
               />
+            </div>
+
+            <div style={{ minWidth: 170 }}>
+              <MultiSelectDropdown
+                label="Role Tag"
+                placeholder={loadingRoleTags ? "Loading tags..." : roleTagOptions.length === 0 ? "No tags in period" : "All Role Tags"}
+                options={roleTagOptions}
+                selectedValues={filters.role_tags || []}
+                onChange={(tags) => setFilters(f => ({ ...f, role_tags: tags }))}
+                disabled={!loadingRoleTags && roleTagOptions.length === 0}
+              />
+            </div>
+
+            <div style={{ minWidth: 150 }}>
+              <label className="form-label">Experience</label>
+              <select className="form-control" value={filters.exp_range} onChange={e => setFilters(f => ({ ...f, exp_range: e.target.value }))}>
+                <option value="">Any Experience</option>
+                <option value="fresher">Fresher (0 yrs)</option>
+                <option value="1-2">1-2 Years</option>
+                <option value="2-5">2-5 Years</option>
+                <option value="5+">5+ Years</option>
+              </select>
             </div>
             <div style={{ minWidth: 140 }}>
               <label className="form-label">Location</label>
@@ -673,21 +860,32 @@ export default function SourceDashboard() {
           <div className="empty-state"><div className="empty-icon">🔍</div><p>No candidates found. Upload resumes or adjust filters.</p></div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-            {/* Select All Checkbox */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 4px', marginBottom: -4 }}>
-              <input 
-                type="checkbox" 
-                style={{ accentColor: 'var(--primary)', width: 16, height: 16, cursor: 'pointer' }}
-                checked={candidates.length > 0 && selected.size === candidates.length}
-                onChange={(e) => {
-                  if (e.target.checked) setSelected(new Set(candidates.map(candidateKey)));
-                  else setSelected(new Set());
-                }}
-              />
-              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', cursor: 'pointer' }} onClick={() => {
-                if (selected.size === candidates.length) setSelected(new Set());
-                else setSelected(new Set(candidates.map(candidateKey)));
-              }}>Select All</span>
+            {/* Toolbar: Select All Checkbox & Download Report Action */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: -4, flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <input 
+                  type="checkbox" 
+                  style={{ accentColor: 'var(--primary)', width: 16, height: 16, cursor: 'pointer' }}
+                  checked={candidates.length > 0 && selected.size === candidates.length}
+                  onChange={(e) => {
+                    if (e.target.checked) setSelected(new Set(candidates.map(candidateKey)));
+                    else setSelected(new Set());
+                  }}
+                />
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', cursor: 'pointer' }} onClick={() => {
+                  if (selected.size === candidates.length) setSelected(new Set());
+                  else setSelected(new Set(candidates.map(candidateKey)));
+                }}>Select All ({candidates.length})</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button 
+                  className="btn btn-secondary btn-sm" 
+                  onClick={() => setShowReportModal(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', padding: '4px 12px' }}
+                >
+                  <FileText size={14} /> Download Report
+                </button>
+              </div>
             </div>
             
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
@@ -727,6 +925,11 @@ export default function SourceDashboard() {
                       <span style={{ fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>{c.name}</span>
                       <span className={`badge badge-${c.type === 'Employee' ? 'primary' : c.type === 'Trainee' ? 'info' : 'success'}`} style={{ fontSize: '0.7rem' }}>{c.type}</span>
                       <span className={`badge badge-${c.status === 'active' ? 'success' : c.status === 'shortlisted' ? 'info' : 'muted'}`} style={{ fontSize: '0.7rem' }}>{c.status}</span>
+                      {c.role_folder && (
+                        <span className="badge badge-secondary" style={{ fontSize: '0.7rem', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <Tag size={10} /> {c.role_folder}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', overflowWrap: 'anywhere', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
                       {c.location} · {c.exp_years > 0 ? `${c.exp_years} yrs exp` : 'Fresher'} · 
@@ -782,6 +985,13 @@ export default function SourceDashboard() {
         <div className="fab-bar">
           <span style={{ fontWeight: 700 }}>{selected.size} selected</span>
           <div style={{ display: 'flex', gap: 10 }}>
+            <button 
+              className="btn btn-secondary btn-sm" 
+              onClick={() => setShowReportModal(true)} 
+              style={{ color: 'var(--primary)', background: 'white', gap: 6 }}
+            >
+              <FileText size={15} /> Report ({selected.size})
+            </button>
             {selected.size >= 2 && (
               <button className="btn btn-secondary btn-sm" onClick={() => setShowCompare(true)} style={{ color: 'var(--primary)', background: 'white', gap: 6 }}>
                 <BarChart2 size={15} /> Compare
@@ -834,6 +1044,18 @@ export default function SourceDashboard() {
           </div>
         </div>
       )}
+
+      {/* ── Search Report Modal ── */}
+      <SearchReportModal
+        isOpen={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        candidates={candidates}
+        selectedKeys={selected}
+        candidateKey={candidateKey}
+        filters={filters}
+        jobRoles={jobRoles}
+        currentUser={user}
+      />
 
     </div>
   );

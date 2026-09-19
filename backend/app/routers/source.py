@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Body, BackgroundTasks, Form
-from typing import Optional, List
+from typing import Optional, List, Union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func
 from pydantic import BaseModel, EmailStr
@@ -17,7 +17,8 @@ from app.database import get_db, AsyncSessionLocal
 from app.models.user import User, UserRole
 from app.models.source import (
     Candidate, CandidateSkill, JobRole, CandidateInvite, CandidateStatus, 
-    InviteStatus, OfferLetter, OfferStatus, BulkUploadJob, JobStatus
+    InviteStatus, OfferLetter, OfferStatus, BulkUploadJob, JobStatus,
+    RoleFolder
 )
 from app.models.ai_score import AIScore, EntityType, ScoreType
 from app.models.skill_taxonomy import SkillTaxonomy
@@ -132,6 +133,9 @@ async def _create_candidate_from_pdf_bytes(
     org_id: int,
     db: AsyncSession,
     parse_inline: bool = True,
+    role_folder: Optional[str] = None,
+    upload_year: Optional[int] = None,
+    upload_month: Optional[int] = None,
 ) -> tuple[Optional[Candidate], bool, str]:
     resume_hash = _compute_resume_hash(pdf_bytes)
     existing_candidate_res = await db.execute(
@@ -143,6 +147,7 @@ async def _create_candidate_from_pdf_bytes(
     existing_candidate = existing_candidate_res.scalar_one_or_none()
     if existing_candidate:
         logger.info("Skipping duplicate resume %s for org %s", filename, org_id)
+        return existing_candidate, False, ""
     try:
         # Use magic bytes for robust format detection
         if pdf_bytes.startswith(b'%PDF-'):
@@ -174,12 +179,22 @@ async def _create_candidate_from_pdf_bytes(
     db.add(new_user)
     await db.flush()
 
+    now = datetime.utcnow()
+    assigned_year = upload_year or now.year
+    assigned_month = upload_month or now.month
+
     candidate = Candidate(
         user_id=new_user.id,
         org_id=org_id,
         resume_hash=resume_hash,
         status=CandidateStatus.invited,
+        role_folder=role_folder,
+        upload_year=assigned_year,
+        upload_month=assigned_month,
     )
+    if upload_year is not None and upload_month is not None:
+        candidate.created_at = datetime(upload_year, upload_month, min(now.day, 28), now.hour, now.minute, now.second)
+
     db.add(candidate)
     await db.flush()
 
@@ -714,6 +729,8 @@ async def upload_resume(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     job_role_id: Optional[int] = Form(None),
+    role_folder: Optional[str] = Form(None),
+    override_date: Optional[str] = Form(None),
     current_user: User = Depends(require_role(["hr", "org_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
@@ -761,11 +778,29 @@ async def upload_resume(
     if len(pdf_bytes) > RESUME_PDF_SIZE_LIMIT_BYTES:
         raise HTTPException(status_code=400, detail="PDF file size exceeds 30MB limit")
 
-    candidate, created, _ = await _create_candidate_from_pdf_bytes(
+    parsed_year = None
+    parsed_month = None
+    if override_date:
+        try:
+            parts = override_date.strip().split("-")
+            parsed_year = int(parts[0])
+            parsed_month = int(parts[1])
+        except Exception:
+            pass
+
+    clean_role_folder = None
+    if role_folder and role_folder.strip() and role_folder.strip() != "Unassigned Roles":
+        clean_role_folder = role_folder.strip()
+
+    candidate, created, extracted_text = await _create_candidate_from_pdf_bytes(
         filename=filename,
         pdf_bytes=pdf_bytes,
         org_id=current_user.org_id,
         db=db,
+        parse_inline=False,
+        role_folder=clean_role_folder,
+        upload_year=parsed_year,
+        upload_month=parsed_month,
     )
     if not created:
         await db.rollback()
@@ -773,11 +808,19 @@ async def upload_resume(
             {"status": "duplicate"},
             "This resume already exists in Talent Vault and was skipped.",
         )
+
+    # Capture candidate_id and org_id BEFORE db.commit() to prevent MissingGreenlet / expired attributes
+    candidate_id = candidate.id
+    org_id = current_user.org_id
+
     await db.commit()
 
+    # Enqueue background AI parsing worker job
+    await enqueue_resume_parse(candidate_id, extracted_text, org_id)
+
     return success(
-        {"candidate_id": candidate.id, "status": "processed"},
-        "Resume uploaded and parsed successfully.",
+        {"candidate_id": candidate_id, "status": "processed"},
+        "Resume uploaded successfully. Processing in background.",
     )
 
 
@@ -1177,10 +1220,12 @@ async def search_candidates(
     lifecycle_phase: Optional[str] = "all",
     upload_years: Optional[str] = None,
     upload_months: Optional[str] = None,
+    upload_time: Optional[str] = None,
+    role_folder: Optional[str] = None,
     current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
-    from sqlalchemy import or_, and_
+    from sqlalchemy import or_, and_, func
 
     # Clamp limit to a safe ceiling to prevent accidental full-table loads
     limit = min(max(limit, 1), 500)
@@ -1250,17 +1295,68 @@ async def search_candidates(
             if hasattr(model, 'location'):
                 q = q.where(model.location.ilike(f"%{location}%"))
         
+        if upload_time:
+            try:
+                parts = upload_time.strip().split("-")
+                u_year = int(parts[0])
+                u_month = int(parts[1])
+                from sqlalchemy import extract
+                if hasattr(model, 'upload_year') and hasattr(model, 'upload_month'):
+                    q = q.where(
+                        func.coalesce(model.upload_year, extract('year', model.created_at)) == u_year,
+                        func.coalesce(model.upload_month, extract('month', model.created_at)) == u_month,
+                    )
+                elif hasattr(model, 'created_at'):
+                    q = q.where(
+                        extract('year', model.created_at) == u_year,
+                        extract('month', model.created_at) == u_month,
+                    )
+            except Exception:
+                pass
+
         if upload_years and hasattr(model, 'created_at'):
             from sqlalchemy import extract
             years = [int(y.strip()) for y in upload_years.split(',') if y.strip().isdigit()]
             if years:
-                q = q.where(extract('year', model.created_at).in_(years))
+                if hasattr(model, 'upload_year'):
+                    q = q.where(func.coalesce(model.upload_year, extract('year', model.created_at)).in_(years))
+                else:
+                    q = q.where(extract('year', model.created_at).in_(years))
         
         if upload_months and hasattr(model, 'created_at'):
             from sqlalchemy import extract
             months = [int(m.strip()) for m in upload_months.split(',') if m.strip().isdigit()]
             if months:
-                q = q.where(extract('month', model.created_at).in_(months))
+                if hasattr(model, 'upload_month'):
+                    q = q.where(func.coalesce(model.upload_month, extract('month', model.created_at)).in_(months))
+                else:
+                    q = q.where(extract('month', model.created_at).in_(months))
+
+        if role_folder:
+            from sqlalchemy import exists
+            tags = [t.strip() for t in role_folder.split(',') if t.strip()]
+            has_untagged = any(t.lower() in ("unassigned roles", "unassigned", "untagged", "none") for t in tags)
+            named_tags = [t for t in tags if t.lower() not in ("unassigned roles", "unassigned", "untagged", "none")]
+
+            if hasattr(model, 'role_folder'):
+                conditions = []
+                if has_untagged:
+                    conditions.append(or_(model.role_folder.is_(None), model.role_folder == ""))
+                if named_tags:
+                    conditions.append(model.role_folder.in_(named_tags))
+                if conditions:
+                    q = q.where(or_(*conditions))
+            elif hasattr(model, 'user_id'):
+                # For Employee, check corresponding Candidate role_folder
+                conditions = []
+                if has_untagged:
+                    conditions.append(exists(select(1).where(Candidate.user_id == model.user_id, or_(Candidate.role_folder.is_(None), Candidate.role_folder == ""))))
+                if named_tags:
+                    conditions.append(exists(select(1).where(Candidate.user_id == model.user_id, Candidate.role_folder.in_(named_tags))))
+                if conditions:
+                    q = q.where(or_(*conditions))
+                else:
+                    q = q.where(False)
 
         if search:
             from sqlalchemy import exists
@@ -1297,7 +1393,11 @@ async def search_candidates(
                 q = q.where(or_(User.full_name.ilike(term), User.email.ilike(term)))
         if hasattr(model, 'status') and model == Candidate:
             from app.models.source import CandidateStatus
-            q = q.where(model.status != CandidateStatus.archived)
+            # When scoping by repository filters (upload_time, upload_years, upload_months, role_folder),
+            # include all resumes uploaded in that scope.
+            # Only in a general unscoped candidate search do we exclude archived candidates.
+            if not upload_time and not upload_years and not upload_months and not role_folder:
+                q = q.where(model.status != CandidateStatus.archived)
         return q
 
     results = []
@@ -1321,11 +1421,12 @@ async def search_candidates(
                 "id": c.id, "user_id": u.id, "name": u.full_name or "Unknown",
                 "email": u.email, "location": c.location, "exp_years": c.exp_years,
                 "status": c.status.value, "resume_url": c.resume_url, "type": ctype,
-                "created_at": c.created_at, "is_employee": False
+                "created_at": c.created_at, "is_employee": False,
+                "role_folder": getattr(c, "role_folder", None),
             })
 
-    # Employees
-    if pool in ["all", "employee"] and lifecycle_phase in ["all", "offer_accepted"]:
+    # Employees (only in general search, never in resume repository upload_time view)
+    if pool in ["all", "employee"] and lifecycle_phase in ["all", "offer_accepted"] and not upload_time:
         q = apply_filters(emp_query, Employee)
         if not role_id:
             q = q.order_by(Employee.created_at.desc()).limit(limit)
@@ -1335,7 +1436,8 @@ async def search_candidates(
                 "id": e.id, "user_id": u.id, "name": e.full_name if hasattr(e, 'full_name') else u.full_name or "Unknown",
                 "email": u.email, "location": getattr(e, 'location', 'Office'), "exp_years": 0,
                 "status": e.status.value, "resume_url": None, "type": "Employee",
-                "created_at": e.created_at, "is_employee": True
+                "created_at": e.created_at, "is_employee": True,
+                "role_folder": None,
             })
 
     # Retrieve required skills if a role is selected
@@ -1444,8 +1546,8 @@ async def get_repository_folders(
     
     # Query Candidate table to count candidates per year and month
     query = select(
-        extract('year', Candidate.created_at).label('year'),
-        extract('month', Candidate.created_at).label('month'),
+        func.coalesce(Candidate.upload_year, extract('year', Candidate.created_at)).label('year'),
+        func.coalesce(Candidate.upload_month, extract('month', Candidate.created_at)).label('month'),
         func.count(Candidate.id).label('count')
     )
     
@@ -1474,6 +1576,451 @@ async def get_repository_folders(
         })
         
     return success(folders)
+
+
+class CreateRoleFolderPayload(BaseModel):
+    name: str
+    year: int
+    month: int
+
+
+class DeleteRoleFolderPayload(BaseModel):
+    name: str
+    year: int
+    month: int
+    delete_resumes: bool = False
+
+
+class DeleteMonthFolderPayload(BaseModel):
+    year: int
+    month: int
+    delete_resumes: bool = True
+
+
+class MoveCandidatesPayload(BaseModel):
+    candidate_ids: List[int]
+    target_role_folder: Optional[str] = None
+    target_year: Optional[int] = None
+    target_month: Optional[int] = None
+
+
+class BulkDeleteCandidatesPayload(BaseModel):
+    candidate_ids: List[int]
+
+
+class TagCandidatesPayload(BaseModel):
+    candidate_ids: List[int]
+    role_tag: Optional[str] = None
+
+
+async def _delete_candidates_safely(db: AsyncSession, candidate_ids: List[int], org_id: Optional[int] = None, is_super_admin: bool = False) -> int:
+    from sqlalchemy import delete
+    from app.models.verify import AssessmentResult
+    if not candidate_ids:
+        return 0
+
+    cand_q = select(Candidate).where(Candidate.id.in_(candidate_ids))
+    if org_id is not None and not is_super_admin:
+        cand_q = cand_q.where(Candidate.org_id == org_id)
+
+    res = await db.execute(cand_q)
+    candidates = res.scalars().all()
+    if not candidates:
+        return 0
+
+    valid_cand_ids = [c.id for c in candidates]
+    user_ids = [c.user_id for c in candidates if c.user_id]
+
+    await db.execute(delete(CandidateInvite).where(CandidateInvite.candidate_id.in_(valid_cand_ids)))
+    await db.execute(delete(CandidateSkill).where(CandidateSkill.candidate_id.in_(valid_cand_ids)))
+    await db.execute(delete(AIScore).where(AIScore.entity_type == "candidate", AIScore.entity_id.in_(valid_cand_ids)))
+
+    await db.execute(delete(Candidate).where(Candidate.id.in_(valid_cand_ids)))
+
+    if user_ids:
+        await db.execute(delete(AssessmentResult).where(AssessmentResult.user_id.in_(user_ids)))
+        await db.execute(delete(User).where(User.id.in_(user_ids)))
+
+    await db.commit()
+    return len(valid_cand_ids)
+
+
+@router.get("/role-folders")
+async def list_role_folders(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    years: Optional[str] = None,
+    months: Optional[str] = None,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """List role tags that actually exist on resumes, strictly scoped by year(s) and month(s)."""
+    from sqlalchemy import func, extract, or_
+    from app.models.source import CandidateStatus
+
+    parsed_years = []
+    if years:
+        parsed_years = [int(y.strip()) for y in years.split(",") if y.strip().isdigit()]
+    elif year is not None:
+        parsed_years = [year]
+
+    parsed_months = []
+    if months:
+        parsed_months = [int(m.strip()) for m in months.split(",") if m.strip().isdigit()]
+    elif month is not None:
+        parsed_months = [month]
+
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    org_filter = [Candidate.org_id == current_user.org_id] if role_val != "super_admin" else []
+
+    cand_tags_q = select(
+        Candidate.role_folder,
+        func.count(Candidate.id).label("count")
+    ).where(
+        *org_filter,
+        Candidate.role_folder.isnot(None),
+        Candidate.role_folder != "",
+    )
+
+    unassigned_q = select(
+        func.count(Candidate.id)
+    ).where(
+        *org_filter,
+        or_(Candidate.role_folder.is_(None), Candidate.role_folder == ""),
+    )
+
+    if parsed_years:
+        year_expr = func.coalesce(Candidate.upload_year, extract('year', Candidate.created_at))
+        cand_tags_q = cand_tags_q.where(year_expr.in_(parsed_years))
+        unassigned_q = unassigned_q.where(year_expr.in_(parsed_years))
+
+    if parsed_months:
+        month_expr = func.coalesce(Candidate.upload_month, extract('month', Candidate.created_at))
+        cand_tags_q = cand_tags_q.where(month_expr.in_(parsed_months))
+        unassigned_q = unassigned_q.where(month_expr.in_(parsed_months))
+
+    cand_tags_q = cand_tags_q.group_by(Candidate.role_folder).order_by(Candidate.role_folder.asc())
+    cand_res = await db.execute(cand_tags_q)
+    tag_rows = cand_res.all()
+
+    unassigned_res = await db.execute(unassigned_q)
+    unassigned_count = unassigned_res.scalar_one_or_none() or 0
+
+    output = []
+    for tag_name, count in tag_rows:
+        cleaned = (tag_name or "").strip()
+        if cleaned:
+            output.append({
+                "id": None,
+                "name": cleaned,
+                "count": count,
+            })
+
+    output.sort(key=lambda x: x["name"].lower())
+    return {
+        "success": True,
+        "data": output,
+        "message": "",
+        "meta": {
+            "unassigned_count": unassigned_count,
+            "has_unassigned": unassigned_count > 0,
+            "total_tags": len(output),
+        }
+    }
+
+
+@router.post("/role-folders")
+async def create_role_folder(
+    payload: CreateRoleFolderPayload,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Role folder name cannot be empty")
+    if name.lower() == "unassigned roles":
+        raise HTTPException(status_code=400, detail="Cannot create reserved folder name")
+
+    existing = await db.execute(
+        select(RoleFolder).where(
+            RoleFolder.org_id == current_user.org_id,
+            RoleFolder.year == payload.year,
+            RoleFolder.month == payload.month,
+            RoleFolder.name == name,
+        )
+    )
+    rf = existing.scalar_one_or_none()
+    if not rf:
+        rf = RoleFolder(
+            org_id=current_user.org_id,
+            year=payload.year,
+            month=payload.month,
+            name=name,
+            created_by=current_user.id,
+        )
+        db.add(rf)
+        await db.commit()
+        await db.refresh(rf)
+
+    return success({
+        "id": rf.id,
+        "name": rf.name,
+        "year": rf.year,
+        "month": rf.month,
+    }, "Role folder created successfully")
+
+
+@router.delete("/role-folders")
+async def delete_role_folder(
+    payload: Optional[DeleteRoleFolderPayload] = Body(None),
+    name: Optional[str] = Query(None),
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
+    delete_resumes: bool = Query(False),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import extract, delete
+
+    folder_name = payload.name if payload and payload.name else name
+    folder_year = payload.year if payload and payload.year is not None else year
+    folder_month = payload.month if payload and payload.month is not None else month
+    should_delete_resumes = payload.delete_resumes if payload else delete_resumes
+
+    if not folder_name or folder_year is None or folder_month is None:
+        raise HTTPException(status_code=400, detail="Folder name, year, and month are required")
+
+    folder_name = folder_name.strip()
+    if folder_name.lower() == "unassigned roles":
+        raise HTTPException(status_code=400, detail="Cannot delete reserved folder 'Unassigned Roles'")
+
+    is_super_admin = current_user.role.value == "super_admin"
+
+    cand_q = select(Candidate).where(
+        Candidate.role_folder == folder_name,
+        func.coalesce(Candidate.upload_year, extract('year', Candidate.created_at)) == folder_year,
+        func.coalesce(Candidate.upload_month, extract('month', Candidate.created_at)) == folder_month,
+    )
+    if not is_super_admin:
+        cand_q = cand_q.where(Candidate.org_id == current_user.org_id)
+    res = await db.execute(cand_q)
+    matching_candidates = res.scalars().all()
+
+    affected_count = len(matching_candidates)
+    if should_delete_resumes and matching_candidates:
+        cand_ids = [c.id for c in matching_candidates]
+        await _delete_candidates_safely(db, cand_ids, current_user.org_id, is_super_admin=is_super_admin)
+    else:
+        for c in matching_candidates:
+            c.role_folder = None
+        await db.commit()
+
+    rf_del = delete(RoleFolder).where(
+        RoleFolder.year == folder_year,
+        RoleFolder.month == folder_month,
+        RoleFolder.name == folder_name,
+    )
+    if not is_super_admin:
+        rf_del = rf_del.where(RoleFolder.org_id == current_user.org_id)
+    await db.execute(rf_del)
+    await db.commit()
+
+    return success({
+        "affected_count": affected_count,
+        "resumes_deleted": should_delete_resumes,
+    }, f"Role folder '{folder_name}' deleted successfully.")
+
+
+@router.delete("/repository-folders/month")
+async def delete_month_folder(
+    payload: Optional[DeleteMonthFolderPayload] = Body(None),
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
+    delete_resumes: bool = Query(True),
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import extract, delete
+
+    folder_year = payload.year if payload and payload.year is not None else year
+    folder_month = payload.month if payload and payload.month is not None else month
+    should_delete = payload.delete_resumes if payload else delete_resumes
+
+    if folder_year is None or folder_month is None:
+        raise HTTPException(status_code=400, detail="Year and month are required")
+
+    is_super_admin = current_user.role.value == "super_admin"
+
+    cand_q = select(Candidate).where(
+        func.coalesce(Candidate.upload_year, extract('year', Candidate.created_at)) == folder_year,
+        func.coalesce(Candidate.upload_month, extract('month', Candidate.created_at)) == folder_month,
+    )
+    if not is_super_admin:
+        cand_q = cand_q.where(Candidate.org_id == current_user.org_id)
+    res = await db.execute(cand_q)
+    matching_candidates = res.scalars().all()
+    affected_count = len(matching_candidates)
+
+    if should_delete and matching_candidates:
+        cand_ids = [c.id for c in matching_candidates]
+        await _delete_candidates_safely(db, cand_ids, current_user.org_id, is_super_admin=is_super_admin)
+
+    rf_del = delete(RoleFolder).where(
+        RoleFolder.year == folder_year,
+        RoleFolder.month == folder_month,
+    )
+    if not is_super_admin:
+        rf_del = rf_del.where(RoleFolder.org_id == current_user.org_id)
+    await db.execute(rf_del)
+    await db.commit()
+
+    return success({
+        "affected_count": affected_count,
+    }, f"Month folder {folder_year}-{folder_month:02d} deleted successfully.")
+
+
+@router.post("/candidates/move")
+async def move_candidates(
+    payload: MoveCandidatesPayload,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    if not payload.candidate_ids:
+        raise HTTPException(status_code=400, detail="No candidate IDs provided")
+
+    is_super_admin = current_user.role.value == "super_admin"
+
+    # 1. Direct candidate query
+    cand_q = select(Candidate).where(Candidate.id.in_(payload.candidate_ids))
+    if not is_super_admin:
+        cand_q = cand_q.where(Candidate.org_id == current_user.org_id)
+    res = await db.execute(cand_q)
+    candidates = list(res.scalars().all())
+    found_ids = {c.id for c in candidates}
+
+    # 2. If some IDs weren't matched as Candidate.id, check if they are Employee IDs or User IDs
+    unmatched_ids = [cid for cid in payload.candidate_ids if cid not in found_ids]
+    if unmatched_ids:
+        emp_q = select(Employee.user_id).where(Employee.id.in_(unmatched_ids))
+        if not is_super_admin:
+            emp_q = emp_q.where(Employee.org_id == current_user.org_id)
+        emp_user_ids = (await db.execute(emp_q)).scalars().all()
+
+        target_user_ids = list(set(emp_user_ids) | set(unmatched_ids))
+        if target_user_ids:
+            cand_user_q = select(Candidate).where(Candidate.user_id.in_(target_user_ids))
+            if not is_super_admin:
+                cand_user_q = cand_user_q.where(Candidate.org_id == current_user.org_id)
+            cands_by_user = (await db.execute(cand_user_q)).scalars().all()
+            for c in cands_by_user:
+                if c.id not in found_ids:
+                    candidates.append(c)
+                    found_ids.add(c.id)
+
+    if not candidates:
+        raise HTTPException(status_code=404, detail="No matching candidates found to move")
+
+    clean_target_role = None
+    if payload.target_role_folder:
+        stripped = payload.target_role_folder.strip()
+        if stripped and stripped.lower() not in ("unassigned roles", "unassigned"):
+            clean_target_role = stripped
+
+    target_year = payload.target_year
+    target_month = payload.target_month
+
+    if clean_target_role and target_year and target_month:
+        target_org_id = current_user.org_id or candidates[0].org_id
+        rf_q = select(RoleFolder).where(
+            RoleFolder.year == target_year,
+            RoleFolder.month == target_month,
+            RoleFolder.name == clean_target_role,
+        )
+        if not is_super_admin and target_org_id:
+            rf_q = rf_q.where(RoleFolder.org_id == target_org_id)
+        existing_rf = (await db.execute(rf_q)).scalar_one_or_none()
+
+        if not existing_rf and target_org_id:
+            new_rf = RoleFolder(
+                org_id=target_org_id,
+                year=target_year,
+                month=target_month,
+                name=clean_target_role,
+                created_by=current_user.id,
+            )
+            db.add(new_rf)
+
+    for c in candidates:
+        c.role_folder = clean_target_role
+        if target_year is not None:
+            c.upload_year = target_year
+        if target_month is not None:
+            c.upload_month = target_month
+
+    await db.commit()
+    return success({
+        "moved_count": len(candidates),
+        "target_role_folder": clean_target_role or "Unassigned Roles",
+        "target_year": target_year,
+        "target_month": target_month,
+    }, f"Successfully moved {len(candidates)} resume(s)")
+
+
+@router.post("/candidates/tag")
+async def tag_candidates(
+    payload: TagCandidatesPayload,
+    current_user: User = Depends(require_role(["hr", "org_admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    if not payload.candidate_ids:
+        raise HTTPException(status_code=400, detail="No candidate IDs provided")
+
+    is_super_admin = current_user.role.value == "super_admin"
+
+    # 1. Direct candidate query
+    cand_q = select(Candidate).where(Candidate.id.in_(payload.candidate_ids))
+    if not is_super_admin:
+        cand_q = cand_q.where(Candidate.org_id == current_user.org_id)
+    res = await db.execute(cand_q)
+    candidates = list(res.scalars().all())
+    found_ids = {c.id for c in candidates}
+
+    # 2. Check if any unmatched IDs are Employee IDs or User IDs
+    unmatched_ids = [cid for cid in payload.candidate_ids if cid not in found_ids]
+    if unmatched_ids:
+        emp_q = select(Employee.user_id).where(Employee.id.in_(unmatched_ids))
+        if not is_super_admin:
+            emp_q = emp_q.where(Employee.org_id == current_user.org_id)
+        emp_user_ids = (await db.execute(emp_q)).scalars().all()
+
+        target_user_ids = list(set(emp_user_ids) | set(unmatched_ids))
+        if target_user_ids:
+            cand_user_q = select(Candidate).where(Candidate.user_id.in_(target_user_ids))
+            if not is_super_admin:
+                cand_user_q = cand_user_q.where(Candidate.org_id == current_user.org_id)
+            cands_by_user = (await db.execute(cand_user_q)).scalars().all()
+            for c in cands_by_user:
+                if c.id not in found_ids:
+                    candidates.append(c)
+                    found_ids.add(c.id)
+
+    if not candidates:
+        raise HTTPException(status_code=404, detail="No matching candidates found")
+
+    clean_tag = None
+    if payload.role_tag:
+        stripped = payload.role_tag.strip()
+        if stripped and stripped.lower() not in ("untagged", "unassigned roles", "unassigned", "none"):
+            clean_tag = stripped
+
+    for c in candidates:
+        c.role_folder = clean_tag
+
+    await db.commit()
+    return success({
+        "updated_count": len(candidates),
+        "role_tag": clean_tag or "Untagged"
+    }, f"Successfully updated tag to '{clean_tag or 'Untagged'}' for {len(candidates)} resume(s)")
 
 
 @router.get("/candidates/{candidate_id}")
@@ -1596,6 +2143,60 @@ class JobRoleCreate(BaseModel):
     min_experience: int = 0
 
 
+class ExtractSkillsPayload(BaseModel):
+    description: Optional[str] = None
+    title: Optional[str] = None
+
+
+@router.post("/job-roles/extract-skills")
+async def extract_skills_from_jd(
+    body: ExtractSkillsPayload,
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+):
+    text = (body.description or "").strip()
+    title = (body.title or "").strip()
+    
+    extracted = []
+    if text:
+        try:
+            from app.agents.agents import run_extract_jd_skills_agent
+            import asyncio
+            ai_result = await asyncio.to_thread(run_extract_jd_skills_agent, text)
+            raw_skills = ai_result.get("skills", []) if isinstance(ai_result, dict) else []
+            for s in raw_skills:
+                if isinstance(s, dict):
+                    name = _clean_skill_name(s.get("name") or s.get("skill"))
+                    level = _normalise_level(s.get("level"), "intermediate")
+                    if name:
+                        extracted.append({"skill": name, "level": level})
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to extract skills from JD text: {e}")
+
+    # Fallback to title keywords if JD text produced no skills
+    if not extracted and title:
+        haystack = title.lower()
+        seen = set()
+        for keyword, skills in ROLE_SKILL_PRESETS.items():
+            if keyword in haystack:
+                for sk in skills:
+                    if sk.lower() not in seen:
+                        extracted.append({"skill": sk, "level": "intermediate"})
+                        seen.add(sk.lower())
+
+    # De-duplicate while preserving order
+    seen = set()
+    deduped = []
+    for item in extracted:
+        key = item["skill"].lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+
+    return success(deduped)
+
+
 @router.get("/job-roles")
 async def list_job_roles(
     current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
@@ -1629,17 +2230,27 @@ async def create_job_role(
             from app.agents.agents import run_extract_jd_skills_agent
             import asyncio
             ai_result = await asyncio.to_thread(run_extract_jd_skills_agent, body.description)
-            required_skills = [{"skill": s.get("name"), "level": s.get("level", "intermediate")} for s in ai_result.get("skills", [])]
+            required_skills = [{"skill": s.get("name") or s.get("skill"), "level": s.get("level", "intermediate")} for s in (ai_result.get("skills", []) if isinstance(ai_result, dict) else [])]
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
             logger.warning(f"Failed to extract skills from JD: {e}")
 
+    clean_skills = []
+    for s in required_skills:
+        if isinstance(s, dict):
+            s_name = _clean_skill_name(s.get("skill") or s.get("name"))
+            s_level = _normalise_level(s.get("level"), "intermediate")
+            if s_name:
+                clean_skills.append({"skill": s_name, "level": s_level})
+        elif isinstance(s, str) and s.strip():
+            clean_skills.append({"skill": _clean_skill_name(s), "level": "intermediate"})
+
     role = JobRole(
         org_id=current_user.org_id,
         title=body.title,
         description=body.description,
-        required_skills=required_skills,
+        required_skills=clean_skills,
         min_experience=body.min_experience,
     )
     db.add(role)
@@ -1665,13 +2276,25 @@ async def update_job_role(
             from app.agents.agents import run_extract_jd_skills_agent
             import asyncio
             ai_result = await asyncio.to_thread(run_extract_jd_skills_agent, body.description)
-            required_skills = [{"skill": s.get("name"), "level": s.get("level", "intermediate")} for s in ai_result.get("skills", [])]
+            required_skills = [{"skill": s.get("name") or s.get("skill"), "level": s.get("level", "intermediate")} for s in (ai_result.get("skills", []) if isinstance(ai_result, dict) else [])]
         except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to extract skills from JD: {e}")
+
+    clean_skills = []
+    for s in required_skills:
+        if isinstance(s, dict):
+            s_name = _clean_skill_name(s.get("skill") or s.get("name"))
+            s_level = _normalise_level(s.get("level"), "intermediate")
+            if s_name:
+                clean_skills.append({"skill": s_name, "level": s_level})
+        elif isinstance(s, str) and s.strip():
+            clean_skills.append({"skill": _clean_skill_name(s), "level": "intermediate"})
 
     role.title = body.title
     role.description = body.description
-    role.required_skills = required_skills
+    role.required_skills = clean_skills
     role.min_experience = body.min_experience
     await db.commit()
     await db.refresh(role)
@@ -2240,38 +2863,40 @@ async def delete_candidate(
     current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
     db: AsyncSession = Depends(get_db),
 ):
-    from sqlalchemy import delete
-    
-    # Find candidate
-    query = select(Candidate).where(Candidate.id == candidate_id)
     role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
-    if role_val != "super_admin":
-        query = query.where(Candidate.org_id == current_user.org_id)
-    result = await db.execute(query)
-    candidate = result.scalar_one_or_none()
-    if not candidate:
+    is_super = role_val == "super_admin"
+    deleted_count = await _delete_candidates_safely(
+        db, [candidate_id], current_user.org_id, is_super_admin=is_super
+    )
+    if not deleted_count:
         raise HTTPException(status_code=404, detail="Candidate not found")
-        
-    user_id = candidate.user_id
-    
-    # Delete related records explicitly to avoid FK constraint errors
-    await db.execute(delete(CandidateInvite).where(CandidateInvite.candidate_id == candidate.id))
-    await db.execute(delete(CandidateSkill).where(CandidateSkill.candidate_id == candidate.id))
-    await db.execute(delete(AIScore).where(AIScore.entity_type == "candidate", AIScore.entity_id == candidate.id))
-    
-    await db.delete(candidate)
-    
-    if user_id:
-        user_res = await db.execute(select(User).where(User.id == user_id))
-        user_record = user_res.scalar_one_or_none()
-        if user_record:
-            # Check if there are assessments for this user to be ultra-safe
-            from app.models.verify import AssessmentResult
-            await db.execute(delete(AssessmentResult).where(AssessmentResult.user_id == user_id))
-            await db.delete(user_record)
-
-    await db.commit()
     return success(message="Resume deleted successfully")
+
+
+@router.post("/candidates/bulk-delete")
+async def bulk_delete_candidates(
+    payload: Union[BulkDeleteCandidatesPayload, List[int], dict] = Body(...),
+    current_user: User = Depends(require_role(["hr", "org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db),
+):
+    if isinstance(payload, list):
+        candidate_ids = payload
+    elif isinstance(payload, dict):
+        candidate_ids = payload.get("candidate_ids", [])
+    elif hasattr(payload, "candidate_ids"):
+        candidate_ids = payload.candidate_ids
+    else:
+        candidate_ids = []
+
+    if not candidate_ids:
+        raise HTTPException(status_code=400, detail="No candidate IDs provided")
+
+    role_val = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    is_super = role_val == "super_admin"
+    deleted_count = await _delete_candidates_safely(
+        db, candidate_ids, current_user.org_id, is_super_admin=is_super
+    )
+    return success({"deleted_count": deleted_count}, f"Successfully deleted {deleted_count} resume(s)")
 
 @router.get("/active-candidates")
 async def list_active_candidates(

@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Groq
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
 
     # AWS
     AWS_ACCESS_KEY_ID: str = ""

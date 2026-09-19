@@ -45,11 +45,12 @@ export const authApi = {
 
 // ── Source ────────────────────────────────────────────────────────────────
 export const sourceApi = {
-  uploadResume: (file, jobRoleId, onProgress, signal, overrideDate) => {
+  uploadResume: (file, jobRoleId, onProgress, signal, overrideDate, roleFolder) => {
     const fd = new FormData();
     fd.append('file', file);
     if (jobRoleId) fd.append('job_role_id', jobRoleId);
     if (overrideDate) fd.append('override_date', overrideDate);
+    if (roleFolder) fd.append('role_folder', roleFolder);
     return api.post('/api/v1/source/upload-resume', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress: onProgress,   // real-time bytes-sent feedback
@@ -61,8 +62,15 @@ export const sourceApi = {
   candidateStats: () => api.get('/api/v1/source/candidates/stats'),
   getCandidate: (id, params) => api.get(`/api/v1/source/candidates/${id}`, { params }),
   getRepositoryFolders: () => api.get('/api/v1/source/candidates/repository/folders'),
+  getRoleFolders: (params) => api.get('/api/v1/source/role-folders', { params }),
+  createRoleFolder: (data) => api.post('/api/v1/source/role-folders', data),
+  deleteRoleFolder: (params) => api.delete('/api/v1/source/role-folders', { params }),
+  deleteMonthFolder: (params) => api.delete('/api/v1/source/repository-folders/month', { params }),
+  moveCandidates: (data) => api.post('/api/v1/source/candidates/move', data),
+  tagCandidates: (data) => api.post('/api/v1/source/candidates/tag', data),
 
   listJobRoles: () => api.get('/api/v1/source/job-roles'),
+  extractJdSkills: (data) => api.post('/api/v1/source/job-roles/extract-skills', data),
   createJobRole: (data) => api.post('/api/v1/source/job-roles', data),
   updateJobRole: (id, data) => api.put(`/api/v1/source/job-roles/${id}`, data),
   deleteJobRole: (id) => api.delete(`/api/v1/source/job-roles/${id}`),
@@ -78,7 +86,7 @@ export const sourceApi = {
   scoreCandidates: (data) => api.post('/api/v1/source/score-candidates', data),
   updateCandidate: (id, data) => api.put(`/api/v1/source/candidates/${id}`, data),
   deleteCandidate: (id) => api.delete(`/api/v1/source/candidates/${id}`),
-  bulkDeleteCandidates: (data) => api.post('/api/v1/source/candidates/bulk-delete', data),
+  bulkDeleteCandidates: (data) => api.post('/api/v1/source/candidates/bulk-delete', Array.isArray(data) ? { candidate_ids: data } : data),
   activeCandidates: () => api.get('/api/v1/source/active-candidates'),
   revertToCandidate: (id) => api.post(`/api/v1/source/employees/${id}/revert`),
   getBulkUploads: () => api.get('/api/v1/source/bulk-uploads'),

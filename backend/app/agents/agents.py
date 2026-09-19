@@ -10,35 +10,117 @@ import random
 import httpx
 
 def call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> dict:
-    """Call Groq API via the groq library and return parsed JSON."""
-    from groq import Groq
+    """Call Groq API via the groq library and return parsed JSON with robust exponential backoff."""
     import re
+    import time
+    import random
+    from groq import Groq, RateLimitError, APIConnectionError, APITimeoutError, InternalServerError, APIStatusError
     
     client = Groq(api_key=settings.GROQ_API_KEY)
-    response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.1,
-        max_tokens=max_tokens,
-        response_format={"type": "json_object"},
-    )
-    content = response.choices[0].message.content.strip()
-    
-    # Robustly extract JSON object or array from model responses.
-    match = re.search(r'(\{.*\}|\[.*\])', content, re.DOTALL)
-    if match:
-        content = match.group(1)
-    else:
-        # Fallback to previous stripping logic if regex fails
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-                
-    return json.loads(content.strip())
+    max_retries = 6
+    base_delay = 2.0
+    last_exception = None
+
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=settings.GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+            )
+            content = response.choices[0].message.content.strip()
+            
+            # Robustly extract JSON object or array from model responses.
+            match = re.search(r'(\{.*\}|\[.*\])', content, re.DOTALL)
+            if match:
+                content = match.group(1)
+            else:
+                # Fallback to previous stripping logic if regex fails
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                        
+            return json.loads(content.strip())
+
+        except RateLimitError as e:
+            last_exception = e
+            if attempt == max_retries - 1:
+                logger.error(f"Groq RateLimitError after {max_retries} attempts: {e}")
+                raise
+
+            # Check for retry-after in headers
+            sleep_time = None
+            if hasattr(e, "response") and e.response is not None and hasattr(e.response, "headers"):
+                retry_header = e.response.headers.get("retry-after")
+                if retry_header:
+                    try:
+                        sleep_time = float(retry_header) + 0.5
+                    except ValueError:
+                        pass
+
+            # Check for "try again in Xs" in error string
+            if sleep_time is None:
+                msg_match = re.search(r"try again in ([0-9.]+)s", str(e), re.IGNORECASE)
+                if msg_match:
+                    try:
+                        sleep_time = float(msg_match.group(1)) + 0.5
+                    except ValueError:
+                        pass
+
+            # Fallback to exponential backoff with jitter
+            if sleep_time is None:
+                sleep_time = min(base_delay * (2 ** attempt) + random.uniform(0.5, 1.5), 60.0)
+
+            logger.warning(
+                f"Groq RateLimit hit on attempt {attempt + 1}/{max_retries}. "
+                f"Retrying in {sleep_time:.2f}s... Error: {str(e)[:150]}"
+            )
+            time.sleep(sleep_time)
+
+        except (APIConnectionError, APITimeoutError, InternalServerError) as e:
+            last_exception = e
+            if attempt == max_retries - 1:
+                logger.error(f"Groq transient connection error after {max_retries} attempts: {e}")
+                raise
+            sleep_time = min(base_delay * (2 ** attempt) + random.uniform(0.5, 1.5), 30.0)
+            logger.warning(
+                f"Groq transient error on attempt {attempt + 1}/{max_retries}. "
+                f"Retrying in {sleep_time:.2f}s... Error: {str(e)[:150]}"
+            )
+            time.sleep(sleep_time)
+
+        except json.JSONDecodeError as e:
+            last_exception = e
+            if attempt == max_retries - 1:
+                logger.error(f"JSON decode failed after {max_retries} attempts: {e}")
+                raise
+            sleep_time = 1.0 + random.uniform(0.5, 1.0)
+            logger.warning(
+                f"Groq returned malformed JSON on attempt {attempt + 1}/{max_retries}. "
+                f"Retrying in {sleep_time:.2f}s..."
+            )
+            time.sleep(sleep_time)
+
+        except Exception as e:
+            # If it's another APIStatusError (e.g. 429 that wasn't caught as RateLimitError)
+            if hasattr(e, "status_code") and e.status_code == 429:
+                last_exception = e
+                if attempt == max_retries - 1:
+                    raise
+                sleep_time = min(base_delay * (2 ** attempt) + random.uniform(0.5, 1.5), 60.0)
+                logger.warning(f"Groq HTTP 429 on attempt {attempt + 1}/{max_retries}. Retrying in {sleep_time:.2f}s...")
+                time.sleep(sleep_time)
+            else:
+                raise
+
+    if last_exception:
+        raise last_exception
 
 
 def call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> dict:
