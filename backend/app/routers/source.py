@@ -1121,13 +1121,25 @@ def calculate_role_fit(cand_skills: list, req_skills: list, exp_years: int = 0, 
     if not req_skills:
         return {
             "score": 0.0,
+            "breakdown": {
+                "required_score": 0.0,
+                "preferred_score": 0.0,
+                "required_weight": 100,
+                "preferred_weight": 0,
+                "matched_required_count": 0,
+                "total_required_count": 0,
+                "matched_preferred_count": 0,
+                "total_preferred_count": 0,
+            },
             "matched_skills": [],
             "missing_skills": [],
             "matched_required_skills": [],
             "missing_required_skills": [],
             "matched_preferred_skills": [],
             "missing_preferred_skills": [],
-            "partial_skills": []
+            "partial_skills": [],
+            "required_count": 0,
+            "preferred_count": 0,
         }
 
     # Normalize candidate skills
@@ -1238,8 +1250,25 @@ def calculate_role_fit(cand_skills: list, req_skills: list, exp_years: int = 0, 
 
     final_score = round(min(max(raw_score, 0.0), 100.0), 1)
 
+    req_weight = 75 if total_pref_count > 0 else (100 if total_req_count > 0 else 0)
+    pref_weight = 25 if total_pref_count > 0 else 0
+    req_score = (req_points / total_req_count * req_weight) if total_req_count > 0 else 0.0
+    pref_score = (pref_points / total_pref_count * pref_weight) if total_pref_count > 0 else 0.0
+
+    breakdown = {
+        "required_score": round(req_score, 1),
+        "preferred_score": round(pref_score, 1),
+        "required_weight": req_weight,
+        "preferred_weight": pref_weight,
+        "matched_required_count": len(matched_required),
+        "total_required_count": total_req_count,
+        "matched_preferred_count": len(matched_preferred),
+        "total_preferred_count": total_pref_count,
+    }
+
     return {
         "score": final_score,
+        "breakdown": breakdown,
         "matched_skills": matched_required,
         "missing_skills": missing_required,
         "matched_required_skills": matched_required,
@@ -2167,17 +2196,17 @@ async def get_candidate(
             
             fit_score_obj = {
                 "type": "role_fit",
-                "score": fit["score"],
+                "score": fit.get("score", 0.0),
                 "reasoning": json.dumps({
                     "summary": f"Live fit analysis for {role.title}",
-                    "matched_skills": fit["matched_skills"],
-                    "missing_skills": fit["missing_skills"],
-                    "partial_skills": fit["partial_skills"],
-                    "matched_required_skills": fit["matched_required_skills"],
-                    "missing_required_skills": fit["missing_required_skills"],
-                    "matched_preferred_skills": fit["matched_preferred_skills"],
-                    "missing_preferred_skills": fit["missing_preferred_skills"],
-                    "breakdown": fit["breakdown"],
+                    "matched_skills": fit.get("matched_skills", []),
+                    "missing_skills": fit.get("missing_skills", []),
+                    "partial_skills": fit.get("partial_skills", []),
+                    "matched_required_skills": fit.get("matched_required_skills", []),
+                    "missing_required_skills": fit.get("missing_required_skills", []),
+                    "matched_preferred_skills": fit.get("matched_preferred_skills", []),
+                    "missing_preferred_skills": fit.get("missing_preferred_skills", []),
+                    "breakdown": fit.get("breakdown", {}),
                 })
             }
             scores = [s for s in scores if s["type"] != "role_fit"]
