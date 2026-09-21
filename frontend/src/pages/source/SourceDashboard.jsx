@@ -148,20 +148,25 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
         ['REQUIRED SKILLS BREAKDOWN'],
       ];
 
+      const isSkillPref = (req) => {
+        const t = (req.type || req.level || 'required').toLowerCase();
+        return t === 'preferred' || t === 'additional' || t === 'bonus' || t === 'intermediate' || t === 'beginner';
+      };
+
       for (const req of requiredSkills) {
         const reqName = req.skill?.toLowerCase()?.trim();
-        const row = [`${req.skill} (${req.level})`];
+        const isPref = isSkillPref(req);
+        const tag = isPref ? 'Preferred (Bonus)' : 'Required (Must-Have)';
+        const row = [`${req.skill} [${tag}]`];
         for (const c of candidates) {
           const candSkill = (c.skills || []).find(s => {
             const sName = s.name?.toLowerCase()?.trim();
             return sName === reqName || sName?.includes(reqName);
           });
           if (!candSkill) {
-            row.push('NOT DETECTED');
-          } else if ((levelRank[candSkill.level?.toLowerCase()] ?? 0) >= (levelRank[req.level?.toLowerCase()] ?? 0)) {
-            row.push(`ALIGNED (${candSkill.level})`);
+            row.push(isPref ? 'NOT PRESENT (Optional)' : 'GAP (Missing Core)');
           } else {
-            row.push(`GAP (${candSkill.level} vs req ${req.level})`);
+            row.push(isPref ? `BONUS MATCHED (${candSkill.level || 'proficient'})` : `ALIGNED (${candSkill.level || 'proficient'})`);
           }
         }
         rows.push(row);
@@ -177,7 +182,7 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
             const sName = s.name?.toLowerCase()?.trim();
             return sName && !reqNames.some(rn => sName.includes(rn) || rn.includes(sName));
           })
-          .map(s => `${s.name} (${s.level})`)
+          .map(s => `${s.name} (${s.level || 'proficient'})`)
           .join('; ');
         bonusRow.push(bonus || 'None detected');
       }
@@ -198,6 +203,11 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
       console.error(err);
       toast.error('Failed to export comparison analysis');
     }
+  };
+
+  const isSkillPref = (req) => {
+    const t = (req.type || req.level || 'required').toLowerCase();
+    return t === 'preferred' || t === 'additional' || t === 'bonus' || t === 'intermediate' || t === 'beginner';
   };
 
   return (
@@ -251,7 +261,7 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: '#f8fafc', borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Metric / Skill Required</th>
+                    <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Skill & Priority</th>
                     {candidates.map(c => (
                       <th key={c.id} style={{ padding: '16px 24px', textAlign: 'center', fontSize: '0.85rem', fontWeight: 800, color: '#0f172a' }}>{c.name?.split(' ')[0]}</th>
                     ))}
@@ -261,34 +271,68 @@ function CompareModal({ candidates, onClose, requiredSkills = [] }) {
                   {requiredSkills.length > 0 ? requiredSkills.map(req => {
                     const reqName = req.skill?.toLowerCase()?.trim();
                     if (!reqName) return null;
+                    const isPref = isSkillPref(req);
+
                     return (
                       <tr key={req.skill} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ padding: '16px 24px' }}>
-                          <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1e293b' }}>{req.skill}</div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500 }}>Target: {req.level}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1e293b' }}>{req.skill}</span>
+                            <span style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 800,
+                              padding: '2px 8px',
+                              borderRadius: 12,
+                              textTransform: 'uppercase',
+                              background: isPref ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                              color: isPref ? '#059669' : '#dc2626',
+                              border: isPref ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)'
+                            }}>
+                              {isPref ? 'Preferred' : 'Required'}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                            {isPref ? 'Bonus Competency (25% Weight)' : 'Must-Have Requirement (75% Weight)'}
+                          </div>
                         </td>
                         {candidates.map(c => {
                           const candSkill = (c.skills || []).find(s => {
                             const sName = s.name?.toLowerCase()?.trim();
                             return sName === reqName || sName?.includes(reqName);
                           });
-                          const met = candSkill && (levelRank[candSkill.level?.toLowerCase()] ?? 0) >= (levelRank[req.level?.toLowerCase()] ?? 0);
                           const hasSkill = !!candSkill;
 
                           return (
                             <td key={c.id} style={{ padding: '16px 24px', textAlign: 'center' }}>
-                              {met ? (
+                              {hasSkill ? (
                                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                                  <div style={{ background: '#dcfce7', color: '#166534', padding: '4px 12px', borderRadius: 20, fontSize: '0.7rem', fontWeight: 800 }}>ALIGNED</div>
-                                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#444' }}>{candSkill.level}</span>
-                                </div>
-                              ) : hasSkill ? (
-                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                                  <div style={{ background: '#fef3c7', color: '#92400e', padding: '4px 12px', borderRadius: 20, fontSize: '0.7rem', fontWeight: 800 }}>GAP: {req.level}</div>
-                                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#444' }}>{candSkill.level}</span>
+                                  <div style={{
+                                    background: isPref ? '#ede9fe' : '#dcfce7',
+                                    color: isPref ? '#6d28d9' : '#166534',
+                                    border: isPref ? '1px solid #ddd6fe' : '1px solid #bbf7d0',
+                                    padding: '4px 12px',
+                                    borderRadius: 20,
+                                    fontSize: '0.72rem',
+                                    fontWeight: 800
+                                  }}>
+                                    {isPref ? '⭐ BONUS MATCH' : '✅ ALIGNED'}
+                                  </div>
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#64748b' }}>{candSkill.level || 'Present'}</span>
                                 </div>
                               ) : (
-                                <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 700 }}>NOT DETECTED</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                                  <div style={{
+                                    background: isPref ? '#f1f5f9' : '#fee2e2',
+                                    color: isPref ? '#64748b' : '#b91c1c',
+                                    border: isPref ? '1px solid #e2e8f0' : '1px solid #fecaca',
+                                    padding: '4px 12px',
+                                    borderRadius: 20,
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700
+                                  }}>
+                                    {isPref ? 'NOT DETECTED' : 'GAP: MISSING'}
+                                  </div>
+                                </div>
                               )}
                             </td>
                           );

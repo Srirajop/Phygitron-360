@@ -116,8 +116,9 @@ export default function SearchReportModal({
         'Role Tag',
         'Target Role Fit (%)',
         'Baseline ATS Score',
-        'Matched Skills',
-        'Missing Skills',
+        'Matched Required Skills (Core 75%)',
+        'Missing Required Skills (Core)',
+        'Matched Preferred Skills (Bonus 25%)',
         'All Skills & Proficiency',
         'Uploaded Date',
         'Manager Screening Remarks'
@@ -125,8 +126,21 @@ export default function SearchReportModal({
 
       const dataRows = targetCandidates.map((c, idx) => {
         const fitReason = c.fit_reason || {};
-        const matched = (fitReason.matched_skills || []).map(s => `${s.skill} (${s.candidate_level || s.level || 'aligned'})`).join('; ');
-        const missing = (fitReason.missing_skills || []).map(s => `${s.skill} (req: ${s.required_level || s.level || 'any'})`).join('; ');
+        const getSkillName = (s) => (typeof s === 'string' ? s : s?.skill || s?.name || '');
+
+        const matchedReqList = (fitReason.matched_required_skills || []).map(getSkillName).filter(Boolean);
+        const missingReqList = (fitReason.missing_required_skills || []).map(getSkillName).filter(Boolean);
+        const matchedPrefList = (fitReason.matched_preferred_skills || []).map(getSkillName).filter(Boolean);
+
+        const matchedReq = matchedReqList.length > 0 
+          ? matchedReqList.join('; ') 
+          : (fitReason.matched_skills || []).map(getSkillName).join('; ');
+
+        const missingReq = missingReqList.length > 0 
+          ? missingReqList.join('; ') 
+          : (fitReason.missing_skills || []).map(getSkillName).join('; ');
+
+        const matchedPref = matchedPrefList.join('; ');
         const allSkills = (c.skills || []).map(s => `${s.name} [${s.level || 'proficient'}]`).join('; ');
         const uploadDate = c.created_at ? new Date(c.created_at).toLocaleDateString() : 'N/A';
 
@@ -141,8 +155,9 @@ export default function SearchReportModal({
           c.role_folder || 'Unassigned',
           c.ats_score != null ? `${Math.round(c.ats_score)}%` : 'N/A',
           c.resume_ats_score != null ? `${Math.round(c.resume_ats_score)}/100` : 'N/A',
-          matched || 'N/A',
-          missing || 'None',
+          matchedReq || 'None detected',
+          missingReq || 'None (All Met)',
+          matchedPref || 'None',
           allSkills || 'None detected',
           uploadDate,
           managerNotes ? managerNotes.replace(/\r?\n/g, ' ') : ''
@@ -443,7 +458,7 @@ export default function SearchReportModal({
         <th style="width: 65px;">Exp / Loc</th>
         <th style="width: 90px;">Role Tag</th>
         <th style="width: 75px; text-align: center;">Fit Score</th>
-        <th>Key Skills</th>
+        <th>Competencies (Required &amp; Preferred)</th>
         <th style="width: 150px;">Manager Remarks / Actions</th>
       </tr>
     </thead>
@@ -451,6 +466,13 @@ export default function SearchReportModal({
       ${targetCandidates.map((c, i) => {
         const score = c.ats_score != null ? Math.round(c.ats_score) : null;
         const scoreClass = score == null ? '' : score >= 70 ? 'score-green' : score >= 40 ? 'score-amber' : 'score-red';
+        const fitReason = c.fit_reason || {};
+        const getSkillName = (s) => (typeof s === 'string' ? s : s?.skill || s?.name || '');
+        const matchedReq = (fitReason.matched_required_skills || []).map(getSkillName).filter(Boolean);
+        const missingReq = (fitReason.missing_required_skills || []).map(getSkillName).filter(Boolean);
+        const matchedPref = (fitReason.matched_preferred_skills || []).map(getSkillName).filter(Boolean);
+        const hasRoleFit = matchedReq.length > 0 || missingReq.length > 0 || matchedPref.length > 0;
+
         const skillsList = (c.skills || []).slice(0, 6);
         const moreSkills = (c.skills || []).length - skillsList.length;
 
@@ -475,8 +497,18 @@ export default function SearchReportModal({
           </td>
           <td>
             <div>
-              ${skillsList.map(s => `<span class="skill-chip">${s.name}</span>`).join(' ')}
-              ${moreSkills > 0 ? `<span style="font-size: 9px; color: #94a3b8;">+${moreSkills} more</span>` : ''}
+              ${hasRoleFit ? `
+                <div style="margin-bottom: 2px;">
+                  ${matchedReq.map(s => `<span class="skill-chip" style="background: #dcfce7; color: #166534; border: 1px solid #bbf7d0;">✓ ${s}</span>`).join(' ')}
+                  ${missingReq.map(s => `<span class="skill-chip" style="background: #fee2e2; color: #991b1b; border: 1px solid #fecaca;">✕ ${s}</span>`).join(' ')}
+                  ${matchedPref.map(s => `<span class="skill-chip" style="background: #ede9fe; color: #6d28d9; border: 1px solid #ddd6fe;">★ ${s}</span>`).join(' ')}
+                </div>
+              ` : `
+                <div>
+                  ${skillsList.map(s => `<span class="skill-chip">${s.name}</span>`).join(' ')}
+                  ${moreSkills > 0 ? `<span style="font-size: 9px; color: #94a3b8;">+${moreSkills} more</span>` : ''}
+                </div>
+              `}
             </div>
           </td>
           <td>

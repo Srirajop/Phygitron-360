@@ -989,8 +989,17 @@ def _normalise_level(value, fallback="intermediate") -> str:
     return level if level in LEVEL_WEIGHTS else fallback
 
 
+def _normalise_skill_type(value, fallback="required") -> str:
+    s = str(value or fallback).lower().strip()
+    if s in ["required", "must-have", "mandatory", "core", "expert", "advanced"]:
+        return "required"
+    if s in ["preferred", "optional", "bonus", "additional", "nice-to-have", "intermediate", "beginner"]:
+        return "preferred"
+    return fallback
+
+
 def normalise_required_skills(role: Optional[JobRole]) -> list:
-    """Convert job role required_skills into a canonical list.
+    """Convert job role required_skills into a canonical list with type: 'required' | 'preferred'.
     
     Priority:
     1. Use skills explicitly defined in the JD (required_skills field) — always preferred.
@@ -1008,21 +1017,22 @@ def normalise_required_skills(role: Optional[JobRole]) -> list:
     for item in raw:
         if isinstance(item, str):
             name = item.strip()
-            level = "intermediate"
+            skill_type = "required"
         elif isinstance(item, dict):
             name = (
                 item.get("skill") or item.get("name") or
                 item.get("title") or item.get("normalized_name") or ""
             ).strip()
-            level = (
-                item.get("level") or item.get("min_level") or
-                item.get("required_level") or "intermediate"
-            )
+            skill_type = _normalise_skill_type(item.get("type") or item.get("level") or "required")
         else:
             continue
         name = _clean_skill_name(name)
         if name:
-            normalised.append({"skill": name, "level": _normalise_level(level)})
+            normalised.append({
+                "skill": name,
+                "type": skill_type,
+                "level": skill_type  # backwards compatibility
+            })
 
     # If JD has explicit skills, return them ONLY — do not blend with AI presets
     if normalised:
@@ -1048,7 +1058,7 @@ def normalise_required_skills(role: Optional[JobRole]) -> list:
     for skill in inferred:
         key = skill.lower()
         if key not in seen:
-            fallback.append({"skill": skill, "level": "intermediate"})
+            fallback.append({"skill": skill, "type": "required", "level": "required"})
             seen.add(key)
     return fallback
 
@@ -1109,76 +1119,136 @@ def _skill_similarity(required: str, candidate: str) -> float:
 
 def calculate_role_fit(cand_skills: list, req_skills: list, exp_years: int = 0, min_exp: int = 0) -> dict:
     if not req_skills:
-        return {"score": 0.0, "matched_skills": [], "missing_skills": [], "partial_skills": []}
+        return {
+            "score": 0.0,
+            "matched_skills": [],
+            "missing_skills": [],
+            "matched_required_skills": [],
+            "missing_required_skills": [],
+            "matched_preferred_skills": [],
+            "missing_preferred_skills": [],
+            "partial_skills": []
+        }
 
-    total_weight = 0.0
-    earned = 0.0
-    matched = []
-    missing = []
-    partial = []
-    candidates = [
-        {"name": _clean_skill_name(s.get("name")), "level": _normalise_level(s.get("level"), "beginner")}
+    # Normalize candidate skills
+    candidate_skills = [
+        {"name": _clean_skill_name(s.get("name")), "level": str(s.get("level") or "intermediate").lower()}
         for s in cand_skills
         if _clean_skill_name(s.get("name"))
     ]
+
+    required_skills = []
+    preferred_skills = []
 
     for req in req_skills:
         req_name = _clean_skill_name(req.get("skill") or req.get("name"))
         if not req_name:
             continue
-        req_level = _normalise_level(req.get("level"))
-        req_weight = LEVEL_WEIGHTS[req_level]
-        total_weight += req_weight
-
-        best = None
-        best_points = 0.0
-        best_similarity = 0.0
-        for cand in candidates:
-            similarity = _skill_similarity(req_name, cand["name"])
-            if similarity <= 0:
-                continue
-            cand_weight = LEVEL_WEIGHTS[cand["level"]]
-            if cand_weight >= req_weight:
-                # Candidate meets or exceeds required level — full credit
-                level_ratio = 1.0
-            else:
-                diff = req_weight - cand_weight
-                if diff == 1:
-                    # One level below (e.g. intermediate vs advanced) — slight penalty
-                    level_ratio = 0.80
-                elif diff == 2:
-                    # Two levels below — significant penalty
-                    level_ratio = 0.55
-                else:
-                    # Three levels below (e.g. beginner vs expert) — heavy penalty
-                    level_ratio = 0.30
-
-            points = req_weight * similarity * level_ratio
-            if points > best_points:
-                best = cand
-                best_points = points
-                best_similarity = similarity
-
-        earned += best_points
-        if not best:
-            missing.append(req_name)
-        elif best_similarity >= 0.8 and LEVEL_WEIGHTS[best["level"]] >= req_weight:
-            matched.append(req_name)
+        skill_type = _normalise_skill_type(req.get("type") or req.get("level") or "required")
+        item = {"skill": req_name, "type": skill_type}
+        if skill_type == "required":
+            required_skills.append(item)
         else:
-            partial.append({
-                "skill": req_name,
-                "candidate_skill": best["name"],
-                "candidate_level": best["level"],
-                "required_level": req_level,
-            })
+            preferred_skills.append(item)
 
-    score = (earned / total_weight * 100.0) if total_weight else 0.0
+    # If no required skills were defined at all, treat all as required
+    if not required_skills and preferred_skills:
+        required_skills = preferred_skills
+        preferred_skills = []
+
+    matched_required = []
+    missing_required = []
+    partial_skills = []
+
+    matched_preferred = []
+    missing_preferred = []
+
+    req_points = 0.0
+    for req in required_skills:
+        req_name = req["skill"]
+        best_cand = None
+        best_sim = 0.0
+        for cand in candidate_skills:
+            sim = _skill_similarity(req_name, cand["name"])
+            if sim > best_sim:
+                best_sim = sim
+                best_cand = cand
+
+        if best_sim >= 0.8:
+            matched_required.append(req_name)
+            req_points += 1.0
+        elif best_sim >= 0.5:
+            partial_skills.append({
+                "skill": req_name,
+                "type": "required",
+                "candidate_skill": best_cand["name"] if best_cand else "",
+                "similarity": best_sim
+            })
+            req_points += (best_sim * 0.75)
+        else:
+            missing_required.append(req_name)
+
+    pref_points = 0.0
+    for pref in preferred_skills:
+        pref_name = pref["skill"]
+        best_cand = None
+        best_sim = 0.0
+        for cand in candidate_skills:
+            sim = _skill_similarity(pref_name, cand["name"])
+            if sim > best_sim:
+                best_sim = sim
+                best_cand = cand
+
+        if best_sim >= 0.8:
+            matched_preferred.append(pref_name)
+            pref_points += 1.0
+        elif best_sim >= 0.5:
+            partial_skills.append({
+                "skill": pref_name,
+                "type": "preferred",
+                "candidate_skill": best_cand["name"] if best_cand else "",
+                "similarity": best_sim
+            })
+            pref_points += (best_sim * 0.75)
+        else:
+            missing_preferred.append(pref_name)
+
+    # Calculate weighted skill score:
+    # Required skills carry 75% weight (must-haves).
+    # Preferred skills carry 25% weight (bonus competitive edge).
+    total_req_count = len(required_skills)
+    total_pref_count = len(preferred_skills)
+
+    if total_req_count > 0 and total_pref_count > 0:
+        req_ratio = (req_points / total_req_count)
+        pref_ratio = (pref_points / total_pref_count)
+        raw_score = (req_ratio * 75.0) + (pref_ratio * 25.0)
+    elif total_req_count > 0:
+        raw_score = (req_points / total_req_count) * 100.0
+    else:
+        raw_score = 0.0
+
+    # Experience adjustment: if role has min_experience, apply factor
+    if min_exp > 0 and exp_years is not None:
+        if exp_years >= min_exp:
+            exp_factor = 1.0
+        else:
+            exp_factor = max(0.70, exp_years / min_exp)
+        raw_score = raw_score * exp_factor
+
+    final_score = round(min(max(raw_score, 0.0), 100.0), 1)
 
     return {
-        "score": round(min(score, 100.0), 1),
-        "matched_skills": matched,
-        "missing_skills": missing,
-        "partial_skills": partial,
+        "score": final_score,
+        "matched_skills": matched_required,
+        "missing_skills": missing_required,
+        "matched_required_skills": matched_required,
+        "missing_required_skills": missing_required,
+        "matched_preferred_skills": matched_preferred,
+        "missing_preferred_skills": missing_preferred,
+        "partial_skills": partial_skills,
+        "required_count": total_req_count,
+        "preferred_count": total_pref_count,
     }
 
 
@@ -2103,6 +2173,11 @@ async def get_candidate(
                     "matched_skills": fit["matched_skills"],
                     "missing_skills": fit["missing_skills"],
                     "partial_skills": fit["partial_skills"],
+                    "matched_required_skills": fit["matched_required_skills"],
+                    "missing_required_skills": fit["missing_required_skills"],
+                    "matched_preferred_skills": fit["matched_preferred_skills"],
+                    "missing_preferred_skills": fit["missing_preferred_skills"],
+                    "breakdown": fit["breakdown"],
                 })
             }
             scores = [s for s in scores if s["type"] != "role_fit"]
@@ -2166,9 +2241,9 @@ async def extract_skills_from_jd(
             for s in raw_skills:
                 if isinstance(s, dict):
                     name = _clean_skill_name(s.get("name") or s.get("skill"))
-                    level = _normalise_level(s.get("level"), "intermediate")
+                    stype = _normalise_skill_type(s.get("type") or s.get("level"), "required")
                     if name:
-                        extracted.append({"skill": name, "level": level})
+                        extracted.append({"skill": name, "type": stype, "level": stype})
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
@@ -2180,9 +2255,10 @@ async def extract_skills_from_jd(
         seen = set()
         for keyword, skills in ROLE_SKILL_PRESETS.items():
             if keyword in haystack:
-                for sk in skills:
+                for idx, sk in enumerate(skills):
                     if sk.lower() not in seen:
-                        extracted.append({"skill": sk, "level": "intermediate"})
+                        stype = "required" if idx < 3 else "preferred"
+                        extracted.append({"skill": sk, "type": stype, "level": stype})
                         seen.add(sk.lower())
 
     # De-duplicate while preserving order
@@ -2240,11 +2316,11 @@ async def create_job_role(
     for s in required_skills:
         if isinstance(s, dict):
             s_name = _clean_skill_name(s.get("skill") or s.get("name"))
-            s_level = _normalise_level(s.get("level"), "intermediate")
+            s_type = _normalise_skill_type(s.get("type") or s.get("level"), "required")
             if s_name:
-                clean_skills.append({"skill": s_name, "level": s_level})
+                clean_skills.append({"skill": s_name, "type": s_type, "level": s_type})
         elif isinstance(s, str) and s.strip():
-            clean_skills.append({"skill": _clean_skill_name(s), "level": "intermediate"})
+            clean_skills.append({"skill": _clean_skill_name(s), "type": "required", "level": "required"})
 
     role = JobRole(
         org_id=current_user.org_id,
@@ -2276,7 +2352,7 @@ async def update_job_role(
             from app.agents.agents import run_extract_jd_skills_agent
             import asyncio
             ai_result = await asyncio.to_thread(run_extract_jd_skills_agent, body.description)
-            required_skills = [{"skill": s.get("name") or s.get("skill"), "level": s.get("level", "intermediate")} for s in (ai_result.get("skills", []) if isinstance(ai_result, dict) else [])]
+            required_skills = [{"skill": s.get("name") or s.get("skill"), "type": s.get("type", "required")} for s in (ai_result.get("skills", []) if isinstance(ai_result, dict) else [])]
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
@@ -2286,11 +2362,11 @@ async def update_job_role(
     for s in required_skills:
         if isinstance(s, dict):
             s_name = _clean_skill_name(s.get("skill") or s.get("name"))
-            s_level = _normalise_level(s.get("level"), "intermediate")
+            s_type = _normalise_skill_type(s.get("type") or s.get("level"), "required")
             if s_name:
-                clean_skills.append({"skill": s_name, "level": s_level})
+                clean_skills.append({"skill": s_name, "type": s_type, "level": s_type})
         elif isinstance(s, str) and s.strip():
-            clean_skills.append({"skill": _clean_skill_name(s), "level": "intermediate"})
+            clean_skills.append({"skill": _clean_skill_name(s), "type": "required", "level": "required"})
 
     role.title = body.title
     role.description = body.description

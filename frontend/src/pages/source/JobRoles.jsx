@@ -4,11 +4,15 @@ import { useAuth } from '../../context/AuthContext';
 import { Briefcase, Edit, Trash2, Plus, Users, Sparkles, Loader, X, Info, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-const LEVEL_CONFIG = {
-  expert: { label: 'Expert', bg: '#f5f3ff', color: '#7c3aed', border: '#ddd6fe', weight: 4 },
-  advanced: { label: 'Advanced', bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe', weight: 3 },
-  intermediate: { label: 'Intermediate', bg: '#ecfdf5', color: '#059669', border: '#a7f3d0', weight: 2 },
-  beginner: { label: 'Beginner', bg: '#fffbeb', color: '#d97706', border: '#fde68a', weight: 1 },
+const SKILL_TYPE_CONFIG = {
+  required: { label: 'Required', badge: 'Required (Must-have)', bg: '#fef2f2', color: '#dc2626', border: '#fecaca', weight: 2 },
+  preferred: { label: 'Preferred', badge: 'Preferred (Bonus)', bg: '#ecfdf5', color: '#059669', border: '#a7f3d0', weight: 1 },
+};
+
+const getSkillType = (skill) => {
+  const t = (skill?.type || skill?.level || 'required').toLowerCase().trim();
+  if (['required', 'must-have', 'mandatory', 'core', 'expert', 'advanced'].includes(t)) return 'required';
+  return 'preferred';
 };
 
 export default function JobRoles() {
@@ -24,7 +28,7 @@ export default function JobRoles() {
 
   // Skill Extraction & Manual Editing State
   const [extractingSkills, setExtractingSkills] = useState(false);
-  const [customSkill, setCustomSkill] = useState({ skill: '', level: 'intermediate' });
+  const [customSkill, setCustomSkill] = useState({ skill: '', type: 'required' });
 
   const canManageRoles = ['hr', 'org_admin'].includes(user?.role);
   const canEditRoles = canManageRoles || user?.role === 'manager';
@@ -76,7 +80,7 @@ export default function JobRoles() {
     setShowAddRole(false);
     setEditingRoleId(null);
     setNewRole({ title: '', description: '', min_experience: 0, required_skills: [] });
-    setCustomSkill({ skill: '', level: 'intermediate' });
+    setCustomSkill({ skill: '', type: 'required' });
     setExtractingSkills(false);
   };
 
@@ -88,7 +92,7 @@ export default function JobRoles() {
       min_experience: role.min_experience || 0,
       required_skills: role.required_skills || [],
     });
-    setCustomSkill({ skill: '', level: 'intermediate' });
+    setCustomSkill({ skill: '', type: 'required' });
     setShowAddRole(true);
   };
 
@@ -136,7 +140,7 @@ export default function JobRoles() {
         const newlyAdded = extracted.filter(s => !existingNames.has((s.skill || '').toLowerCase().trim()));
         const merged = [...(newRole.required_skills || []), ...newlyAdded];
         setNewRole(r => ({ ...r, required_skills: merged }));
-        toast.success(`Extracted ${extracted.length} skills! Review and tweak proficiency levels below.`);
+        toast.success(`Extracted ${extracted.length} skills! Set Required vs. Preferred below.`);
       }
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to extract skills with AI');
@@ -155,18 +159,19 @@ export default function JobRoles() {
       toast.error(`Skill "${name}" is already in the list`);
       return;
     }
+    const skillType = customSkill.type || 'required';
     setNewRole(r => ({
       ...r,
-      required_skills: [...(r.required_skills || []), { skill: name, level: customSkill.level || 'intermediate' }],
+      required_skills: [...(r.required_skills || []), { skill: name, type: skillType, level: skillType }],
     }));
-    setCustomSkill({ skill: '', level: 'intermediate' });
+    setCustomSkill({ skill: '', type: 'required' });
   };
 
-  // Update skill level
-  const handleUpdateSkillLevel = (index, newLevel) => {
+  // Update skill requirement type (required vs preferred)
+  const handleUpdateSkillType = (index, newType) => {
     setNewRole(r => {
       const updated = [...(r.required_skills || [])];
-      updated[index] = { ...updated[index], level: newLevel };
+      updated[index] = { ...updated[index], type: newType, level: newType };
       return { ...r, required_skills: updated };
     });
   };
@@ -253,8 +258,8 @@ export default function JobRoles() {
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {role.required_skills.slice(0, 8).map((skill, j) => {
-                        const lvl = (skill.level || 'intermediate').toLowerCase();
-                        const cfg = LEVEL_CONFIG[lvl] || LEVEL_CONFIG.intermediate;
+                        const stype = getSkillType(skill);
+                        const cfg = SKILL_TYPE_CONFIG[stype];
                         return (
                           <span 
                             key={j} 
@@ -272,7 +277,7 @@ export default function JobRoles() {
                             }}
                           >
                             <span>{skill.skill}</span>
-                            <span style={{ fontSize: '0.68rem', opacity: 0.85, fontWeight: 600 }}>• {cfg.label}</span>
+                            <span style={{ fontSize: '0.68rem', opacity: 0.9, fontWeight: 700 }}>• {cfg.label}</span>
                           </span>
                         );
                       })}
@@ -379,7 +384,7 @@ export default function JobRoles() {
                         </span>
                       </label>
                       <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                        HR has full control: choose whether each skill requires Beginner, Intermediate, Advanced, or Expert.
+                        Categorize skills as Required (must-have core skills) or Preferred (additional bonus tools).
                       </span>
                     </div>
                     {(newRole.required_skills || []).length > 0 && (
@@ -411,8 +416,8 @@ export default function JobRoles() {
                     ) : (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                         {newRole.required_skills.map((item, idx) => {
-                          const lvl = (item.level || 'intermediate').toLowerCase();
-                          const cfg = LEVEL_CONFIG[lvl] || LEVEL_CONFIG.intermediate;
+                          const stype = getSkillType(item);
+                          const cfg = SKILL_TYPE_CONFIG[stype];
                           return (
                             <div 
                               key={idx} 
@@ -431,13 +436,13 @@ export default function JobRoles() {
                                 {item.skill}
                               </span>
 
-                              {/* Level Selector */}
+                              {/* Requirement Type Selector */}
                               <select
-                                value={lvl}
-                                onChange={e => handleUpdateSkillLevel(idx, e.target.value)}
+                                value={stype}
+                                onChange={e => handleUpdateSkillType(idx, e.target.value)}
                                 style={{
                                   fontSize: '0.74rem',
-                                  fontWeight: 600,
+                                  fontWeight: 700,
                                   padding: '2px 6px',
                                   borderRadius: 4,
                                   background: cfg.bg,
@@ -447,10 +452,8 @@ export default function JobRoles() {
                                   outline: 'none',
                                 }}
                               >
-                                <option value="beginner">Beginner (1 pt)</option>
-                                <option value="intermediate">Intermediate (2 pts)</option>
-                                <option value="advanced">Advanced (3 pts)</option>
-                                <option value="expert">Expert (4 pts)</option>
+                                <option value="required">Required (Must-have)</option>
+                                <option value="preferred">Preferred (Additional)</option>
                               </select>
 
                               {/* Remove Button */}
@@ -497,14 +500,12 @@ export default function JobRoles() {
                     
                     <select
                       className="form-control"
-                      value={customSkill.level}
-                      onChange={e => setCustomSkill(s => ({ ...s, level: e.target.value }))}
-                      style={{ width: 140, fontSize: '0.82rem', borderRadius: 8 }}
+                      value={customSkill.type}
+                      onChange={e => setCustomSkill(s => ({ ...s, type: e.target.value }))}
+                      style={{ width: 170, fontSize: '0.82rem', borderRadius: 8, fontWeight: 600 }}
                     >
-                      <option value="beginner">Beginner</option>
-                      <option value="intermediate">Intermediate</option>
-                      <option value="advanced">Advanced</option>
-                      <option value="expert">Expert</option>
+                      <option value="required">Required (Must-have)</option>
+                      <option value="preferred">Preferred (Additional)</option>
                     </select>
 
                     <button
@@ -525,7 +526,7 @@ export default function JobRoles() {
                   }}>
                     <Info size={16} color="var(--primary)" style={{ flexShrink: 0, marginTop: 2 }} />
                     <div>
-                      <strong>Manual Control & Priority:</strong> You can elevate critical skills to <strong>Expert</strong> so candidates with proven expert mastery rank highest. Candidates with lower proficiency (e.g., Intermediate) will receive proportional penalty deductions during ATS scoring.
+                      <strong>Required vs. Preferred Skills:</strong> Mark essential competencies as <strong>Required (Must-have)</strong>. These carry primary weight (75%) during ATS candidate scoring. Mark bonus tools as <strong>Preferred (Additional)</strong> to award competitive bonus points (25%) that elevate standout candidates.
                     </div>
                   </div>
                 </div>

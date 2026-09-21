@@ -439,19 +439,107 @@ export default function CandidateProfile() {
             {roleId && fitData && (
 
               <div className="card animate-fade-in stagger-2" style={{ marginBottom: 24 }}>
-                <div className="card-header"><h4>🤖 AI Role Fit Analysis</h4></div>
+                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h4>🤖 AI Role Fit Analysis</h4>
+                  {fitData.breakdown && (
+                    <div style={{ display: 'flex', gap: 8, fontSize: '0.75rem', fontWeight: 600 }}>
+                      <span style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', padding: '3px 8px', borderRadius: 12, border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                        Required: {fitData.breakdown.matched_required_count ?? 0}/{fitData.breakdown.total_required_count ?? 0}
+                      </span>
+                      {fitData.breakdown.total_preferred_count > 0 && (
+                        <span style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', padding: '3px 8px', borderRadius: 12, border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                          Preferred: {fitData.breakdown.matched_preferred_count ?? 0}/{fitData.breakdown.total_preferred_count ?? 0}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <div className="card-body">
                   <p style={{ marginBottom: 16 }}>{fitData.summary}</p>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-                    <div>
-                      <div style={{ fontWeight: 700, marginBottom: 8, color: 'var(--success)', fontSize: '0.85rem' }}>✅ Matched Skills</div>
-                      <div className="chip-list">{(fitData.matched_skills || []).map(s => <span key={s} className="skill-tag match">{s}</span>)}</div>
+                  
+                  {fitData.matched_required_skills || fitData.matched_preferred_skills ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 16 }}>
+                      {/* Required Must-Have Skills */}
+                      <div style={{ background: 'rgba(239, 68, 68, 0.03)', border: '1px solid rgba(239, 68, 68, 0.15)', borderRadius: 12, padding: '12px 14px' }}>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--danger)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span>Must-Have Required Skills</span>
+                          <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)' }}>(75% Score Weight)</span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                          <div>
+                            <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--success)', fontSize: '0.78rem' }}>✅ Matched Core</div>
+                            <div className="chip-list">
+                              {(fitData.matched_required_skills || []).length > 0 ? (
+                                fitData.matched_required_skills.map(s => <span key={s} className="skill-tag match">{s}</span>)
+                              ) : (
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>None matched</span>
+                              )}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--danger)', fontSize: '0.78rem' }}>❌ Missing Core</div>
+                            <div className="chip-list">
+                              {(fitData.missing_required_skills || []).length > 0 ? (
+                                fitData.missing_required_skills.map(s => <span key={s} className="skill-tag miss">{s}</span>)
+                              ) : (
+                                <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>All required skills met!</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Preferred Additional Skills */}
+                      {(fitData.matched_preferred_skills?.length > 0 || fitData.missing_preferred_skills?.length > 0) && (
+                        <div style={{ background: 'rgba(124, 58, 237, 0.03)', border: '1px solid rgba(124, 58, 237, 0.15)', borderRadius: 12, padding: '12px 14px' }}>
+                          <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--primary)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span>Preferred & Additional Skills</span>
+                            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)' }}>(25% Bonus Weight)</span>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                            <div>
+                              <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--primary)', fontSize: '0.78rem' }}>⭐ Bonus Matched</div>
+                              <div className="chip-list">
+                                {(fitData.matched_preferred_skills || []).length > 0 ? (
+                                  fitData.matched_preferred_skills.map(s => (
+                                    <span key={s} className="skill-tag" style={{ background: 'rgba(124, 58, 237, 0.12)', color: 'var(--primary)', border: '1px solid rgba(124, 58, 237, 0.25)' }}>
+                                      {s}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>None matched</span>
+                                )}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--text-muted)', fontSize: '0.78rem' }}>Optional / Not Present</div>
+                              <div className="chip-list">
+                                {(fitData.missing_preferred_skills || []).length > 0 ? (
+                                  fitData.missing_preferred_skills.map(s => (
+                                    <span key={s} className="skill-tag" style={{ opacity: 0.6 }}>{s}</span>
+                                  ))
+                                ) : (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>All preferred skills present!</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <div style={{ fontWeight: 700, marginBottom: 8, color: 'var(--danger)', fontSize: '0.85rem' }}>❌ Missing Skills</div>
-                      <div className="chip-list">{(fitData.missing_skills || []).map(s => <span key={s} className="skill-tag miss">{s}</span>)}</div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, marginBottom: 8, color: 'var(--success)', fontSize: '0.85rem' }}>✅ Matched Skills</div>
+                        <div className="chip-list">{(fitData.matched_skills || []).map(s => <span key={s} className="skill-tag match">{s}</span>)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 700, marginBottom: 8, color: 'var(--danger)', fontSize: '0.85rem' }}>❌ Missing Skills</div>
+                        <div className="chip-list">{(fitData.missing_skills || []).map(s => <span key={s} className="skill-tag miss">{s}</span>)}</div>
+                      </div>
                     </div>
-                  </div>
+                  )}
+
                   {fitData.interview_questions?.length > 0 && (
                     <div>
                       <div style={{ fontWeight: 700, marginBottom: 8, color: 'var(--primary)', fontSize: '0.85rem' }}>💬 Suggested Interview Questions</div>

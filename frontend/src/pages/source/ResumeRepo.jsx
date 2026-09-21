@@ -13,11 +13,15 @@ import { Link } from 'react-router-dom';
 const PDF_LIMIT_BYTES = 30 * 1024 * 1024; // 30MB
 const ZIP_LIMIT_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
 
-const LEVEL_CONFIG = {
-  expert: { label: 'Expert', bg: '#f5f3ff', color: '#7c3aed', border: '#ddd6fe', weight: 4 },
-  advanced: { label: 'Advanced', bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe', weight: 3 },
-  intermediate: { label: 'Intermediate', bg: '#ecfdf5', color: '#059669', border: '#a7f3d0', weight: 2 },
-  beginner: { label: 'Beginner', bg: '#fffbeb', color: '#d97706', border: '#fde68a', weight: 1 },
+const SKILL_TYPE_CONFIG = {
+  required: { label: 'Required', badge: 'Required (Must-have)', bg: '#fef2f2', color: '#dc2626', border: '#fecaca', weight: 2 },
+  preferred: { label: 'Preferred', badge: 'Preferred (Bonus)', bg: '#ecfdf5', color: '#059669', border: '#a7f3d0', weight: 1 },
+};
+
+const getSkillType = (skill) => {
+  const t = (skill?.type || skill?.level || 'required').toLowerCase().trim();
+  if (['required', 'must-have', 'mandatory', 'core', 'expert', 'advanced'].includes(t)) return 'required';
+  return 'preferred';
 };
 
 export default function ResumeRepo() {
@@ -75,7 +79,7 @@ export default function ResumeRepo() {
   const [newRoleMinExp, setNewRoleMinExp] = useState(0);
   const [newRoleSkills, setNewRoleSkills] = useState([]);
   const [extractingInlineSkills, setExtractingInlineSkills] = useState(false);
-  const [inlineManualSkill, setInlineManualSkill] = useState({ skill: '', level: 'intermediate' });
+  const [inlineManualSkill, setInlineManualSkill] = useState({ skill: '', type: 'required' });
   const [savingJobRole, setSavingJobRole] = useState(false);
 
   // Assign Role Tag Modal
@@ -308,7 +312,7 @@ export default function ResumeRepo() {
         const existing = new Set(newRoleSkills.map(s => (s.skill || '').toLowerCase().trim()));
         const newlyAdded = extracted.filter(s => !existing.has((s.skill || '').toLowerCase().trim()));
         setNewRoleSkills(prev => [...prev, ...newlyAdded]);
-        toast.success(`Extracted ${extracted.length} skills! Tweak levels below.`);
+        toast.success(`Extracted ${extracted.length} skills! Set Required vs Preferred below.`);
       }
     } catch (err) {
       toast.error('Failed to extract skills with AI');
@@ -326,8 +330,9 @@ export default function ResumeRepo() {
       toast.error(`Skill "${name}" is already in the list`);
       return;
     }
-    setNewRoleSkills(prev => [...prev, { skill: name, level: inlineManualSkill.level || 'intermediate' }]);
-    setInlineManualSkill({ skill: '', level: 'intermediate' });
+    const skillType = inlineManualSkill.type || 'required';
+    setNewRoleSkills(prev => [...prev, { skill: name, type: skillType, level: skillType }]);
+    setInlineManualSkill({ skill: '', type: 'required' });
   };
 
   // Perform upload
@@ -1365,24 +1370,22 @@ export default function ResumeRepo() {
                           {newRoleSkills.length > 0 ? (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, maxHeight: 120, overflowY: 'auto', padding: 6, background: '#fff', borderRadius: 6, border: '1px solid var(--border)' }}>
                               {newRoleSkills.map((s, idx) => {
-                                const lvl = (s.level || 'intermediate').toLowerCase();
-                                const cfg = LEVEL_CONFIG[lvl] || LEVEL_CONFIG.intermediate;
+                                const stype = getSkillType(s);
+                                const cfg = SKILL_TYPE_CONFIG[stype];
                                 return (
                                   <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 4, background: cfg.bg, border: `1px solid ${cfg.border}`, borderRadius: 6, padding: '2px 6px' }}>
                                     <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)' }}>{s.skill}</span>
                                     <select
-                                      value={lvl}
+                                      value={stype}
                                       onChange={e => {
                                         const updated = [...newRoleSkills];
-                                        updated[idx] = { ...updated[idx], level: e.target.value };
+                                        updated[idx] = { ...updated[idx], type: e.target.value, level: e.target.value };
                                         setNewRoleSkills(updated);
                                       }}
-                                      style={{ fontSize: '0.7rem', fontWeight: 600, color: cfg.color, background: 'transparent', border: 'none', cursor: 'pointer', outline: 'none' }}
+                                      style={{ fontSize: '0.7rem', fontWeight: 700, color: cfg.color, background: 'transparent', border: 'none', cursor: 'pointer', outline: 'none' }}
                                     >
-                                      <option value="beginner">Beginner</option>
-                                      <option value="intermediate">Intermediate</option>
-                                      <option value="advanced">Advanced</option>
-                                      <option value="expert">Expert</option>
+                                      <option value="required">Required</option>
+                                      <option value="preferred">Preferred</option>
                                     </select>
                                     <button
                                       type="button"
@@ -1422,14 +1425,12 @@ export default function ResumeRepo() {
                               style={{ flex: 1, fontSize: '0.75rem', padding: '3px 6px', height: 'auto', borderRadius: 4 }}
                             />
                             <select
-                              value={inlineManualSkill.level}
-                              onChange={e => setInlineManualSkill(s => ({ ...s, level: e.target.value }))}
-                              style={{ fontSize: '0.75rem', padding: '3px 6px', borderRadius: 4, border: '1px solid var(--border)', background: '#fff' }}
+                              value={inlineManualSkill.type || 'required'}
+                              onChange={e => setInlineManualSkill(s => ({ ...s, type: e.target.value }))}
+                              style={{ fontSize: '0.75rem', padding: '3px 6px', borderRadius: 4, border: '1px solid var(--border)', background: '#fff', fontWeight: 600 }}
                             >
-                              <option value="beginner">Beginner</option>
-                              <option value="intermediate">Intermediate</option>
-                              <option value="advanced">Advanced</option>
-                              <option value="expert">Expert</option>
+                              <option value="required">Required</option>
+                              <option value="preferred">Preferred</option>
                             </select>
                             <button
                               type="button"

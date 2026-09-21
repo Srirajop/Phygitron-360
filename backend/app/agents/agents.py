@@ -288,11 +288,15 @@ def run_generate_offer_letter_agent(candidate_name: str, details: dict) -> dict:
     })
     return call_llm(GENERATE_OFFER_LETTER_SYSTEM, f"Generate a personalized internship offer letter for:\n\n{prompt}")
 
-EXTRACT_JD_SKILLS_SYSTEM = """You are an HR parsing AI. Extract the required skills from a job description text.
-Respond ONLY with valid JSON. No markdown. Raw JSON only.
+EXTRACT_JD_SKILLS_SYSTEM = """You are an expert HR recruitment and ATS parsing AI.
+Extract skills from the provided Job Description (JD) text and categorize each skill into:
+1. 'required': Mandatory, essential, must-have skills, core responsibilities, or minimum qualifications.
+2. 'preferred': Nice-to-have, additional, bonus, good-to-have skills, or secondary tooling.
+
+Respond ONLY with valid JSON. No markdown, no explanation. Raw JSON only.
 Return this exact structure:
 {
-  "skills": [{"name": "Skill Name", "level": "beginner|intermediate|advanced|expert"}]
+  "skills": [{"name": "Skill Name", "type": "required|preferred"}]
 }"""
 
 def run_extract_jd_skills_agent(jd_text: str) -> dict:
