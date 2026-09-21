@@ -388,7 +388,13 @@ export default function CandidateProfile() {
   const atsColor = resumeAtsScore >= 70 ? '#10B981' : resumeAtsScore >= 40 ? '#F59E0B' : '#EF4444';
 
   let fitData = null;
-  try { fitData = fitScore ? JSON.parse(fitScore.reasoning) : null; } catch {}
+  try {
+    fitData = fitScore
+      ? (typeof fitScore.reasoning === 'string' ? JSON.parse(fitScore.reasoning) : fitScore.reasoning)
+      : null;
+  } catch (e) {
+    console.warn("Could not parse fitScore reasoning:", e);
+  }
 
   return (
     <div>
