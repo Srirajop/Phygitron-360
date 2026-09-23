@@ -1,17 +1,24 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { forgeApi } from '../../api';
+import { useAuth } from '../../context/AuthContext';
+import ForgeReportModal from './ForgeReportModal';
 import {
   Users, Award, TrendingUp, BookOpen, CheckCircle, Target,
   AlertTriangle, Clock, Download, Printer, Search, Filter,
-  ChevronRight, ArrowUpRight, Bell, Sparkles, X, Check, FileSpreadsheet
+  ChevronRight, ArrowUpRight, Bell, Sparkles, X, Check, FileSpreadsheet, FileText
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function TeamAnalytics() {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('courses'); // 'courses' or 'leaderboard'
+
+  // Executive Report Modal State
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportCourseId, setReportCourseId] = useState(null);
 
   // Course Roster Drilldown Modal State
   const [selectedCourseId, setSelectedCourseId] = useState(null);
@@ -160,11 +167,14 @@ export default function TeamAnalytics() {
             <FileSpreadsheet size={16} /> Export CSV Spreadsheet
           </button>
           <button
-            onClick={handlePrint}
+            onClick={() => {
+              setReportCourseId(null);
+              setShowReportModal(true);
+            }}
             className="btn btn-primary"
-            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', borderRadius: 12, fontWeight: 800 }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', borderRadius: 12, fontWeight: 800, background: 'linear-gradient(135deg, #7C3AED, #6D28D9)' }}
           >
-            <Printer size={16} /> Print / Save PDF
+            <FileText size={16} /> Executive Report / PDF
           </button>
         </div>
       </div>
@@ -465,9 +475,21 @@ export default function TeamAnalytics() {
                     {drilldownData?.course?.title || 'Loading Course...'}
                   </h3>
                 </div>
-                <button className="btn-icon" onClick={() => setSelectedCourseId(null)}>
-                  <X size={18} />
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      setReportCourseId(selectedCourseId);
+                      setShowReportModal(true);
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, borderRadius: 10, fontWeight: 700, padding: '6px 12px' }}
+                  >
+                    <FileText size={14} /> Course Report
+                  </button>
+                  <button className="btn-icon" onClick={() => setSelectedCourseId(null)}>
+                    <X size={18} />
+                  </button>
+                </div>
               </div>
 
               <div style={{ padding: 24 }}>
@@ -582,6 +604,15 @@ export default function TeamAnalytics() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* ── MODAL: Publication-Grade Executive Report Generator ── */}
+      <ForgeReportModal
+        isOpen={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        overviewData={data}
+        currentUser={user}
+        initialCourseId={reportCourseId}
+      />
     </div>
   );
 }
