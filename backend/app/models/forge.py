@@ -31,6 +31,21 @@ class EnrollmentTrigger(str, enum.Enum):
     hr_push = "hr_push"
 
 
+class CourseDomain(Base):
+    __tablename__ = "course_domains"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organisations.id"), nullable=False)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    color = Column(String(32), default="#7C3AED")
+    icon = Column(String(64), default="Layers")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    courses = relationship("Course", back_populates="domain")
+
+
 class Course(Base):
     __tablename__ = "courses"
 
@@ -45,11 +60,18 @@ class Course(Base):
     status = Column(Enum(CourseStatus), default=CourseStatus.draft)
     instructor_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     category = Column(String(255), default="General")
+    domain_id = Column(Integer, ForeignKey("course_domains.id"), nullable=True)
+    scorm_package_path = Column(String(512), nullable=True)
+    scorm_entry_url = Column(String(512), nullable=True)
+    scorm_version = Column(String(32), default="1.2")
+    scorm_mastery_score = Column(DECIMAL(5, 2), default=70.0)
+    is_scorm = Column(Boolean, default=True)
     is_featured = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     instructor = relationship("User", foreign_keys=[instructor_id])
+    domain = relationship("CourseDomain", back_populates="courses")
     sections = relationship("CourseSection", back_populates="course", cascade="all, delete-orphan", order_by="CourseSection.order_index")
     enrollments = relationship("Enrollment", back_populates="course", cascade="all, delete-orphan")
     certificates = relationship("Certificate", back_populates="course", cascade="all, delete-orphan")
@@ -96,16 +118,25 @@ class Enrollment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
     triggered_by = Column(Enum(EnrollmentTrigger), default=EnrollmentTrigger.manual)
     progress_percent = Column(DECIMAL(5, 2), default=0.0)
+    score = Column(DECIMAL(5, 2), nullable=True)
+    status = Column(String(32), default="not_started")  # not_started, in_progress, completed, overdue
     deadline = Column(DateTime, nullable=True)
+    assigned_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     last_accessed_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+    completion_date = Column(DateTime, nullable=True)
+    scorm_location = Column(String(255), nullable=True)
+    scorm_suspend_data = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", foreign_keys=[user_id])
+    employee = relationship("Employee", foreign_keys=[employee_id])
+    assigned_by = relationship("User", foreign_keys=[assigned_by_id])
     course = relationship("Course", back_populates="enrollments")
     progress = relationship("LearningProgress", back_populates="enrollment", cascade="all, delete-orphan")
 

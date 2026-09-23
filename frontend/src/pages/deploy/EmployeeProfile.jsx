@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { deployApi, adminApi } from '../../api';
+import { deployApi, adminApi, forgeApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import {
   User, Briefcase, MapPin, Mail, Calendar, Award, 
@@ -83,6 +83,9 @@ export default function EmployeeProfile() {
   const [issuePayrollOpen, setIssuePayrollOpen] = useState(false);
   const [payrollForm, setPayrollForm] = useState({ month_year: '', basic_salary: 0, hra: 0, other_allowances: 0, deductions_tax: 0, deductions_pf: 0 });
 
+  const [learningData, setLearningData] = useState(null);
+  const [loadingLearning, setLoadingLearning] = useState(false);
+
   const docInputRef = useRef(null);
   const [uploadingDoc, setUploadingDoc] = useState(null); // 'photo', 'cv', 'id'
 
@@ -134,6 +137,13 @@ export default function EmployeeProfile() {
         })
         .catch(() => toast.error('Failed to load payroll data'))
         .finally(() => setLoadingPayroll(false));
+    }
+    if (activeTab === 'learning') {
+      setLoadingLearning(true);
+      forgeApi.employeeCourses(id)
+        .then(res => setLearningData(res.data.data))
+        .catch(() => toast.error('Failed to load learning record'))
+        .finally(() => setLoadingLearning(false));
     }
   }, [activeTab, id]);
 
@@ -308,6 +318,7 @@ export default function EmployeeProfile() {
               {[
                 { id: 'overview', label: '360 Overview', icon: <Eye size={16} /> },
                 { id: 'identity', label: 'Identity & HR', icon: <User size={16} /> },
+                { id: 'learning', label: 'Learning & Courses', icon: <GraduationCap size={16} /> },
                 { id: 'performance', label: 'Performance (KRA)', icon: <TrendingUp size={16} /> },
                 { id: 'training', label: 'Training', icon: <BookOpen size={16} /> },
                 { id: 'assets', label: 'Assets', icon: <ShieldCheck size={16} /> },
@@ -534,6 +545,133 @@ export default function EmployeeProfile() {
                   </div>
                </div>
             </SectionCard>
+          </div>
+        )}
+
+        {activeTab === 'learning' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            {/* Summary KPI Badges */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
+              <div className="card" style={{ padding: '16px 20px', borderRadius: 14 }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 4 }}>COURSES ASSIGNED</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 900, color: 'var(--primary)' }}>{learningData?.total_assigned || 0}</div>
+              </div>
+              <div className="card" style={{ padding: '16px 20px', borderRadius: 14 }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 4 }}>COMPLETED</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 900, color: '#10B981' }}>{learningData?.total_completed || 0}</div>
+              </div>
+              <div className="card" style={{ padding: '16px 20px', borderRadius: 14 }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 4 }}>CERTIFICATES EARNED</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 900, color: '#F59E0B' }}>{(learningData?.certificates || []).length}</div>
+              </div>
+            </div>
+
+            {/* Courses Roster Table */}
+            <SectionCard 
+              title="Assigned Learning Modules & Progress" 
+              icon={<BookOpen size={15} />}
+              action={
+                canEdit && (
+                  <Link to="/forge/library" className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Plus size={14} /> Assign From Library
+                  </Link>
+                )
+              }
+            >
+              {loadingLearning ? (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}><div className="spinner" /></div>
+              ) : (learningData?.courses || []).length === 0 ? (
+                <p style={{ textAlign: 'center', padding: 30, color: 'var(--text-muted)', margin: 0 }}>
+                  No courses assigned to this employee yet.
+                </p>
+              ) : (
+                <div className="table-responsive">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Course Title</th>
+                        <th>Domain</th>
+                        <th style={{ minWidth: 140 }}>Progress</th>
+                        <th style={{ textAlign: 'center' }}>Score</th>
+                        <th>Status</th>
+                        <th>Target Deadline</th>
+                        <th>Completed Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {learningData.courses.map((c) => (
+                        <tr key={c.enrollment_id}>
+                          <td>
+                            <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{c.title}</div>
+                          </td>
+                          <td>
+                            <span style={{ background: `${c.domain_color || '#7C3AED'}20`, color: c.domain_color || '#7C3AED', padding: '2px 8px', borderRadius: 6, fontSize: '0.72rem', fontWeight: 700 }}>
+                              {c.domain_name}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', marginBottom: 2 }}>
+                              <span style={{ fontWeight: 700 }}>{Math.round(c.progress_percent)}%</span>
+                            </div>
+                            <div className="progress-bar" style={{ height: 4 }}>
+                              <div className="progress-fill" style={{ width: `${c.progress_percent}%`, background: c.status === 'completed' ? '#10B981' : 'var(--primary)' }} />
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'center', fontWeight: 700 }}>
+                            {c.score !== null ? `${c.score}%` : '—'}
+                          </td>
+                          <td>
+                            <span className={`badge ${c.status === 'completed' ? 'badge-success' : c.status === 'in_progress' ? 'badge-info' : 'badge-muted'}`} style={{ fontSize: '0.7rem' }}>
+                              {c.status}
+                            </span>
+                          </td>
+                          <td>
+                            {c.deadline ? (
+                              <span style={{ fontSize: '0.78rem', color: c.is_overdue ? '#EF4444' : 'var(--text-main)', fontWeight: c.is_overdue ? 800 : 500 }}>
+                                {new Date(c.deadline).toLocaleDateString()}
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>—</span>}
+                          </td>
+                          <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            {c.completed_at ? new Date(c.completed_at).toLocaleDateString() : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </SectionCard>
+
+            {/* Certificates Table */}
+            {(learningData?.certificates || []).length > 0 && (
+              <SectionCard title="Earned Certificates" icon={<Award size={15} />}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                  {learningData.certificates.map((cert) => (
+                    <div key={cert.id} className="card" style={{ padding: 18, borderRadius: 14, border: '1px solid rgba(124, 58, 237, 0.2)', background: 'rgba(124, 58, 237, 0.03)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                        <Award size={22} style={{ color: '#F59E0B' }} />
+                        <div style={{ fontWeight: 800, fontSize: '0.9rem' }}>{cert.course_title}</div>
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 12 }}>
+                        Code: <strong>{cert.verification_code}</strong> · Issued: {new Date(cert.issued_at).toLocaleDateString()}
+                      </div>
+                      {cert.pdf_url && (
+                        <a
+                          href={cert.pdf_url.startsWith('http') ? cert.pdf_url : `${API_BASE}${cert.pdf_url}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn btn-secondary btn-sm"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', width: '100%', justifyContent: 'center' }}
+                        >
+                          <Download size={13} /> View Certificate PDF
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </SectionCard>
+            )}
           </div>
         )}
 

@@ -44,8 +44,60 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_learning_progress_columns)
+        await conn.run_sync(_ensure_forge_columns)
         await conn.run_sync(_ensure_source_columns)
         await conn.run_sync(_ensure_verify_columns)
+
+
+def _ensure_forge_columns(sync_conn):
+    """Backfill Forge LMS columns on courses and enrollments."""
+    inspector = inspect(sync_conn)
+
+    # ── courses table ────────────────────────────────────────────────────────
+    try:
+        course_cols = {col["name"] for col in inspector.get_columns("courses")}
+    except Exception:
+        course_cols = set()
+
+    if course_cols:
+        course_additions = {
+            "domain_id": "ALTER TABLE courses ADD COLUMN domain_id INT NULL",
+            "scorm_package_path": "ALTER TABLE courses ADD COLUMN scorm_package_path VARCHAR(512) NULL",
+            "scorm_entry_url": "ALTER TABLE courses ADD COLUMN scorm_entry_url VARCHAR(512) NULL",
+            "scorm_version": "ALTER TABLE courses ADD COLUMN scorm_version VARCHAR(32) DEFAULT '1.2'",
+            "scorm_mastery_score": "ALTER TABLE courses ADD COLUMN scorm_mastery_score DECIMAL(5, 2) DEFAULT 70.0",
+            "is_scorm": "ALTER TABLE courses ADD COLUMN is_scorm BOOLEAN DEFAULT TRUE",
+        }
+        for col_name, sql in course_additions.items():
+            if col_name not in course_cols:
+                try:
+                    sync_conn.exec_driver_sql(sql)
+                except Exception:
+                    pass
+
+    # ── enrollments table ────────────────────────────────────────────────────
+    try:
+        enroll_cols = {col["name"] for col in inspector.get_columns("enrollments")}
+    except Exception:
+        enroll_cols = set()
+
+    if enroll_cols:
+        enroll_additions = {
+            "employee_id": "ALTER TABLE enrollments ADD COLUMN employee_id INT NULL",
+            "score": "ALTER TABLE enrollments ADD COLUMN score DECIMAL(5, 2) NULL",
+            "status": "ALTER TABLE enrollments ADD COLUMN status VARCHAR(32) DEFAULT 'not_started'",
+            "deadline": "ALTER TABLE enrollments ADD COLUMN deadline DATETIME NULL",
+            "assigned_by_id": "ALTER TABLE enrollments ADD COLUMN assigned_by_id INT NULL",
+            "completion_date": "ALTER TABLE enrollments ADD COLUMN completion_date DATETIME NULL",
+            "scorm_location": "ALTER TABLE enrollments ADD COLUMN scorm_location VARCHAR(255) NULL",
+            "scorm_suspend_data": "ALTER TABLE enrollments ADD COLUMN scorm_suspend_data TEXT NULL",
+        }
+        for col_name, sql in enroll_additions.items():
+            if col_name not in enroll_cols:
+                try:
+                    sync_conn.exec_driver_sql(sql)
+                except Exception:
+                    pass
 
 
 def _ensure_learning_progress_columns(sync_conn):

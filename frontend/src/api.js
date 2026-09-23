@@ -160,26 +160,55 @@ export const verifyApi = {
   startSession: (data) => api.post('/api/v1/verify/start-session', data),
 };
 
-// ── Forge ─────────────────────────────────────────────────────────────────
+// ── Forge LMS ─────────────────────────────────────────────────────────────
 export const forgeApi = {
+  // Learner portal & Dashboard
   dashboard: () => api.get('/api/v1/forge/dashboard'),
-  createCourse: (data) => api.post('/api/v1/forge/courses', data),
+  myLearning: () => api.get('/api/v1/forge/my-learning'),
+  transcript: () => api.get('/api/v1/forge/transcript'),
+  myCertificates: (userId) => api.get(`/api/v1/forge/certificates/${userId}`),
+  verifyCertificate: (code) => api.get(`/api/v1/forge/verify-certificate/${code}`),
+
+  // Domains / Categories
+  domains: () => api.get('/api/v1/forge/domains'),
+  createDomain: (data) => api.post('/api/v1/forge/domains', data),
+  updateDomain: (id, data) => api.put(`/api/v1/forge/domains/${id}`, data),
+  deleteDomain: (id) => api.delete(`/api/v1/forge/domains/${id}`),
+
+  // Course library & Management
+  library: (params) => api.get('/api/v1/forge/library', { params }),
   listCourses: () => api.get('/api/v1/forge/courses'),
   getCourse: (id) => api.get(`/api/v1/forge/courses/${id}`),
   updateCourse: (id, data) => api.put(`/api/v1/forge/courses/${id}`, data),
   deleteCourse: (id) => api.delete(`/api/v1/forge/courses/${id}`),
   publishCourse: (id) => api.post(`/api/v1/forge/courses/${id}/publish`),
-  submitForReview: (id) => api.post(`/api/v1/forge/courses/${id}/submit-review`),
-  courseEnrollments: (id) => api.get(`/api/v1/forge/courses/${id}/enrollments`),
-  library: (params) => api.get('/api/v1/forge/library', { params }),
   myCourses: () => api.get('/api/v1/forge/my-courses'),
-  enroll: (courseId) => api.post('/api/v1/forge/enroll', null, { params: { course_id: courseId } }),
-  bulkEnroll: (data) => api.post('/api/v1/forge/bulk-enroll', data),
+  
+  // SCORM Upload & Playback
+  uploadScorm: (formData, params = {}) => api.post('/api/v1/forge/scorm/upload', formData, {
+    params,
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  syncProgress: (courseId, data) => api.post(`/api/v1/forge/courses/${courseId}/progress`, data),
   completeSection: (sectionId, data) => api.post(`/api/v1/forge/sections/${sectionId}/complete`, data),
-  myCertificates: (userId) => api.get(`/api/v1/forge/certificates/${userId}`),
-  verifyCertificate: (code) => api.get(`/api/v1/forge/verify-certificate/${code}`),
-  teamAnalytics: () => api.get('/api/v1/forge/team-analytics'),
-  transcript: () => api.get('/api/v1/forge/transcript'),
+
+  // Assignment (Employee DB linked)
+  assignableEmployees: (params) => api.get('/api/v1/forge/assignable-employees', { params }),
+  assignCourse: (courseId, data) => api.post(`/api/v1/forge/courses/${courseId}/assign`, data),
+  bulkEnroll: (data) => api.post('/api/v1/forge/bulk-enroll', data),
+  enroll: (courseId) => api.post('/api/v1/forge/enroll', null, { params: { course_id: courseId } }),
+
+  // Executive Analytics
+  analyticsOverview: () => api.get('/api/v1/forge/analytics/overview'),
+  courseAnalytics: (courseId) => api.get(`/api/v1/forge/analytics/courses/${courseId}`),
+  nudge: (enrollmentId) => api.post('/api/v1/forge/analytics/nudge', { enrollment_id: enrollmentId }),
+  teamAnalytics: () => api.get('/api/v1/forge/analytics/overview'),
+  courseEnrollments: (id) => api.get(`/api/v1/forge/courses/${id}/enrollments`),
+
+  // Employee Profile Tab
+  employeeCourses: (empId) => api.get(`/api/v1/forge/employee-courses/${empId}`),
+
+  // Legacy/Video support
   uploadVideo: (fileData) => api.post('/api/v1/forge/upload-video', fileData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   bulkUploadZip: (file) => {
     const fd = new FormData();

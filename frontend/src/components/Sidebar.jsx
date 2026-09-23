@@ -38,10 +38,10 @@ const roleNavItems = {
       { to: '/deploy/analytics', label: 'Analytics', icon: BarChart2 },
     ]},
     { section: 'Learning', module: 'forge', items: [
-      { to: '/forge', label: 'Dashboard', icon: BookOpen },
-      { to: '/forge/library', label: 'Learning Paths', icon: Layers },
-      { to: '/forge/my-courses', label: 'Course Builder', icon: FileText },
-      { to: '/forge/build', label: 'Studio', icon: PlusCircle },
+      { to: '/forge', label: 'My Learning', icon: BookOpen },
+      { to: '/forge/library', label: 'Course Library', icon: Layers },
+      { to: '/forge/team', label: 'Executive Analytics', icon: BarChart2 },
+      { to: '/forge/transcript', label: 'Certificates', icon: FileText },
     ]},
   ],
   org_admin: [
@@ -69,10 +69,10 @@ const roleNavItems = {
       { to: '/deploy/analytics', label: 'Analytics', icon: BarChart2 },
     ]},
     { section: 'Learning', module: 'forge', items: [
-      { to: '/forge', label: 'Dashboard', icon: BookOpen },
-      { to: '/forge/library', label: 'Learning Paths', icon: Layers },
-      { to: '/forge/my-courses', label: 'Course Builder', icon: FileText },
-      { to: '/forge/build', label: 'Studio', icon: PlusCircle },
+      { to: '/forge', label: 'My Learning', icon: BookOpen },
+      { to: '/forge/library', label: 'Course Library', icon: Layers },
+      { to: '/forge/team', label: 'Executive Analytics', icon: BarChart2 },
+      { to: '/forge/transcript', label: 'Certificates', icon: FileText },
     ]},
   ],
   candidate: [
@@ -84,6 +84,11 @@ const roleNavItems = {
     { section: 'Employees', module: 'deploy', items: [
       { to: '/deploy/my-profile', label: 'My Profile', icon: UserCheck },
       { to: '/deploy/attendance', label: 'Attendance', icon: Clock },
+    ]},
+    { section: 'Learning', module: 'forge', items: [
+      { to: '/forge', label: 'My Learning', icon: BookOpen },
+      { to: '/forge/library', label: 'Course Catalog', icon: Layers },
+      { to: '/forge/transcript', label: 'Certificates', icon: FileText },
     ]},
     { section: 'Verify', module: 'verify', items: [
       { to: '/verify/dashboard', label: 'My Assessments', icon: CheckSquare },
@@ -107,8 +112,10 @@ const roleNavItems = {
       { to: '/deploy/analytics', label: 'Analytics', icon: BarChart2 },
     ]},
     { section: 'Learning', module: 'forge', items: [
-      { to: '/forge/team', label: 'Team Learning', icon: BookOpen },
+      { to: '/forge', label: 'My Learning', icon: BookOpen },
       { to: '/forge/library', label: 'Course Library', icon: Layers },
+      { to: '/forge/team', label: 'Executive Analytics', icon: BarChart2 },
+      { to: '/forge/transcript', label: 'Certificates', icon: FileText },
     ]},
   ],
   instructor: [

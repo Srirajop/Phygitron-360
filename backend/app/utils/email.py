@@ -217,24 +217,134 @@ body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
 .header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
 .body{padding:32px}
 .body p{color:#4b5563;line-height:1.6}
+.badge{display:inline-block;padding:4px 12px;background:#EDE9FE;color:#6D28D9;border-radius:9999px;font-size:12px;font-weight:600;margin-bottom:12px;}
+.info-box{background:#f9fafb;border-left:4px solid #7C3AED;padding:16px;border-radius:8px;margin:20px 0;}
+.btn{display:inline-block;background:linear-gradient(135deg,#7C3AED,#6B21A8);color:#fff!important;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;margin-top:16px;}
 .footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
 </style></head>
 <body>
 <div class="container">
   <div class="header">
-    <h1>🎓 Course Assigned</h1>
+    <h1>🎓 New Course Assigned</h1>
   </div>
   <div class="body">
     <p>Hello <strong>{{ candidate_name }}</strong>,</p>
-    <p>As part of our ongoing commitment to learning and professional development, the <strong>{{ course_title }}</strong> course has been assigned to you on Learning Central.</p>
-    <p>To access the course, please log in using the link below:<br/>
-    <a href="{{ platform_url }}/forge">{{ platform_url }}/forge</a></p>
-    <p>We encourage you to complete the course at your earliest convenience and strengthen your understanding of cybersecurity best practices.</p>
-    <p>Happy learning, and thank you for investing in your growth!</p>
+    <p>A new learning course has been assigned to you on <strong>EWANDZ Learning Central (Forge)</strong>.</p>
+    
+    <div class="info-box">
+      <div style="font-size:18px;font-weight:700;color:#1e1b4b;margin-bottom:8px;">{{ course_title }}</div>
+      {% if domain_name %}<p style="margin:4px 0;"><strong>Domain / Category:</strong> {{ domain_name }}</p>{% endif %}
+      {% if deadline %}<p style="margin:4px 0;color:#b91c1c;"><strong>Target Deadline:</strong> {{ deadline }}</p>{% endif %}
+      {% if difficulty %}<p style="margin:4px 0;"><strong>Level:</strong> {{ difficulty|capitalize }}</p>{% endif %}
+      {% if estimated_hours %}<p style="margin:4px 0;"><strong>Estimated Effort:</strong> {{ estimated_hours }} hrs</p>{% endif %}
+    </div>
+
+    <p>You can launch and complete your course modules seamlessly through your employee learning portal. Your progress is bookmarked automatically so you can resume anytime.</p>
+    
+    <div style="text-align:center;">
+      <a href="{{ platform_url }}/forge" class="btn">Launch Course Now →</a>
+    </div>
+
     <br/>
-    <p>Regards,<br/>HR Team<br/>EWANDZ</p>
+    <p>Happy learning,<br/><strong>EWANDZ L&D Team</strong></p>
   </div>
-  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360</div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360 Forge LMS</div>
+</div>
+</body></html>
+"""
+
+COURSE_COMPLETION_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body{font-family:Inter,Arial,sans-serif;background:#f8f5ff;margin:0;padding:0}
+.container{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(124,58,237,0.1)}
+.header{background:linear-gradient(135deg,#059669,#047857);padding:40px 32px;text-align:center}
+.header h1{color:#fff;font-size:28px;margin:0;font-weight:700}
+.body{padding:32px;text-align:center}
+.body p{color:#4b5563;line-height:1.6}
+.award{font-size:54px;margin:12px 0}
+.score-pill{display:inline-block;padding:8px 24px;background:#D1FAE5;color:#065F46;border-radius:9999px;font-size:18px;font-weight:700;margin:16px 0;}
+.details-card{background:#F9FAFB;border-radius:12px;padding:20px;margin:20px 0;text-align:left;}
+.btn{display:inline-block;background:linear-gradient(135deg,#059669,#047857);color:#fff!important;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;margin-top:16px;}
+.footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
+</style></head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>🎉 Congratulations!</h1>
+  </div>
+  <div class="body">
+    <div class="award">🏆</div>
+    <h2 style="color:#111827;margin-top:0;">Course Completed Successfully!</h2>
+    <p>Dear <strong>{{ employee_name }}</strong>,</p>
+    <p>You have successfully finished the course <strong>{{ course_title }}</strong>.</p>
+    
+    {% if score is not none %}
+    <div>
+      <div class="score-pill">Final Score: {{ score }}%</div>
+    </div>
+    {% endif %}
+
+    <div class="details-card">
+      <p style="margin:4px 0;"><strong>Course:</strong> {{ course_title }}</p>
+      {% if completion_date %}<p style="margin:4px 0;"><strong>Completion Date:</strong> {{ completion_date }}</p>{% endif %}
+      <p style="margin:4px 0;"><strong>Status:</strong> <span style="color:#059669;font-weight:700;">Completed</span></p>
+    </div>
+
+    <p>Your accomplishment has been verified and recorded in your employee learning transcript.</p>
+    
+    <div style="text-align:center;">
+      <a href="{{ platform_url }}/forge" class="btn">View Learning Dashboard →</a>
+    </div>
+
+    <br/>
+    <p>Keep up the great work!<br/><strong>EWANDZ Learning & Development</strong></p>
+  </div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360 Forge LMS</div>
+</div>
+</body></html>
+"""
+
+COURSE_DEADLINE_REMINDER_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body{font-family:Inter,Arial,sans-serif;background:#fff7ed;margin:0;padding:0}
+.container{max-width:600px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(234,88,12,0.12)}
+.header{background:linear-gradient(135deg,#EA580C,#C2410C);padding:40px 32px;text-align:center}
+.header h1{color:#fff;font-size:26px;margin:0;font-weight:700}
+.body{padding:32px}
+.body p{color:#4b5563;line-height:1.6}
+.urgency-box{background:#FFF7ED;border-left:4px solid #EA580C;padding:16px;border-radius:8px;margin:20px 0;}
+.btn{display:inline-block;background:linear-gradient(135deg,#EA580C,#C2410C);color:#fff!important;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;margin-top:16px;}
+.footer{background:#f3f4f6;padding:20px 32px;text-align:center;color:#9ca3af;font-size:13px}
+</style></head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>⏰ Course Deadline Reminder</h1>
+  </div>
+  <div class="body">
+    <p>Hello <strong>{{ employee_name }}</strong>,</p>
+    <p>This is a gentle reminder regarding your pending assigned course on <strong>EWANDZ Learning Central</strong>.</p>
+    
+    <div class="urgency-box">
+      <div style="font-size:18px;font-weight:700;color:#9A3412;margin-bottom:8px;">{{ course_title }}</div>
+      <p style="margin:4px 0;"><strong>Current Progress:</strong> {{ progress_percent }}%</p>
+      {% if deadline %}<p style="margin:4px 0;font-weight:700;color:#DC2626;"><strong>Due Date:</strong> {{ deadline }}</p>{% endif %}
+    </div>
+
+    <p>Don't worry — your previous module progress and bookmarks are securely saved. You can jump straight back to where you left off!</p>
+    
+    <div style="text-align:center;">
+      <a href="{{ platform_url }}/forge" class="btn">Resume Course Now →</a>
+    </div>
+
+    <br/>
+    <p>Best regards,<br/><strong>EWANDZ L&D Team</strong></p>
+  </div>
+  <div class="footer">© 2026 EWANDZ · Powered by Phygitron 360 Forge LMS</div>
 </div>
 </body></html>
 """
@@ -501,6 +611,7 @@ async def send_course_assignment_notification_email(
     deadline: Optional[str] = None,
     difficulty: Optional[str] = None,
     estimated_hours: Optional[float] = None,
+    domain_name: Optional[str] = None,
 ):
     html = render_template(
         COURSE_ASSIGN_TEMPLATE,
@@ -509,9 +620,46 @@ async def send_course_assignment_notification_email(
         deadline=deadline,
         difficulty=difficulty,
         estimated_hours=estimated_hours,
+        domain_name=domain_name,
         platform_url=settings.FRONTEND_URL,
     )
-    await send_email(to_email, f"Course Assigned: {course_title}", html)
+    await send_email(to_email, f"New Course Assigned: {course_title}", html)
+
+
+async def send_course_completion_congratulations_email(
+    to_email: str,
+    employee_name: str,
+    course_title: str,
+    score: Optional[float] = None,
+    completion_date: Optional[str] = None,
+):
+    html = render_template(
+        COURSE_COMPLETION_TEMPLATE,
+        employee_name=employee_name,
+        course_title=course_title,
+        score=score,
+        completion_date=completion_date,
+        platform_url=settings.FRONTEND_URL,
+    )
+    await send_email(to_email, f"Congratulations on Completing: {course_title}! 🏆", html)
+
+
+async def send_course_deadline_reminder_email(
+    to_email: str,
+    employee_name: str,
+    course_title: str,
+    deadline: Optional[str] = None,
+    progress_percent: float = 0.0,
+):
+    html = render_template(
+        COURSE_DEADLINE_REMINDER_TEMPLATE,
+        employee_name=employee_name,
+        course_title=course_title,
+        deadline=deadline,
+        progress_percent=round(progress_percent, 1),
+        platform_url=settings.FRONTEND_URL,
+    )
+    await send_email(to_email, f"Action Required: Course Deadline Approaching - {course_title}", html)
 
 
 async def send_forgot_password_email(to_email: str, user_name: str, reset_link: str):

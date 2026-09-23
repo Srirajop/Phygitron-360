@@ -197,14 +197,14 @@ export default function App() {
             <Route path="/verify/submissions/:id" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><SubmissionsReview /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/verify/proctoring" element={<ModuleGate module="verify"><PrivateRoute roles={['hr','org_admin']}><AppLayout><ProctoringSettings /></AppLayout></PrivateRoute></ModuleGate>} />
 
-            {/* Forge */}
+            {/* Forge LMS */}
             <Route path="/forge" element={<ModuleGate module="forge"><PrivateRoute><AppLayout><ForgeDashboard /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/forge/library" element={<ModuleGate module="forge"><PrivateRoute><AppLayout><CourseLibrary /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/forge/course/:id" element={<ModuleGate module="forge"><PrivateRoute><CoursePlayer /></PrivateRoute></ModuleGate>} />
-            <Route path="/forge/build" element={<ModuleGate module="forge"><PrivateRoute roles={['instructor','org_admin','hr']}><AppLayout><CourseBuilder /></AppLayout></PrivateRoute></ModuleGate>} />
-            <Route path="/forge/my-courses" element={<ModuleGate module="forge"><PrivateRoute roles={['instructor','org_admin','hr']}><AppLayout><MyCourses /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/forge/player/:id" element={<ModuleGate module="forge"><PrivateRoute><CoursePlayer /></PrivateRoute></ModuleGate>} />
+            <Route path="/forge/my-courses" element={<ModuleGate module="forge"><PrivateRoute roles={['instructor','org_admin','hr','manager']}><AppLayout><MyCourses /></AppLayout></PrivateRoute></ModuleGate>} />
             <Route path="/forge/transcript" element={<ModuleGate module="forge"><PrivateRoute><AppLayout><Transcript /></AppLayout></PrivateRoute></ModuleGate>} />
-            <Route path="/forge/team" element={<ModuleGate module="forge"><PrivateRoute roles={['manager','hr','org_admin']}><AppLayout><TeamAnalytics /></AppLayout></PrivateRoute></ModuleGate>} />
+            <Route path="/forge/team" element={<ModuleGate module="forge"><PrivateRoute roles={['manager','hr','org_admin','instructor','super_admin']}><AppLayout><TeamAnalytics /></AppLayout></PrivateRoute></ModuleGate>} />
 
             {/* Deploy */}
             <Route path="/deploy" element={<ModuleGate module="deploy"><PrivateRoute roles={['hr','org_admin','manager']}><AppLayout><EmployeeList /></AppLayout></PrivateRoute></ModuleGate>} />
