@@ -1304,13 +1304,15 @@ async def update_course(
 @router.delete("/courses/{course_id}")
 async def delete_course(
     course_id: int,
-    current_user: User = Depends(require_role(["org_admin", "hr", "super_admin"])),
+    current_user: User = Depends(require_role(["org_admin", "hr", "manager", "instructor", "super_admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     res = await db.execute(select(Course).where(Course.id == course_id, Course.org_id == current_user.org_id))
     course = res.scalar_one_or_none()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+
+    course_title = course.title
 
     # Clean up files on disk if scorm_package_path exists
     if course.scorm_package_path:
@@ -1322,14 +1324,26 @@ async def delete_course(
             except Exception as e:
                 logger.warning(f"Could not remove package path {package_disk_path}: {e}")
 
-    # Remove dependencies
+    # Remove all dependencies in strict order to prevent foreign key violations
+    enrollment_ids_res = await db.execute(select(Enrollment.id).where(Enrollment.course_id == course_id))
+    enrollment_ids = [r[0] for r in enrollment_ids_res.fetchall()]
+
+    section_ids_res = await db.execute(select(CourseSection.id).where(CourseSection.course_id == course_id))
+    section_ids = [r[0] for r in section_ids_res.fetchall()]
+
+    if enrollment_ids:
+        await db.execute(delete(LearningProgress).where(LearningProgress.enrollment_id.in_(enrollment_ids)))
+    if section_ids:
+        await db.execute(delete(LearningProgress).where(LearningProgress.section_id.in_(section_ids)))
+        await db.execute(delete(SectionQuiz).where(SectionQuiz.section_id.in_(section_ids)))
+
     await db.execute(delete(Certificate).where(Certificate.course_id == course_id))
     await db.execute(delete(Enrollment).where(Enrollment.course_id == course_id))
     await db.execute(delete(CourseSection).where(CourseSection.course_id == course_id))
     await db.delete(course)
     await db.commit()
 
-    return success(message="Course deleted successfully")
+    return success(message=f"Course '{course_title}' deleted successfully")
 
 
 # ── Executive Analytics Overview ─────────────────────────────────────────────

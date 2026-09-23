@@ -6,7 +6,7 @@ import {
   Search, Filter, BookOpen, Clock, ChevronRight, CheckCircle,
   SlidersHorizontal, X, Star, Zap, Layers, PlayCircle, Sparkles,
   TrendingUp, Upload, Plus, FolderPlus, Users, Calendar, Award,
-  AlertCircle, Check, Shield, FileArchive, ArrowUpRight
+  AlertCircle, Check, Shield, FileArchive, ArrowUpRight, Trash2
 } from 'lucide-react';
 import './forge_styles.css';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -43,6 +43,9 @@ export default function CourseLibrary() {
   const [domainModalOpen, setDomainModalOpen] = useState(false);
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [selectedCourseForAssign, setSelectedCourseForAssign] = useState(null);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [courseToDelete, setCourseToDelete] = useState(null);
+  const [deletingCourse, setDeletingCourse] = useState(false);
 
   // SCORM Upload Form State
   const [uploadFile, setUploadFile] = useState(null);
@@ -236,6 +239,30 @@ export default function CourseLibrary() {
       loadCourses(1);
     } catch (err) {
       toast.error('Failed to delete domain');
+    }
+  };
+
+  // ── Delete Course ──────────────────────────────────────────────────────────
+  const openDeleteModal = (course) => {
+    setCourseToDelete(course);
+    setDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!courseToDelete) return;
+    setDeletingCourse(true);
+    try {
+      const res = await forgeApi.deleteCourse(courseToDelete.id);
+      toast.success(res.data?.message || `Course "${courseToDelete.title}" deleted successfully!`);
+      setCourses(prev => prev.filter(c => c.id !== courseToDelete.id));
+      setTotal(prev => Math.max(0, prev - 1));
+      setDeleteModalOpen(false);
+      setCourseToDelete(null);
+      loadDomains();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to delete course');
+    } finally {
+      setDeletingCourse(false);
     }
   };
 
@@ -562,24 +589,54 @@ export default function CourseLibrary() {
                     )}
 
                     {/* Card Actions */}
-                    <div style={{ display: 'flex', gap: 10, marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--forge-border)' }}>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--forge-border)', alignItems: 'center' }}>
                       {isOfficial && (
-                        <button
-                          onClick={() => openAssignModal(course)}
-                          className="btn btn-secondary btn-sm"
-                          style={{
-                            padding: '8px 12px',
-                            borderRadius: '10px',
-                            fontWeight: 700,
-                            fontSize: '0.75rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 6,
-                          }}
-                          title="Assign to active employees"
-                        >
-                          <Users size={13} /> Assign
-                        </button>
+                        <>
+                          <button
+                            onClick={() => openAssignModal(course)}
+                            className="btn btn-secondary btn-sm"
+                            style={{
+                              padding: '8px 12px',
+                              borderRadius: '10px',
+                              fontWeight: 700,
+                              fontSize: '0.75rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                            }}
+                            title="Assign to active employees"
+                          >
+                            <Users size={13} /> Assign
+                          </button>
+
+                          <button
+                            onClick={() => openDeleteModal(course)}
+                            className="btn btn-sm"
+                            style={{
+                              padding: '8px 10px',
+                              borderRadius: '10px',
+                              color: '#EF4444',
+                              background: 'rgba(239, 68, 68, 0.08)',
+                              border: '1px solid rgba(239, 68, 68, 0.25)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s',
+                            }}
+                            title={`Delete course: "${course.title}"`}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+                              e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
+                              e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.25)';
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </>
                       )}
 
                       <button
@@ -1078,6 +1135,138 @@ export default function CourseLibrary() {
                       )}
                     </button>
                   </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── MODAL 4: Delete Course Confirmation ───────────────────────────────── */}
+      <AnimatePresence>
+        {deleteModalOpen && courseToDelete && (
+          <div className="modal-backdrop" onClick={() => !deletingCourse && setDeleteModalOpen(false)}>
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="modal-box"
+              style={{
+                maxWidth: 480,
+                width: '100%',
+                background: 'var(--bg-card)',
+                borderRadius: 20,
+                overflow: 'hidden',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                className="modal-header"
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '20px 24px',
+                  borderBottom: '1px solid var(--border)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      background: 'rgba(239, 68, 68, 0.12)',
+                      color: '#EF4444',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Trash2 size={18} />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: '#EF4444' }}>
+                      Delete Course
+                    </h3>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Irreversible management action
+                    </span>
+                  </div>
+                </div>
+                <button
+                  className="btn-icon"
+                  disabled={deletingCourse}
+                  onClick={() => setDeleteModalOpen(false)}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div style={{ padding: 24 }}>
+                <p style={{ margin: '0 0 16px 0', fontSize: '0.9rem', color: 'var(--text-main)', lineHeight: 1.5 }}>
+                  Are you sure you want to permanently delete the course <strong style={{ color: 'white' }}>"{courseToDelete.title}"</strong>?
+                </p>
+
+                <div
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.08)',
+                    border: '1px solid rgba(239, 68, 68, 0.25)',
+                    borderRadius: 12,
+                    padding: 14,
+                    marginBottom: 20,
+                    fontSize: '0.8rem',
+                    color: '#FCA5A5',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <strong>Warning:</strong> Deleting this course will permanently remove:
+                  <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
+                    <li>All assigned employee enrollment and progress records</li>
+                    <li>All certificates earned by employees for this course</li>
+                    <li>All extracted SCORM package assets from storage</li>
+                  </ul>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={deletingCourse}
+                    onClick={() => setDeleteModalOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={deletingCourse}
+                    onClick={handleConfirmDelete}
+                    style={{
+                      background: '#EF4444',
+                      color: 'white',
+                      fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '10px 20px',
+                      borderRadius: 12,
+                      border: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {deletingCourse ? (
+                      <>
+                        <div className="spinner" style={{ width: 14, height: 14 }} /> Deleting...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 size={16} /> Yes, Delete Course
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
             </motion.div>
