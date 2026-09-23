@@ -23,6 +23,83 @@ const resolveAssetUrl = (url) => {
   return url;
 };
 
+const calculateLearnerProgress = (runtimeData, eventProgress, totalSlides = 57) => {
+  const status = String(
+    runtimeData?.['cmi.completion_status'] ||
+    runtimeData?.['cmi.core.lesson_status'] ||
+    runtimeData?.['cmi.success_status'] ||
+    ''
+  ).toLowerCase();
+
+  if (['completed', 'passed', 'complete', 'success'].includes(status)) {
+    return 100;
+  }
+
+  // 1. Explicit progress from shim event
+  if (eventProgress !== undefined && eventProgress !== null && !isNaN(parseFloat(eventProgress))) {
+    const ep = parseFloat(eventProgress);
+    if (ep > 0) return Math.min(100, Math.round(ep));
+  }
+
+  // 2. SCORM 2004 cmi.progress_measure (0.0 to 1.0 or 0 to 100)
+  if (runtimeData?.['cmi.progress_measure']) {
+    const pm = parseFloat(runtimeData['cmi.progress_measure']);
+    if (!isNaN(pm) && pm > 0) {
+      return Math.min(100, Math.round(pm <= 1 ? pm * 100 : pm));
+    }
+  }
+
+  // 3. SCORM cmi.core.lesson_progress
+  if (runtimeData?.['cmi.core.lesson_progress']) {
+    const lp = parseFloat(runtimeData['cmi.core.lesson_progress']);
+    if (!isNaN(lp) && lp > 0) {
+      return Math.min(100, Math.round(lp));
+    }
+  }
+
+  // 4. Storyline 360 suspend_data chunk parsing
+  const suspendData = String(runtimeData?.['cmi.suspend_data'] || runtimeData?.['cmi.core.suspend_data'] || '');
+  if (suspendData) {
+    const firstChunk = suspendData.split('~')[0];
+    const matchBody = firstChunk.match(/^[0-9a-zA-Z_$~]{1,6}([0-9a-zA-Z_$]{4,})/);
+    if (matchBody && matchBody[1]) {
+      const numViewed = Math.floor(matchBody[1].length / 2);
+      if (numViewed > 0) {
+        return Math.min(98, Math.round((numViewed / totalSlides) * 100));
+      }
+    } else if (suspendData.includes(',')) {
+      const parts = suspendData.split(',');
+      const viewed = parts.filter(p => ['1', 'true', 'v'].includes(p.trim())).length;
+      if (parts.length >= 4) {
+        return Math.min(98, Math.round((viewed / parts.length) * 100));
+      }
+    }
+  }
+
+  // 5. Fraction in location string (e.g. "14/50")
+  const location = String(runtimeData?.['cmi.location'] || runtimeData?.['cmi.core.lesson_location'] || '');
+  if (location) {
+    const mFrac = location.match(/(\d+)\s*(?:\/|of)\s*(\d+)/i);
+    if (mFrac && parseFloat(mFrac[2]) > 0) {
+      return Math.min(100, Math.round((parseFloat(mFrac[1]) / parseFloat(mFrac[2])) * 100));
+    }
+  }
+
+  return null;
+};
+
+const extractBookmark = (runtimeData) => {
+  const loc = runtimeData?.['cmi.location'] || runtimeData?.['cmi.core.lesson_location'];
+  if (loc && String(loc).trim() !== '') return String(loc).trim();
+
+  const sd = String(runtimeData?.['cmi.suspend_data'] || runtimeData?.['cmi.core.suspend_data'] || '');
+  const mPlayer = sd.match(/_player\.([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)/);
+  if (mPlayer && mPlayer[2]) {
+    return `Slide: ${mPlayer[2]}`;
+  }
+  return null;
+};
+
 export default function CoursePlayer() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -33,6 +110,7 @@ export default function CoursePlayer() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState(null);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const iframeRef = useRef(null);
   const scormDataRef = useRef({});
@@ -43,9 +121,28 @@ export default function CoursePlayer() {
     try {
       const res = await forgeApi.getCourse(id);
       const data = res.data.data;
-      setCourse(data);
 
       if (data.enrollment) {
+        let initProg = parseFloat(data.enrollment.progress_percent || 0);
+        let initLoc = data.enrollment.scorm_location;
+
+        // Auto-heal progress if currently 0 but suspend_data has visited slides
+        if (initProg <= 0 && data.enrollment.scorm_suspend_data) {
+          const calcProg = calculateLearnerProgress({
+            'cmi.suspend_data': data.enrollment.scorm_suspend_data,
+            'cmi.location': data.enrollment.scorm_location,
+            'cmi.core.lesson_status': data.enrollment.status,
+          }, null, 57);
+          if (calcProg && calcProg > 0) {
+            initProg = calcProg;
+            data.enrollment.progress_percent = calcProg;
+          }
+        }
+        if (!initLoc && data.enrollment.scorm_suspend_data) {
+          initLoc = extractBookmark({ 'cmi.suspend_data': data.enrollment.scorm_suspend_data });
+          if (initLoc) data.enrollment.scorm_location = initLoc;
+        }
+
         scormDataRef.current = {
           'cmi.core.lesson_location': data.enrollment.scorm_location || '',
           'cmi.location': data.enrollment.scorm_location || '',
@@ -55,6 +152,8 @@ export default function CoursePlayer() {
           'cmi.score.raw': data.enrollment.score !== null ? String(data.enrollment.score) : '',
         };
       }
+
+      setCourse(data);
     } catch (err) {
       toast.error('Failed to load course details');
       nav('/forge/library');
@@ -73,6 +172,7 @@ export default function CoursePlayer() {
       clearTimeout(saveTimerRef.current);
     }
 
+    setIsSyncing(true);
     saveTimerRef.current = setTimeout(async () => {
       try {
         const res = await forgeApi.syncProgress(id, syncPayload);
@@ -100,9 +200,44 @@ export default function CoursePlayer() {
         });
       } catch (err) {
         console.error('Failed to auto-sync SCORM progress', err);
+      } finally {
+        setIsSyncing(false);
       }
-    }, 800);
+    }, 600);
   }, [id]);
+
+  // Handle manual 100% course completion
+  const handleMarkComplete = async () => {
+    if (!window.confirm("Are you sure you want to mark this course as completed? This will finalize your progress at 100% and generate your official Certificate of Completion.")) {
+      return;
+    }
+    try {
+      setIsSyncing(true);
+      await forgeApi.syncProgress(id, {
+        status: 'completed',
+        progress_percent: 100,
+        scorm_location: course?.enrollment?.scorm_location || 'Completed',
+        scorm_suspend_data: course?.enrollment?.scorm_suspend_data,
+        score: course?.enrollment?.score || 100,
+      });
+      setCourse(prev => ({
+        ...prev,
+        enrollment: {
+          ...(prev?.enrollment || {}),
+          status: 'completed',
+          progress_percent: 100,
+          completed_at: new Date().toISOString(),
+        }
+      }));
+      setShowCelebration(true);
+      toast.success("Course marked as 100% completed! Certificate generated.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to mark course complete");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // PostMessage bridge for SCORM runtime
   useEffect(() => {
@@ -121,6 +256,7 @@ export default function CoursePlayer() {
           'cmi.location': course?.enrollment?.scorm_location || '',
           'cmi.core.suspend_data': course?.enrollment?.scorm_suspend_data || '',
           'cmi.suspend_data': course?.enrollment?.scorm_suspend_data || '',
+          totalSlides: 57,
         };
 
         if (iframeRef.current && iframeRef.current.contentWindow) {
@@ -147,25 +283,34 @@ export default function CoursePlayer() {
         const status = currentRuntime['cmi.completion_status'] || currentRuntime['cmi.core.lesson_status'] || currentRuntime['cmi.success_status'] || null;
 
         // Progress calculation
-        let progress = null;
-        if (currentRuntime['cmi.progress_measure']) {
-          const pm = parseFloat(currentRuntime['cmi.progress_measure']);
-          if (!isNaN(pm)) progress = pm <= 1 ? pm * 100 : pm;
-        }
-        if (progress === null && currentRuntime['cmi.core.lesson_progress']) {
-          const lp = parseFloat(currentRuntime['cmi.core.lesson_progress']);
-          if (!isNaN(lp)) progress = lp;
-        }
-        if (['completed', 'passed', 'success'].includes(String(status || '').toLowerCase())) {
-          progress = 100;
+        const computedProgress = calculateLearnerProgress(currentRuntime, msg.progressPercent, 57);
+        const bookmark = extractBookmark(currentRuntime) || location;
+
+        // Real-time local state update so the progress bar updates with zero lag
+        if (computedProgress !== null) {
+          setCourse(prev => {
+            if (!prev) return prev;
+            const currentPct = prev.enrollment?.progress_percent || 0;
+            if (computedProgress > currentPct || bookmark !== prev.enrollment?.scorm_location) {
+              return {
+                ...prev,
+                enrollment: {
+                  ...(prev.enrollment || {}),
+                  progress_percent: Math.max(currentPct, computedProgress),
+                  scorm_location: bookmark || prev.enrollment?.scorm_location,
+                }
+              };
+            }
+            return prev;
+          });
         }
 
         scheduleSync({
-          scorm_location: location,
+          scorm_location: bookmark,
           scorm_suspend_data: suspendData,
           score: rawScore !== null && !isNaN(parseFloat(rawScore)) ? parseFloat(rawScore) : undefined,
           status: status || undefined,
-          progress_percent: progress !== null ? Math.min(100, Math.max(0, progress)) : undefined,
+          progress_percent: computedProgress !== null ? Math.min(100, Math.max(0, computedProgress)) : undefined,
         });
       }
     };
@@ -305,9 +450,20 @@ export default function CoursePlayer() {
             </div>
           )}
 
-          <div style={{ width: 180 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#94A3B8', marginBottom: 4 }}>
-              <span>Progress</span>
+          <div style={{ width: 190 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', color: '#94A3B8', marginBottom: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>Progress</span>
+                {isSyncing ? (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: '0.65rem', color: '#F59E0B' }}>
+                    <Clock size={10} /> saving...
+                  </span>
+                ) : (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: '0.65rem', color: '#10B981' }}>
+                    <CheckCircle size={10} /> saved
+                  </span>
+                )}
+              </div>
               <span style={{ fontWeight: 800, color: isCompleted ? '#10B981' : 'var(--forge-accent)' }}>
                 {progressPct}%
               </span>
@@ -328,7 +484,7 @@ export default function CoursePlayer() {
 
         {/* Right: Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {isCompleted && (
+          {isCompleted ? (
             <div
               style={{
                 display: 'flex',
@@ -345,6 +501,28 @@ export default function CoursePlayer() {
             >
               <CheckCircle size={14} /> Completed
             </div>
+          ) : (
+            <button
+              onClick={handleMarkComplete}
+              className="btn btn-sm"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 14px',
+                borderRadius: 8,
+                background: 'linear-gradient(135deg, #10B981, #059669)',
+                color: 'white',
+                fontWeight: 700,
+                fontSize: '0.76rem',
+                border: 'none',
+                cursor: 'pointer',
+                boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)',
+              }}
+              title="Mark module 100% completed and generate certificate"
+            >
+              <CheckCircle size={14} /> Mark Complete
+            </button>
           )}
 
           <button

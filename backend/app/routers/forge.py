@@ -10,7 +10,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime, date
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 from fastapi import (
     APIRouter,
@@ -84,7 +84,8 @@ def _url_path(*parts: str) -> str:
 
 # ── SCORM 1.2 & 2004 Runtime API Shim ─────────────────────────────────────────
 
-SCORM_RUNTIME_SHIM = """<script>
+SCORM_RUNTIME_SHIM = r"""<script>
+/* PHYGITRON_SCORM_SHIM_V2 */
 (function () {
   var data = {
     "cmi.core.student_id": "employee",
@@ -111,6 +112,65 @@ SCORM_RUNTIME_SHIM = """<script>
   var lastError = "0";
   function ok() { lastError = "0"; return "true"; }
 
+  function calculateScormProgress(d) {
+    var curStatus = String(d["cmi.core.lesson_status"] || d["cmi.completion_status"] || d["cmi.success_status"] || "").toLowerCase();
+    if (curStatus === "completed" || curStatus === "passed" || curStatus === "complete" || curStatus === "success") {
+      return 100;
+    }
+    var progress = null;
+    if (d["cmi.progress_measure"]) {
+      var pm = parseFloat(d["cmi.progress_measure"]);
+      if (!isNaN(pm)) progress = pm <= 1 ? Math.round(pm * 100) : Math.round(pm);
+    }
+    if (progress === null && d["cmi.core.lesson_progress"]) {
+      var lp = parseFloat(d["cmi.core.lesson_progress"]);
+      if (!isNaN(lp)) progress = Math.round(lp);
+    }
+    // Location fraction e.g. "14/50" or "Slide 14 of 50"
+    var loc = d["cmi.location"] || d["cmi.core.lesson_location"] || "";
+    if (progress === null && loc) {
+      var mFrac = String(loc).match(/(\d+)\s*(?:\/|of)\s*(\d+)/i);
+      if (mFrac && parseFloat(mFrac[2]) > 0) {
+        progress = Math.min(100, Math.round((parseFloat(mFrac[1]) / parseFloat(mFrac[2])) * 100));
+      }
+    }
+    // Storyline 360 suspend_data slide parsing
+    var sd = String(d["cmi.suspend_data"] || d["cmi.core.suspend_data"] || "");
+    if (progress === null && sd) {
+      var fc = sd.split("~")[0];
+      var mb = fc.match(/^[0-9a-zA-Z_$~]{1,6}([0-9a-zA-Z_$]{4,})/);
+      if (mb && mb[1]) {
+        var numViewed = Math.floor(mb[1].length / 2);
+        var tot = window._PHYGITRON_TOTAL_SLIDES || 57;
+        if (numViewed > 0) {
+          progress = Math.min(98, Math.round((numViewed / tot) * 100));
+        }
+      } else if (sd.indexOf(",") !== -1) {
+        var pts = sd.split(",");
+        var vd = 0;
+        for (var pi = 0; pi < pts.length; pi++) {
+          var pt = pts[pi].trim();
+          if (pt === "1" || pt === "true" || pt === "v") vd++;
+        }
+        if (pts.length >= 4) {
+          progress = Math.min(98, Math.round((vd / pts.length) * 100));
+        }
+      }
+    }
+    return progress;
+  }
+
+  function extractBookmark(d) {
+    var loc = d["cmi.location"] || d["cmi.core.lesson_location"] || "";
+    if (loc && loc.trim() !== "") return loc;
+    var sd = String(d["cmi.suspend_data"] || d["cmi.core.suspend_data"] || "");
+    var mPlayer = sd.match(/_player\.([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)/);
+    if (mPlayer && mPlayer[2]) {
+      return "Slide: " + mPlayer[2];
+    }
+    return loc;
+  }
+
   // Receive initial resume data from parent player window
   window.addEventListener("message", function (event) {
     if (event.data && event.data.type === "phygitron:scorm-init-data") {
@@ -120,22 +180,53 @@ SCORM_RUNTIME_SHIM = """<script>
           data[k] = String(init[k]);
         }
       }
+      if (init.totalSlides) window._PHYGITRON_TOTAL_SLIDES = parseInt(init.totalSlides, 10);
+      var initProgress = calculateScormProgress(data);
+      var initBookmark = extractBookmark(data);
+      try {
+        window.parent.postMessage({
+          type: "phygitron:scorm-ready",
+          progressPercent: initProgress,
+          location: initBookmark
+        }, "*");
+      } catch(e){}
     }
   });
 
   var api = {
     LMSInitialize: function () { 
-      try { window.parent.postMessage({ type: "phygitron:scorm-ready" }, "*"); } catch(e){}
+      var prog = calculateScormProgress(data);
+      var bm = extractBookmark(data);
+      try { window.parent.postMessage({ type: "phygitron:scorm-ready", progressPercent: prog, location: bm }, "*"); } catch(e){}
       return ok(); 
     },
     Initialize: function () { return this.LMSInitialize(); },
     LMSFinish: function () { 
-      try { window.parent.postMessage({ type: "phygitron:scorm-finish", data: data }, "*"); } catch(e){}
+      var prog = calculateScormProgress(data);
+      var bm = extractBookmark(data);
+      try { window.parent.postMessage({ type: "phygitron:scorm-finish", data: data, progressPercent: prog, location: bm }, "*"); } catch(e){}
       return ok(); 
     },
     Terminate: function () { return this.LMSFinish(); },
     LMSCommit: function () {
-      try { window.parent.postMessage({ type: "phygitron:scorm-commit", data: data }, "*"); } catch (e) {}
+      var prog = calculateScormProgress(data);
+      var bm = extractBookmark(data);
+      if (prog !== null) {
+        data["cmi.progress_measure"] = String(prog / 100);
+        data["progress_percent"] = prog;
+      }
+      if (bm) {
+        data["cmi.location"] = bm;
+        data["cmi.core.lesson_location"] = bm;
+      }
+      try {
+        window.parent.postMessage({
+          type: "phygitron:scorm-commit",
+          data: data,
+          progressPercent: prog,
+          location: bm
+        }, "*");
+      } catch (e) {}
       return ok();
     },
     Commit: function () { return this.LMSCommit(); },
@@ -154,9 +245,27 @@ SCORM_RUNTIME_SHIM = """<script>
       if (key === "cmi.core.score.raw") data["cmi.score.raw"] = data[key];
       if (key === "cmi.score.raw") data["cmi.core.score.raw"] = data[key];
 
+      var prog = calculateScormProgress(data);
+      var bm = extractBookmark(data);
+      if (prog !== null) {
+        data["cmi.progress_measure"] = String(prog / 100);
+        data["progress_percent"] = prog;
+      }
+      if (bm && !data["cmi.location"]) {
+        data["cmi.location"] = bm;
+        data["cmi.core.lesson_location"] = bm;
+      }
+
       lastError = "0";
       try {
-        window.parent.postMessage({ type: "phygitron:scorm-set", key: key, value: data[key], allData: data }, "*");
+        window.parent.postMessage({
+          type: "phygitron:scorm-set",
+          key: key,
+          value: data[key],
+          allData: data,
+          progressPercent: prog,
+          location: bm
+        }, "*");
       } catch (e) {}
       return "true";
     },
@@ -188,18 +297,36 @@ def _inject_scorm_api_shim(launch_html_path: str) -> None:
     except OSError:
         return
 
-    if "phygitron:scorm-commit" in html or "window.API" in html[:3000]:
+    if "/* PHYGITRON_SCORM_SHIM_V2 */" in html:
         return
 
-    head_pos = html.lower().find("<head>")
-    if head_pos != -1:
-        insert_pos = head_pos + len("<head>")
-        html = html[:insert_pos] + "\n" + SCORM_RUNTIME_SHIM + "\n" + html[insert_pos:]
+    # Check if an earlier version of our shim exists and replace it
+    pattern = re.compile(r'<script>\s*(/\*[\s\S]*?\*/\s*)?\(function\s*\(\)\s*\{[\s\S]*?window\.API\s*=\s*api[\s\S]*?<\/script>', re.I)
+    if pattern.search(html):
+        html = pattern.sub(lambda _: SCORM_RUNTIME_SHIM, html)
+    elif "window.API" in html[:3000]:
+        return
     else:
-        html = SCORM_RUNTIME_SHIM + "\n" + html
+        head_pos = html.lower().find("<head>")
+        if head_pos != -1:
+            insert_pos = head_pos + len("<head>")
+            html = html[:insert_pos] + "\n" + SCORM_RUNTIME_SHIM + "\n" + html[insert_pos:]
+        else:
+            html = SCORM_RUNTIME_SHIM + "\n" + html
 
     with open(launch_html_path, "w", encoding="utf-8", newline="") as handle:
         handle.write(html)
+
+
+def _upgrade_existing_scorm_packages() -> None:
+    """Scan uploaded SCORM packages and upgrade HTML files with the latest V2 runtime shim."""
+    upload_dir = os.path.join(os.path.dirname(__file__), "..", "..", "uploads")
+    if not os.path.exists(upload_dir):
+        return
+    for root_dir, _, files in os.walk(upload_dir):
+        for f in files:
+            if f.lower().endswith((".html", ".htm")):
+                _inject_scorm_api_shim(os.path.join(root_dir, f))
 
 
 def _patch_storyline_scorm_driver(package_dir: str) -> None:
@@ -929,6 +1056,17 @@ async def get_course_details(
         )
     )
     enrollment = enroll_res.scalar_one_or_none()
+    if enrollment and float(enrollment.progress_percent or 0.0) <= 0.0 and enrollment.scorm_suspend_data:
+        est_p, d_loc = _compute_scorm_progress_and_location(
+            enrollment.scorm_location, enrollment.scorm_suspend_data, enrollment.status, 0.0
+        )
+        if est_p > 0:
+            enrollment.progress_percent = est_p
+            if not enrollment.scorm_location and d_loc:
+                enrollment.scorm_location = str(d_loc)[:255]
+            if enrollment.status == "not_started":
+                enrollment.status = "in_progress"
+            await db.commit()
 
     # Check certificate if completed
     cert_res = await db.execute(
@@ -975,6 +1113,56 @@ async def get_course_details(
 
 
 # ── SCORM Bookmark & Real-time Progress Sync ─────────────────────────────────
+
+def _compute_scorm_progress_and_location(
+    location: Optional[str],
+    suspend_data: Optional[str],
+    status: Optional[str],
+    current_progress: float = 0.0,
+    total_slides: int = 57,
+) -> Tuple[float, Optional[str]]:
+    status_clean = (status or "").strip().lower()
+    if status_clean in {"completed", "passed", "complete", "success"}:
+        return 100.0, location
+
+    progress = float(current_progress or 0.0)
+    detected_location = location
+
+    if suspend_data and isinstance(suspend_data, str):
+        # Extract slide id from Storyline _player.<scene>.<slide> tag if location is not set or generic
+        m_player = re.search(r'_player\.([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)', suspend_data)
+        if m_player and (not detected_location or detected_location.strip() == ""):
+            detected_location = f"Slide: {m_player.group(2)}"
+
+        # Storyline 360 viewed slide tokens in first chunk before ~
+        fc = suspend_data.split("~")[0]
+        mb = re.search(r'^[0-9a-zA-Z_\$~]{1,6}([0-9a-zA-Z_\$]{4,})', fc)
+        if mb and mb.group(1):
+            num_viewed = len(mb.group(1)) // 2
+            tot = total_slides if total_slides > 0 else 57
+            est_pct = min(98.0, round((num_viewed / float(tot)) * 100.0, 1))
+            if est_pct > progress:
+                progress = est_pct
+
+        # Captivate comma format: e.g. "1,1,1,0,0,..."
+        if "," in suspend_data:
+            parts = [p.strip() for p in suspend_data.split(",")]
+            ones = sum(1 for p in parts if p in {"1", "true", "v"})
+            if len(parts) >= 4:
+                est_pct = min(98.0, round((ones / float(len(parts))) * 100.0, 1))
+                if est_pct > progress:
+                    progress = est_pct
+
+    # Fraction location e.g. "14/50" or "Slide 14 of 50"
+    if detected_location:
+        m_frac = re.search(r'(\d+)\s*(?:/|of)\s*(\d+)', str(detected_location))
+        if m_frac and float(m_frac.group(2)) > 0:
+            est_pct = min(100.0, round((float(m_frac.group(1)) / float(m_frac.group(2))) * 100.0, 1))
+            if est_pct > progress:
+                progress = est_pct
+
+    return progress, detected_location
+
 
 class ScormProgressSync(BaseModel):
     scorm_location: Optional[str] = None
@@ -1030,8 +1218,21 @@ async def sync_scorm_progress(
 
     # Compute progress %
     new_progress = float(enrollment.progress_percent or 0.0)
-    if body.progress_percent is not None:
+    if body.progress_percent is not None and float(body.progress_percent) > 0:
         new_progress = max(new_progress, min(100.0, float(body.progress_percent)))
+
+    # Fallback heuristic calculation from SCORM suspend_data and location
+    est_progress, detected_loc = _compute_scorm_progress_and_location(
+        location=enrollment.scorm_location,
+        suspend_data=enrollment.scorm_suspend_data,
+        status=body.status or enrollment.status,
+        current_progress=new_progress,
+        total_slides=57,
+    )
+    if est_progress > new_progress:
+        new_progress = est_progress
+    if (not enrollment.scorm_location or enrollment.scorm_location.strip() == "") and detected_loc:
+        enrollment.scorm_location = str(detected_loc)[:255]
 
     status_str = (body.status or "").strip().lower()
     is_completed = (
@@ -1128,8 +1329,23 @@ async def get_my_learning(
     in_progress = []
     completed = []
     assigned_not_started = []
+    needs_commit = False
 
     for enroll, course, domain in rows:
+        prog = float(enroll.progress_percent or 0.0)
+        if prog <= 0.0 and enroll.scorm_suspend_data:
+            est_p, d_loc = _compute_scorm_progress_and_location(
+                enroll.scorm_location, enroll.scorm_suspend_data, enroll.status, 0.0
+            )
+            if est_p > 0:
+                prog = est_p
+                enroll.progress_percent = est_p
+                if not enroll.scorm_location and d_loc:
+                    enroll.scorm_location = str(d_loc)[:255]
+                if enroll.status == "not_started":
+                    enroll.status = "in_progress"
+                needs_commit = True
+
         item = {
             "enrollment_id": enroll.id,
             "course_id": course.id,
@@ -1141,7 +1357,7 @@ async def get_my_learning(
             "difficulty": course.difficulty.value if hasattr(course.difficulty, "value") else str(course.difficulty),
             "estimated_hours": float(course.estimated_hours) if course.estimated_hours else None,
             "scorm_entry_url": course.scorm_entry_url,
-            "progress_percent": float(enroll.progress_percent or 0.0),
+            "progress_percent": prog,
             "score": float(enroll.score) if enroll.score is not None else None,
             "status": enroll.status or "not_started",
             "scorm_location": enroll.scorm_location,
@@ -1153,12 +1369,15 @@ async def get_my_learning(
 
         if enroll.completed_at:
             completed.append(item)
-        elif enroll.status == "in_progress" or (enroll.progress_percent and enroll.progress_percent > 0):
+        elif enroll.status == "in_progress" or (prog and prog > 0):
             in_progress.append(item)
             if not continue_learning:
                 continue_learning = item
         else:
             assigned_not_started.append(item)
+
+    if needs_commit:
+        await db.commit()
 
     # Fetch user's certificates
     certs_res = await db.execute(
@@ -1239,14 +1458,31 @@ async def course_library(
                 Enrollment.course_id.in_(course_ids),
             )
         )
+        lib_needs_commit = False
         for e in enroll_res.scalars().all():
+            prog = float(e.progress_percent or 0.0)
+            if prog <= 0.0 and e.scorm_suspend_data:
+                est_p, d_loc = _compute_scorm_progress_and_location(
+                    e.scorm_location, e.scorm_suspend_data, e.status, 0.0
+                )
+                if est_p > 0:
+                    prog = est_p
+                    e.progress_percent = est_p
+                    if not e.scorm_location and d_loc:
+                        e.scorm_location = str(d_loc)[:255]
+                    if e.status == "not_started":
+                        e.status = "in_progress"
+                    lib_needs_commit = True
+
             user_enrollments[e.course_id] = {
                 "enrollment_id": e.id,
-                "progress_percent": float(e.progress_percent or 0.0),
+                "progress_percent": prog,
                 "status": e.status,
                 "completed": bool(e.completed_at),
                 "scorm_location": e.scorm_location,
             }
+        if lib_needs_commit:
+            await db.commit()
 
     courses_data = []
     for c, domain in rows:
