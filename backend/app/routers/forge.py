@@ -252,11 +252,19 @@ def _parse_scorm_manifest(extract_path: str) -> dict:
         )
 
     try:
-        with open(manifest_path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(manifest_path, "r", encoding="utf-8-sig", errors="ignore") as f:
             xml_content = f.read()
 
+        if xml_content.startswith("\ufeff"):
+            xml_content = xml_content[1:]
+
         # Handle undeclared XML namespace prefixes common in legacy SCORM packages
-        prefixes = set(re.findall(r'<([a-zA-Z0-9_-]+):', xml_content) + re.findall(r'\s([a-zA-Z0-9_-]+):[a-zA-Z0-9_-]+=', xml_content))
+        # Only match actual element tag prefixes (<prefix:tag>) or attribute prefixes (prefix:attr=), excluding 'xmlns' and 'xml'
+        elem_prefixes = re.findall(r'<([a-zA-Z0-9_-]+):[a-zA-Z0-9_-]+', xml_content)
+        attr_prefixes = re.findall(r'\b(?!(?:xmlns|xml)\b)([a-zA-Z0-9_-]+):[a-zA-Z0-9_-]+=', xml_content)
+        raw_prefixes = set(elem_prefixes + attr_prefixes)
+        prefixes = {p for p in raw_prefixes if p.lower() not in ("xmlns", "xml")}
+
         known_namespaces = {
             "adlcp": "http://www.adlnet.org/xsd/adlcp_rootv1p2",
             "adlseq": "http://www.adlnet.org/xsd/adlseq_v1p3",
@@ -280,7 +288,14 @@ def _parse_scorm_manifest(extract_path: str) -> dict:
                 flags=re.IGNORECASE
             )
 
-        root = ET.fromstring(xml_content)
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError:
+            # Resilient fallback: strip all namespace prefix colons and reparse
+            cleaned_xml = re.sub(r'<([a-zA-Z0-9_-]+):', '<', xml_content)
+            cleaned_xml = re.sub(r'</([a-zA-Z0-9_-]+):', '</', cleaned_xml)
+            cleaned_xml = re.sub(r'\s[a-zA-Z0-9_-]+:([a-zA-Z0-9_-]+)=', r' \1=', cleaned_xml)
+            root = ET.fromstring(cleaned_xml)
     except Exception as e:
         raise HTTPException(
             status_code=400,

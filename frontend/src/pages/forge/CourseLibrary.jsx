@@ -56,6 +56,7 @@ export default function CourseLibrary() {
   const [uploadHours, setUploadHours] = useState(2.0);
   const [uploadPassScore, setUploadPassScore] = useState(70.0);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   // Domain Management Form State
   const [newDomainName, setNewDomainName] = useState('');
@@ -174,6 +175,7 @@ export default function CourseLibrary() {
     }
 
     setUploading(true);
+    setUploadProgress(0);
     const fd = new FormData();
     fd.append('file', uploadFile);
 
@@ -187,7 +189,12 @@ export default function CourseLibrary() {
     };
 
     try {
-      const res = await forgeApi.uploadScorm(fd, params);
+      const res = await forgeApi.uploadScorm(fd, params, (progressEvent) => {
+        if (progressEvent.total) {
+          const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setUploadProgress(pct);
+        }
+      });
       toast.success(res.data.message || 'SCORM course uploaded successfully!');
       setUploadModalOpen(false);
       // Reset form
@@ -195,12 +202,14 @@ export default function CourseLibrary() {
       setUploadTitle('');
       setUploadDesc('');
       setUploadDomainId('');
+      setUploadProgress(0);
       loadDomains();
       loadCourses(1);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to upload SCORM package.');
     } finally {
       setUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -801,6 +810,26 @@ export default function CourseLibrary() {
                   />
                 </div>
 
+                {uploading && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                      <span>{uploadProgress < 100 ? `Uploading archive (${uploadProgress}%)...` : 'Extracting, validating manifest & injecting runtime...'}</span>
+                      <span style={{ fontWeight: 700, color: 'var(--forge-accent)' }}>{uploadProgress}%</span>
+                    </div>
+                    <div className="progress-bar" style={{ height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 4 }}>
+                      <div
+                        className="progress-fill"
+                        style={{
+                          width: `${uploadProgress}%`,
+                          background: 'var(--forge-accent)',
+                          transition: 'width 0.2s ease',
+                          borderRadius: 4,
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
                   <button
                     type="button"
@@ -819,7 +848,7 @@ export default function CourseLibrary() {
                     {uploading ? (
                       <>
                         <div className="spinner" style={{ width: 16, height: 16 }} />
-                        Extracting & Validating SCORM...
+                        {uploadProgress < 100 ? `Uploading (${uploadProgress}%)...` : 'Deploying Package...'}
                       </>
                     ) : (
                       <>

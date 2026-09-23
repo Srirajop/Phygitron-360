@@ -185,9 +185,11 @@ export const forgeApi = {
   myCourses: () => api.get('/api/v1/forge/my-courses'),
   
   // SCORM Upload & Playback
-  uploadScorm: (formData, params = {}) => api.post('/api/v1/forge/scorm/upload', formData, {
+  uploadScorm: (formData, params = {}, onProgress = null) => api.post('/api/v1/forge/scorm/upload', formData, {
     params,
     headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: onProgress,
+    timeout: 30 * 60 * 1000,
   }),
   syncProgress: (courseId, data) => api.post(`/api/v1/forge/courses/${courseId}/progress`, data),
   completeSection: (sectionId, data) => api.post(`/api/v1/forge/sections/${sectionId}/complete`, data),
