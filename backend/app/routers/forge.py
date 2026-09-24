@@ -37,7 +37,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from starlette.concurrency import run_in_threadpool
-
+from app.config import settings
 from app.database import get_db
 from app.models.deploy import Employee, EmployeeStatus
 from app.models.forge import (
@@ -1320,7 +1320,7 @@ async def get_my_learning(
         .join(Course, Course.id == Enrollment.course_id)
         .outerjoin(CourseDomain, CourseDomain.id == Course.domain_id)
         .where(Enrollment.user_id == current_user.id)
-        .order_by(Enrollment.last_accessed_at.desc().nullslast(), Enrollment.created_at.desc())
+        .order_by(Enrollment.last_accessed_at.is_(None), Enrollment.last_accessed_at.desc(), Enrollment.created_at.desc())
     )
     res = await db.execute(query)
     rows = res.all()
@@ -1973,11 +1973,222 @@ async def verify_certificate(code: str, db: AsyncSession = Depends(get_db)):
         return {"success": False, "error": "Certificate not found", "code": 404}
 
     cert, course, user = row
+    pdf_url = cert.pdf_url
+    if pdf_url and pdf_url.startswith("/") and not pdf_url.startswith("http"):
+        pdf_url = f"{settings.BACKEND_URL}{pdf_url}"
+
     return success({
         "valid": True,
         "learner_name": user.full_name or user.email,
         "course_title": course.title,
         "issued_at": cert.issued_at.isoformat(),
         "verification_code": code,
-        "pdf_url": cert.pdf_url,
+        "pdf_url": pdf_url,
     })
+
+
+# ── Learner Transcript & Certificate Endpoints ───────────────────────────────
+
+@router.get("/transcript")
+async def get_my_transcript(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns complete learning transcript, enrolled courses history,
+    progress percentages, bookmarks, and earned certificates for current learner.
+    Auto-generates certificates for completed courses if missing.
+    """
+    query = (
+        select(Enrollment, Course, CourseDomain)
+        .join(Course, Course.id == Enrollment.course_id)
+        .outerjoin(CourseDomain, CourseDomain.id == Course.domain_id)
+        .where(Enrollment.user_id == current_user.id)
+        .order_by(Enrollment.last_accessed_at.is_(None), Enrollment.last_accessed_at.desc(), Enrollment.created_at.desc())
+    )
+    res = await db.execute(query)
+    rows = res.all()
+
+    now = datetime.utcnow()
+    enrollments_data = []
+    needs_commit = False
+
+    for enroll, course, domain in rows:
+        # Auto-heal: if progress is 0% but suspend_data exists, calculate progress
+        prog = float(enroll.progress_percent or 0.0)
+        if prog <= 0.0 and enroll.scorm_suspend_data:
+            est_p, d_loc = _compute_scorm_progress_and_location(
+                enroll.scorm_location, enroll.scorm_suspend_data, enroll.status, 0.0
+            )
+            if est_p > 0:
+                enroll.progress_percent = est_p
+                if d_loc and not enroll.scorm_location:
+                    enroll.scorm_location = d_loc
+                prog = est_p
+                needs_commit = True
+
+        # Check completion status
+        is_completed = (
+            enroll.status == "completed"
+            or enroll.completed_at is not None
+            or prog >= 100.0
+        )
+        if is_completed and not enroll.completed_at:
+            enroll.status = "completed"
+            enroll.completed_at = now
+            enroll.progress_percent = 100.0
+            needs_commit = True
+
+        # Auto-heal certificate: if completed, ensure certificate exists
+        if is_completed:
+            cert_check = await db.execute(
+                select(Certificate).where(
+                    Certificate.user_id == current_user.id,
+                    Certificate.course_id == course.id,
+                )
+            )
+            if not cert_check.scalar_one_or_none():
+                try:
+                    await _generate_certificate_inline(enroll.id, current_user.id, db)
+                    needs_commit = True
+                except Exception as cert_err:
+                    logger.warning(f"Auto-generate cert failed for enroll {enroll.id}: {cert_err}")
+
+        diff_val = course.difficulty.value if hasattr(course.difficulty, "value") else str(course.difficulty or "beginner")
+
+        enrollments_data.append({
+            "id": enroll.id,
+            "enrollment_id": enroll.id,
+            "course_id": course.id,
+            "course_title": course.title,
+            "domain_name": domain.name if domain else (course.category or "General"),
+            "domain_color": domain.color if domain else "#7C3AED",
+            "difficulty": diff_val,
+            "progress_percent": float(enroll.progress_percent or 0.0),
+            "score": float(enroll.score) if enroll.score is not None else None,
+            "status": enroll.status or ("completed" if enroll.completed_at else "in_progress"),
+            "scorm_location": enroll.scorm_location,
+            "enrolled_at": enroll.created_at.isoformat() if enroll.created_at else None,
+            "completed_at": enroll.completed_at.isoformat() if enroll.completed_at else None,
+            "last_accessed_at": enroll.last_accessed_at.isoformat() if enroll.last_accessed_at else None,
+            "deadline": enroll.deadline.isoformat() if enroll.deadline else None,
+            "is_overdue": bool(enroll.deadline and enroll.deadline < now and not enroll.completed_at),
+        })
+
+    if needs_commit:
+        await db.commit()
+
+    # Fetch all earned certificates
+    certs_res = await db.execute(
+        select(Certificate, Course)
+        .join(Course, Course.id == Certificate.course_id)
+        .where(Certificate.user_id == current_user.id)
+        .order_by(Certificate.issued_at.desc())
+    )
+    
+    certs_data = []
+    for cert, c in certs_res.all():
+        pdf_url = cert.pdf_url
+        if pdf_url and pdf_url.startswith("/") and not pdf_url.startswith("http"):
+            pdf_url = f"{settings.BACKEND_URL}{pdf_url}"
+            
+        certs_data.append({
+            "id": cert.id,
+            "course_id": c.id,
+            "course_title": c.title,
+            "verification_code": cert.verification_code,
+            "pdf_url": pdf_url,
+            "issued_at": cert.issued_at.isoformat(),
+        })
+
+    return success({
+        "enrollments": enrollments_data,
+        "certificates": certs_data,
+        "stats": {
+            "total_enrolled": len(enrollments_data),
+            "completed_count": len([e for e in enrollments_data if e["completed_at"]]),
+            "in_progress_count": len([e for e in enrollments_data if not e["completed_at"]]),
+            "certificates_count": len(certs_data),
+        }
+    })
+
+
+@router.get("/certificates/{user_id}")
+async def get_user_certificates(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns all earned certificates for a specific user.
+    """
+    certs_res = await db.execute(
+        select(Certificate, Course)
+        .join(Course, Course.id == Certificate.course_id)
+        .where(Certificate.user_id == user_id)
+        .order_by(Certificate.issued_at.desc())
+    )
+    certs_data = []
+    for cert, c in certs_res.all():
+        pdf_url = cert.pdf_url
+        if pdf_url and pdf_url.startswith("/") and not pdf_url.startswith("http"):
+            pdf_url = f"{settings.BACKEND_URL}{pdf_url}"
+        certs_data.append({
+            "id": cert.id,
+            "course_id": c.id,
+            "course_title": c.title,
+            "verification_code": cert.verification_code,
+            "pdf_url": pdf_url,
+            "issued_at": cert.issued_at.isoformat(),
+        })
+    return success(certs_data)
+
+
+@router.post("/certificates/generate/{enrollment_id}")
+async def generate_certificate_for_enrollment(
+    enrollment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Explicitly generate or refresh a Certificate of Completion for an enrollment.
+    """
+    enrollment_res = await db.execute(select(Enrollment).where(Enrollment.id == enrollment_id))
+    enrollment = enrollment_res.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+
+    # Verify authorization
+    if enrollment.user_id != current_user.id and current_user.role not in ["org_admin", "super_admin", "hr", "manager"]:
+        raise HTTPException(status_code=403, detail="Not authorized to generate certificate for this learner")
+
+    # Ensure course is marked complete
+    if not enrollment.completed_at:
+        enrollment.status = "completed"
+        enrollment.completed_at = datetime.utcnow()
+        enrollment.progress_percent = 100.0
+
+    await _generate_certificate_inline(enrollment.id, enrollment.user_id, db)
+    await db.commit()
+
+    cert_res = await db.execute(
+        select(Certificate, Course)
+        .join(Course, Course.id == Certificate.course_id)
+        .where(Certificate.user_id == enrollment.user_id, Certificate.course_id == enrollment.course_id)
+    )
+    row = cert_res.one_or_none()
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to generate certificate")
+    cert, c = row
+
+    pdf_url = cert.pdf_url
+    if pdf_url and pdf_url.startswith("/") and not pdf_url.startswith("http"):
+        pdf_url = f"{settings.BACKEND_URL}{pdf_url}"
+
+    return success({
+        "id": cert.id,
+        "course_title": c.title,
+        "verification_code": cert.verification_code,
+        "pdf_url": pdf_url,
+        "issued_at": cert.issued_at.isoformat(),
+    }, "Certificate generated successfully")

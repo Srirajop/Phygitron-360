@@ -66,6 +66,7 @@ import CourseLibrary from './pages/forge/CourseLibrary';
 import MyCourses from './pages/forge/MyCourses';
 import Transcript from './pages/forge/Transcript';
 import TeamAnalytics from './pages/forge/TeamAnalytics';
+import VerifyCertificate from './pages/forge/VerifyCertificate';
 
 // Deploy
 import EmployeeList from './pages/deploy/EmployeeList';
@@ -167,6 +168,8 @@ export default function App() {
             <Route path="/" element={<RootRedirect />} />
             <Route path="/login" element={<Login />} />
             <Route path="/onboarding/setup" element={<SelfOnboarding />} />
+            <Route path="/forge/verify-cert/:code" element={<VerifyCertificate />} />
+            <Route path="/verify-certificate/:code" element={<VerifyCertificate />} />
             <Route path="/change-password" element={<PrivateRoute><AppLayout><ChangePassword /></AppLayout></PrivateRoute>} />
 
             {/* Platform / Super Admin */}
