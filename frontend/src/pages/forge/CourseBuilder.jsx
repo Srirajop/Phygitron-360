@@ -1,596 +1,1237 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { forgeApi } from '../../api';
 import { useAuth } from '../../context/AuthContext';
-import { 
-  PlusCircle, Trash2, ArrowRight, ArrowLeft, Image as ImageIcon, 
-  Video, FileText, HelpCircle, CheckCircle, Save, Send, Eye,
-  BookOpen, AlignLeft, Clock, BarChart, Settings, Upload, Zap
+import {
+  Sparkles, BookOpen, Layers, PlusCircle, Trash2, Save,
+  Play, CheckCircle, Clock, ArrowLeft, ArrowRight, ChevronRight,
+  FileText, Award, HelpCircle, Edit3, Eye, Download, RefreshCw,
+  Zap, AlignLeft, Check, Radio, AlertTriangle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import TopHeader from '../../components/TopHeader';
 import './forge_styles.css';
 
-const blankSection = () => ({ 
-  title: '', 
-  order_index: 0, 
-  content_type: 'video', 
-  content_url: '', 
-  content_markdown: '',
-  duration_minutes: 30, 
-  pass_score: 60, 
-  quizzes: [] 
-});
-
-const blankQuiz = () => ({
-  question: '',
-  options: ['', '', '', ''],
-  correct_index: 0,
-  explanation: ''
+const defaultLesson = (idx = 0) => ({
+  title: `Lesson ${idx + 1}: Core Principles`,
+  duration_minutes: 15,
+  content_type: 'article',
+  summary_card: 'Key foundational insight summarizing the primary objective of this module.',
+  content_markdown: `## Overview\n\nThis lesson introduces critical concepts and methodologies.\n\n### Core Pillars\n- **Principle 1**: Reliability and scalability by design.\n- **Principle 2**: Idempotent operations and resilient workflows.\n\n### Practical Implementation\nBegin by mapping requirements against architectural constraints before deploying.`,
+  narration_script: `Welcome to this session. We are going to explore foundational best practices and how to implement them in production.`,
+  key_takeaways: ['Understand core primitives', 'Apply defensive architecture', 'Validate output accuracy'],
+  quizzes: [
+    {
+      question_text: 'What is the primary architectural principle emphasized in this lesson?',
+      options: ['Reliability and scalability by design', 'Bypassing verification gates', 'Eliminating telemetry logging', 'Ad-hoc script execution'],
+      correct_answer: 'Reliability and scalability by design',
+      explanation: 'Building for reliability and scalability from day one prevents catastrophic production bottlenecks.',
+      marks: 1.0,
+    }
+  ]
 });
 
 export default function CourseBuilder() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
+  const courseIdParam = searchParams.get('id');
   const { user } = useAuth();
-  const [step, setStep] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const [uploadingSection, setUploadingSection] = useState(null);
-  const [expandedIndex, setExpandedIndex] = useState(0);
-  const [isBulkMode, setIsBulkMode] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState('');
-  const canPublishDirectly = ['org_admin', 'super_admin'].includes(user?.role);
 
-  // Step 1: Metadata
-  const [title, setTitle] = useState(''); 
-  const [desc, setDesc] = useState('');
+  // Mode: 'ai' (AI Generator) | 'studio' (Visual Editor)
+  const [mode, setMode] = useState(courseIdParam ? 'studio' : 'ai');
+  const [activeLessonIdx, setActiveLessonIdx] = useState(0);
+  const [editorSubTab, setEditorSubTab] = useState('cards'); // 'cards' | 'markdown' | 'quiz'
+
+  // Course State
+  const [courseId, setCourseId] = useState(courseIdParam ? parseInt(courseIdParam, 10) : null);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Engineering');
-  const [difficulty, setDifficulty] = useState('beginner'); 
-  const [hours, setHours] = useState(4);
+  const [difficulty, setDifficulty] = useState('beginner');
+  const [estimatedHours, setEstimatedHours] = useState(2.0);
+  const [domainId, setDomainId] = useState('');
+  const [domains, setDomains] = useState([]);
+  const [lessons, setLessons] = useState([defaultLesson(0)]);
 
-  // Step 2 & 3: Curriculum & Quizzes
-  const [sections, setSections] = useState([blankSection()]);
+  // AI Prompt State
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiAudience, setAiAudience] = useState('Enterprise Engineering & Operations Staff');
+  const [aiTone, setAiTone] = useState('Professional & Practical');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  const [previewLessonIdx, setPreviewLessonIdx] = useState(0);
+  const [previewQuizAnswer, setPreviewQuizAnswer] = useState({});
+  const [previewQuizSubmitted, setPreviewQuizSubmitted] = useState({});
 
-  const addSection = () => setSections(s => [...s, { ...blankSection(), order_index: s.length }]);
-  const updateSection = (i, k, v) => setSections(s => s.map((sec, si) => si === i ? { ...sec, [k]: v } : sec));
-  const removeSection = (i) => setSections(s => s.filter((_, si) => si !== i));
-  const moveSection = (i, dir) => {
-    if ((i === 0 && dir === -1) || (i === sections.length - 1 && dir === 1)) return;
-    const s = [...sections];
-    const temp = s[i];
-    s[i] = s[i + dir];
-    s[i + dir] = temp;
-    // Update order_index
-    s.forEach((sec, idx) => sec.order_index = idx);
-    setSections(s);
+  // Load Domains
+  useEffect(() => {
+    forgeApi.domains()
+      .then(res => setDomains(res.data.data || []))
+      .catch(() => {});
+  }, []);
+
+  // Load existing course if ID is present
+  useEffect(() => {
+    if (!courseIdParam) return;
+    forgeApi.getCourse(courseIdParam)
+      .then(res => {
+        const c = res.data.data;
+        if (!c) return;
+        setCourseId(c.id);
+        setTitle(c.title || '');
+        setDescription(c.description || '');
+        setCategory(c.category || 'General');
+        setDifficulty(c.difficulty || 'beginner');
+        setEstimatedHours(c.estimated_hours || 2.0);
+        setDomainId(c.domain_id || '');
+        if (c.sections && c.sections.length > 0) {
+          setLessons(c.sections.map((sec, idx) => ({
+            id: sec.id,
+            title: sec.title || `Lesson ${idx + 1}`,
+            duration_minutes: sec.duration_minutes || 15,
+            content_type: sec.content_type || 'article',
+            summary_card: 'Core lesson fundamentals and key takeaways.',
+            content_markdown: sec.content_markdown || '',
+            narration_script: '',
+            key_takeaways: ['Core concept review', 'Operational checklist'],
+            quizzes: (sec.quizzes || []).map(q => ({
+              question_text: q.question_text,
+              options: q.options || [],
+              correct_answer: q.correct_answer,
+              explanation: q.explanation || '',
+              marks: q.marks || 1.0,
+            }))
+          })));
+        }
+      })
+      .catch(() => toast.error('Failed to load existing course'));
+  }, [courseIdParam]);
+
+  // AI Generation Handler
+  const handleGenerateCourse = async () => {
+    if (!aiPrompt.trim()) {
+      toast.error('Please enter a course topic, storyboard, or syllabus description.');
+      return;
+    }
+
+    setIsGenerating(true);
+    const toastId = toast.loading('Generating course with AI...');
+
+    try {
+      const res = await forgeApi.generateAiCourse({
+        prompt: aiPrompt.trim(),
+        audience: aiAudience,
+        difficulty: difficulty,
+        estimated_hours: estimatedHours,
+        category: category,
+        domain_id: domainId ? parseInt(domainId, 10) : null,
+        tone: aiTone,
+      });
+
+      const data = res.data.data;
+      setTitle(data.title || 'Untitled AI Course');
+      setDescription(data.description || '');
+      setDifficulty(data.difficulty || difficulty);
+      setEstimatedHours(data.estimated_hours || estimatedHours);
+      setCategory(data.category || category);
+
+      if (data.lessons && data.lessons.length > 0) {
+        setLessons(data.lessons);
+        setActiveLessonIdx(0);
+      }
+
+      toast.success('Course generated successfully! Now refine it in the Visual Studio.', { id: toastId });
+      setMode('studio');
+    } catch (err) {
+      console.error('Course generation error:', err);
+      const detail = err.response?.data?.detail || 'Failed to generate course. Please try again.';
+      toast.error(detail, { id: toastId });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
-  const handleFileUpload = async (i, file) => {
-    if (!file) return;
-    setUploadingSection(i);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await forgeApi.uploadVideo(formData);
-      updateSection(i, 'content_url', res.data.data.url);
-      toast.success('Video uploaded successfully!');
-    } catch {
-      toast.error('Failed to upload video');
-    } finally {
-      setUploadingSection(null);
+  // Lesson Management
+  const addLesson = () => {
+    const nextIdx = lessons.length;
+    setLessons([...lessons, defaultLesson(nextIdx)]);
+    setActiveLessonIdx(nextIdx);
+  };
+
+  const removeLesson = (idx) => {
+    if (lessons.length <= 1) {
+      toast.error('A course must have at least one lesson.');
+      return;
     }
+    const filtered = lessons.filter((_, i) => i !== idx);
+    setLessons(filtered);
+    setActiveLessonIdx(Math.max(0, idx - 1));
+  };
+
+  const moveLesson = (idx, dir) => {
+    if ((idx === 0 && dir === -1) || (idx === lessons.length - 1 && dir === 1)) return;
+    const reordered = [...lessons];
+    const target = reordered[idx];
+    reordered[idx] = reordered[idx + dir];
+    reordered[idx + dir] = target;
+    setLessons(reordered);
+    setActiveLessonIdx(idx + dir);
+  };
+
+  const updateActiveLesson = (field, val) => {
+    setLessons(prev => {
+      const copy = [...prev];
+      copy[activeLessonIdx] = { ...copy[activeLessonIdx], [field]: val };
+      return copy;
+    });
   };
 
   // Quiz Management
-  const addQuiz = (secIndex) => {
-    setSections(s => s.map((sec, si) => {
-      if (si !== secIndex) return sec;
-      return { ...sec, quizzes: [...sec.quizzes, blankQuiz()] };
-    }));
-  };
-  const updateQuiz = (secIndex, quizIndex, key, value) => {
-    setSections(s => s.map((sec, si) => {
-      if (si !== secIndex) return sec;
-      const newQuizzes = sec.quizzes.map((q, qi) => qi === quizIndex ? { ...q, [key]: value } : q);
-      return { ...sec, quizzes: newQuizzes };
-    }));
-  };
-  const updateQuizOption = (secIndex, quizIndex, optIndex, value) => {
-    setSections(s => s.map((sec, si) => {
-      if (si !== secIndex) return sec;
-      const newQuizzes = sec.quizzes.map((q, qi) => {
-        if (qi !== quizIndex) return q;
-        const newOpts = [...q.options];
-        newOpts[optIndex] = value;
-        return { ...q, options: newOpts };
-      });
-      return { ...sec, quizzes: newQuizzes };
-    }));
-  };
-  const removeQuiz = (secIndex, quizIndex) => {
-    setSections(s => s.map((sec, si) => {
-      if (si !== secIndex) return sec;
-      return { ...sec, quizzes: sec.quizzes.filter((_, qi) => qi !== quizIndex) };
-    }));
+  const addQuizQuestion = () => {
+    const activeLesson = lessons[activeLessonIdx];
+    const newQuiz = {
+      question_text: 'What is the primary conclusion of this lesson?',
+      options: ['Option A (Recommended)', 'Option B', 'Option C', 'Option D'],
+      correct_answer: 'Option A (Recommended)',
+      explanation: 'Detailed pedagogical explanation of why this answer is correct.',
+      marks: 1.0,
+    };
+    const updatedQuizzes = [...(activeLesson.quizzes || []), newQuiz];
+    updateActiveLesson('quizzes', updatedQuizzes);
   };
 
-  const handleBulkZipUpload = async (file) => {
-    if (!file) return;
-    setLoading(true);
-    setBulkProgress('Reading SCORM manifests and arranging lessons...');
-    try {
-      const res = await forgeApi.bulkUploadZip(file);
-      const summary = res?.data?.data?.import_summary;
-      const count = res?.data?.data?.sections_created;
-      const mode = summary?.mode === 'scorm_manifest' ? 'SCORM package' : 'learning materials';
-      toast.success(`Successfully imported ${count || 'all'} lessons from ${mode}.`);
-      nav('/forge/my-courses');
-    } catch (err) {
-      console.error('Bulk upload error:', err);
-      const detail = err?.response?.data?.detail || err?.message || 'Bulk upload failed';
-      toast.error(detail, { duration: 5000 });
-    } finally {
-      setLoading(false);
-      setBulkProgress('');
-      setIsBulkMode(false);
+  const updateQuiz = (qIdx, field, val) => {
+    const activeLesson = lessons[activeLessonIdx];
+    const quizzes = [...(activeLesson.quizzes || [])];
+    quizzes[qIdx] = { ...quizzes[qIdx], [field]: val };
+    updateActiveLesson('quizzes', quizzes);
+  };
+
+  const updateQuizOption = (qIdx, optIdx, val) => {
+    const activeLesson = lessons[activeLessonIdx];
+    const quizzes = [...(activeLesson.quizzes || [])];
+    const opts = [...quizzes[qIdx].options];
+    const oldVal = opts[optIdx];
+    opts[optIdx] = val;
+    // If the changed option was the correct answer, update correct_answer too
+    if (quizzes[qIdx].correct_answer === oldVal) {
+      quizzes[qIdx].correct_answer = val;
     }
+    quizzes[qIdx].options = opts;
+    updateActiveLesson('quizzes', quizzes);
   };
 
-  const save = async (action = 'draft') => {
-    if (!title.trim()) { toast.error('Please enter a course title'); setStep(1); return; }
-    
-    // Validation
-    if (sections.length === 0) { toast.error('Please add at least one lesson'); setStep(2); return; }
-    for (const sec of sections) {
-      if (!sec.title.trim()) { toast.error('All lessons must have a title'); setStep(2); return; }
-      if (sec.content_type === 'quiz' && sec.quizzes.length === 0) {
-        toast.error(`Lesson "${sec.title}" needs questions for the quiz`); setStep(3); return;
-      }
+  const removeQuizQuestion = (qIdx) => {
+    const activeLesson = lessons[activeLessonIdx];
+    const quizzes = (activeLesson.quizzes || []).filter((_, i) => i !== qIdx);
+    updateActiveLesson('quizzes', quizzes);
+  };
+
+  // Save Course Handler
+  const handleSaveCourse = async (publish = true) => {
+    if (!title.trim()) {
+      toast.error('Please enter a course title.');
+      return;
+    }
+    if (lessons.length === 0) {
+      toast.error('Course must have at least one lesson.');
+      return;
     }
 
-    setLoading(true);
+    setIsSaving(true);
+    const toastId = toast.loading(publish ? 'Publishing course to library...' : 'Saving draft...');
+
     try {
-      const payload = { 
-        title, 
-        description: desc, 
-        category,
-        difficulty, 
-        estimated_hours: hours, 
-        sections: sections.map(s => ({
-          ...s,
-          // Ensure correct mapping for backend
-          content_type: s.content_type,
-          content_url: s.content_type === 'article' ? null : s.content_url,
-          content_markdown: s.content_type === 'article' ? s.content_markdown : null,
-          quizzes: s.quizzes?.map(q => ({
-            question_text: q.question,
-            options: q.options,
-            correct_answer: q.options[q.correct_index] || '',
-            explanation: q.explanation,
-            marks: 1.0
-          }))
+      const payload = {
+        id: courseId,
+        title: title.trim(),
+        description: description.trim(),
+        difficulty: difficulty,
+        estimated_hours: estimatedHours,
+        category: category,
+        domain_id: domainId ? parseInt(domainId, 10) : null,
+        status: publish ? 'published' : 'draft',
+        lessons: lessons.map(l => ({
+          title: l.title,
+          duration_minutes: l.duration_minutes || 15,
+          content_type: l.content_type || 'article',
+          summary_card: l.summary_card || '',
+          content_markdown: l.content_markdown || '',
+          narration_script: l.narration_script || '',
+          key_takeaways: l.key_takeaways || [],
+          quizzes: l.quizzes || [],
         }))
       };
-      const res = await forgeApi.createCourse(payload);
-      const courseId = res.data.data.id;
 
-      if (action === 'publish' && canPublishDirectly) {
-        await forgeApi.publishCourse(courseId);
-        toast.success('Course published!');
-        nav('/forge/my-courses');
-      } else if (action === 'review' || (action === 'publish' && !canPublishDirectly)) {
-        await forgeApi.submitForReview(courseId);
-        toast.success('Course submitted for review!');
-        nav('/forge/my-courses');
-      } else {
-        toast.success('Draft saved.');
-        nav('/forge/my-courses');
-      }
-    } catch (err) { 
-      toast.error(err?.response?.data?.detail || 'Failed to save course'); 
-    } finally { 
-      setLoading(false); 
+      const res = await forgeApi.saveAiCourse(payload);
+      toast.success(publish ? '🎉 Course published to Course Library!' : 'Draft saved successfully!', { id: toastId });
+      nav('/forge/library');
+    } catch (err) {
+      console.error('Save course error:', err);
+      const detail = err.response?.data?.detail || 'Failed to save course.';
+      toast.error(detail, { id: toastId });
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const hasQuizzes = sections.some(s => s.content_type === 'quiz');
-  const steps = [
-    { id: 1, name: 'Basic Info', icon: <BookOpen size={16} /> },
-    { id: 2, name: 'Curriculum', icon: <AlignLeft size={16} /> },
-    { id: 3, name: 'Review', icon: <CheckCircle size={16} /> }
-  ];
-
-  const categories = ['Engineering', 'Architecture', 'Design', 'Strategy', 'Product', 'Data', 'Leadership'];
+  const activeLesson = lessons[activeLessonIdx] || lessons[0] || defaultLesson(0);
 
   return (
     <div className="forge-grain" style={{ minHeight: '100vh', padding: '0 40px 80px', background: 'var(--forge-bg)', color: 'var(--forge-text-main)' }}>
       <TopHeader />
-      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', paddingTop: 40, marginBottom: 60 }}>
+
+      {/* ── Top Header Navigation ────────────────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 28, paddingBottom: 24, borderBottom: '1px solid var(--forge-border)', marginBottom: 28, flexWrap: 'wrap', gap: 16 }}>
         <div>
-          <button className="btn btn-ghost btn-sm" style={{ marginBottom: 16, padding: '4px 0', color: 'var(--forge-text-dim)', fontSize: '0.75rem', fontWeight: 800 }} onClick={() => nav('/forge/my-courses')}>
-            <ArrowLeft size={14} /> COURSES
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => nav('/forge/library')}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 700, padding: 0, marginBottom: 8 }}
+          >
+            <ArrowLeft size={14} /> Back to Course Library
           </button>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: '2.8rem', fontWeight: 900, letterSpacing: '-0.05em', color: 'var(--forge-text-main)' }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(124, 58, 237, 0.1)', border: '1px solid rgba(124, 58, 237, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--forge-accent)' }}>
-              <Zap size={22} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(124, 58, 237, 0.15)', color: '#A78BFA', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Sparkles size={20} />
             </div>
-            Studio
-          </h1>
-          <p style={{ margin: 0, fontSize: '1.1rem', color: 'var(--forge-text-dim)' }}>Create refined learning courses or import materials in bulk.</p>
+            <div>
+              <h1 style={{ margin: 0, fontSize: '1.8rem', fontWeight: 900, letterSpacing: '-0.03em' }}>
+                AI Course Studio & Visual Editor
+              </h1>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                Generate full interactive enterprise courses automatically with Groq, then refine visually.
+              </p>
+            </div>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <label className="btn btn-ghost" style={{ background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', borderRadius: 12, height: 50, padding: '0 24px', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontWeight: 800, color: 'var(--forge-text-main)' }}>
-            {loading ? <div className="spinner" style={{ width: 14, height: 14 }} /> : <Upload size={18} />} 
-            SCORM / ZIP IMPORT
-            <input type="file" accept=".zip" style={{ display: 'none' }} onChange={e => handleBulkZipUpload(e.target.files[0])} disabled={loading} />
-          </label>
+
+        {/* Mode Switcher & Global Actions */}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={{ display: 'flex', background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', borderRadius: 12, padding: 4 }}>
+            <button
+              onClick={() => setMode('ai')}
+              style={{
+                padding: '8px 16px',
+                borderRadius: 8,
+                fontSize: '0.82rem',
+                fontWeight: 800,
+                border: 'none',
+                cursor: 'pointer',
+                background: mode === 'ai' ? 'var(--forge-accent)' : 'transparent',
+                color: mode === 'ai' ? 'white' : 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <Sparkles size={14} /> 1. AI Architect
+            </button>
+            <button
+              onClick={() => setMode('studio')}
+              style={{
+                padding: '8px 16px',
+                borderRadius: 8,
+                fontSize: '0.82rem',
+                fontWeight: 800,
+                border: 'none',
+                cursor: 'pointer',
+                background: mode === 'studio' ? 'var(--forge-accent)' : 'transparent',
+                color: mode === 'studio' ? 'white' : 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <Edit3 size={14} /> 2. Visual Studio
+            </button>
+          </div>
+
+          <button
+            onClick={() => setPreviewModalOpen(true)}
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 16px', borderRadius: 12, fontWeight: 700, fontSize: '0.82rem' }}
+          >
+            <Eye size={15} /> Preview As Learner
+          </button>
+
+          <button
+            onClick={() => handleSaveCourse(true)}
+            disabled={isSaving}
+            className="btn btn-primary"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, padding: '10px 20px',
+              borderRadius: 12, fontWeight: 800, fontSize: '0.85rem',
+              background: 'linear-gradient(135deg, #7C3AED, #6D28D9)',
+              boxShadow: '0 4px 14px rgba(124, 58, 237, 0.3)'
+            }}
+          >
+            {isSaving ? <div className="spinner" style={{ width: 14, height: 14 }} /> : <CheckCircle size={16} />}
+            Publish Course
+          </button>
         </div>
       </div>
 
-      <div className="page-body" style={{ maxWidth: 1000, margin: '0 auto' }}>
-        {/* Wizard Progress Bar */}
-        <div style={{ display: 'flex', marginBottom: 48, background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', borderRadius: '20px', padding: 8 }}>
-          {steps.map((s, i) => {
-            const isActive = step === s.id;
-            const isCompleted = step > s.id;
-            // Skip assessment step if no quizzes are added
-            if (s.id === 3 && !hasQuizzes && step !== 3) return null;
-            
-            return (
-              <div key={s.id} 
-                style={{ 
-                  flex: 1, textAlign: 'center', padding: '14px 16px', borderRadius: '14px', 
-                  fontWeight: 800, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em',
-                  background: isActive ? 'var(--forge-accent)' : 'transparent', 
-                  color: isActive ? 'white' : isCompleted ? 'var(--forge-accent)' : 'var(--forge-text-dim)', 
-                  transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)', cursor: isCompleted ? 'pointer' : 'default',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10
+      {/* ── TAB 1: AI Course Architect ────────────────────────────────────── */}
+      {mode === 'ai' && (
+        <div className="animate-fade-in" style={{ maxWidth: 880, margin: '0 auto' }}>
+          <div className="card" style={{ padding: '36px 32px', borderRadius: 20, background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)' }}>
+            <div style={{ marginBottom: 24 }}>
+              <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--forge-accent)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Prompt to Interactive Curriculum
+              </span>
+              <h2 style={{ margin: '4px 0 0', fontSize: '1.6rem', fontWeight: 900 }}>
+                What would you like to teach your employees?
+              </h2>
+              <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                Paste a topic, outline, raw notes, or storyboard. Our Groq-powered AI will generate a complete interactive course with structured lessons, takeaways, audio narration scripts, and knowledge checks.
+              </p>
+            </div>
+
+            {/* Prompt Textarea */}
+            <div className="form-group" style={{ marginBottom: 24 }}>
+              <label style={{ fontSize: '0.82rem', fontWeight: 700, display: 'block', marginBottom: 8 }}>
+                Course Topic, Storyboard Notes, or Syllabus *
+              </label>
+              <textarea
+                className="form-control"
+                rows={5}
+                value={aiPrompt}
+                onChange={e => setAiPrompt(e.target.value)}
+                placeholder="e.g. Enterprise Incident Response & Forensics: Live triaging, threat containment, log analysis with Splunk, post-mortem playbooks. Target: SecOps engineers. Include voiceover narration, key concept cards, and formative quiz checks."
+                style={{
+                  fontSize: '0.95rem',
+                  lineHeight: 1.5,
+                  padding: 16,
+                  borderRadius: 14,
+                  background: '#0B0F19',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  color: 'white',
+                  resize: 'vertical'
                 }}
-                onClick={() => isCompleted && setStep(s.id)}
-              >
-                {isCompleted ? <CheckCircle size={15} /> : s.icon}
-                <span>{s.name}</span>
-              </div>
-            );
-          })}
-        </div>
+              />
+            </div>
 
-        {/* Step 1: Conceptualize */}
-        {step === 1 && (
-          <div className="animate-fade-in">
-            <div className="forge-course-card" style={{ background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', padding: 40 }}>
-              <div style={{ marginBottom: 32 }}>
-                <h3 style={{ color: 'var(--forge-text-main)', margin: 0, fontSize: '1.25rem' }}>Course Details</h3>
-                <p style={{ color: 'var(--forge-text-dim)', fontSize: '0.9rem', margin: '4px 0 0' }}>Tell us about the course you're creating.</p>
-              </div>
-
-              <div className="form-group" style={{ marginBottom: 32 }}>
-                <label className="forge-card-category" style={{ fontSize: '0.65rem', display: 'block' }}>COURSE TITLE *</label>
-                <input 
-                  className="form-control" 
-                  value={title} 
-                  onChange={e => setTitle(e.target.value)} 
-                  placeholder="e.g., Designing Real-time Collaborative Systems at Scale" 
-                  autoFocus 
-                  style={{ background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', height: 56, fontSize: '1.1rem', borderRadius: 12 }}
+            {/* Generation Parameters Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 28 }}>
+              <div className="form-group">
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, display: 'block', marginBottom: 6 }}>
+                  Target Audience
+                </label>
+                <input
+                  type="text"
+                  className="form-control"
+                  value={aiAudience}
+                  onChange={e => setAiAudience(e.target.value)}
+                  placeholder="e.g. Software Engineers, HR, Sales"
+                  style={{ borderRadius: 10, background: '#0B0F19', color: 'white', border: '1px solid rgba(255,255,255,0.12)' }}
                 />
               </div>
 
-              <div className="form-group" style={{ marginBottom: 32 }}>
-                <label className="forge-card-category" style={{ fontSize: '0.65rem', display: 'block' }}>SUMMARY</label>
-                <textarea 
-                  className="form-control" 
-                  rows={4} 
-                  value={desc} 
-                  onChange={e => setDesc(e.target.value)} 
-                  placeholder="Synthesize the primary objectives and learning outcomes..." 
-                  style={{ background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', borderRadius: 12, padding: 20, resize: 'none' }}
+              <div className="form-group">
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, display: 'block', marginBottom: 6 }}>
+                  Difficulty Level
+                </label>
+                <select
+                  className="form-control"
+                  value={difficulty}
+                  onChange={e => setDifficulty(e.target.value)}
+                  style={{ borderRadius: 10, background: '#0B0F19', color: 'white', border: '1px solid rgba(255,255,255,0.12)' }}
+                >
+                  <option value="beginner">Beginner (Foundational)</option>
+                  <option value="intermediate">Intermediate (Practitioner)</option>
+                  <option value="advanced">Advanced (Deep Dive)</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, display: 'block', marginBottom: 6 }}>
+                  Category / Domain
+                </label>
+                <select
+                  className="form-control"
+                  value={category}
+                  onChange={e => setCategory(e.target.value)}
+                  style={{ borderRadius: 10, background: '#0B0F19', color: 'white', border: '1px solid rgba(255,255,255,0.12)' }}
+                >
+                  <option value="Engineering">Engineering</option>
+                  <option value="Product">Product</option>
+                  <option value="Design">Design</option>
+                  <option value="Cybersecurity">Cybersecurity</option>
+                  <option value="Leadership">Leadership</option>
+                  <option value="HR & Compliance">HR & Compliance</option>
+                  <option value="General">General</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, display: 'block', marginBottom: 6 }}>
+                  Estimated Time (Hours)
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0.5"
+                  max="40"
+                  className="form-control"
+                  value={estimatedHours}
+                  onChange={e => setEstimatedHours(parseFloat(e.target.value) || 2.0)}
+                  style={{ borderRadius: 10, background: '#0B0F19', color: 'white', border: '1px solid rgba(255,255,255,0.12)' }}
                 />
               </div>
+            </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 24, marginBottom: 8 }}>
-                <div className="form-group">
-                  <label className="forge-card-category" style={{ fontSize: '0.65rem', display: 'block' }}>DOMAIN</label>
-                  <select 
-                    className="form-control" 
-                    value={category} 
-                    onChange={e => setCategory(e.target.value)}
-                    style={{ background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', height: 50, borderRadius: 12 }}
+            {/* Quick Inspiration Prompts */}
+            <div style={{ marginBottom: 28, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 12, padding: '14px 18px' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: '0.05em' }}>
+                Quick Inspiration Templates (Click to fill)
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {[
+                  { label: '🛡️ Zero Trust Architecture', prompt: 'Zero Trust Security Architecture: Identity-first security, micro-segmentation, continuous verification, and principle of least privilege in enterprise cloud networks.' },
+                  { label: '🤖 GenAI for Developers', prompt: 'Prompt Engineering & LLM Application Development: Retrieval-Augmented Generation (RAG), vector embeddings, token budgets, and preventing hallucinations in production.' },
+                  { label: '⚡ Incident Response', prompt: 'Enterprise Incident Response Playbooks: Triage, forensic analysis, stakeholder communication, root cause analysis, and blameless post-mortems.' },
+                  { label: '📊 Product Strategy', prompt: 'Data-Driven Product Strategy: North Star metrics, cohort retention analysis, customer journey mapping, and experiment velocity.' },
+                ].map((item, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setAiPrompt(item.prompt);
+                      setCategory(idx === 0 || idx === 2 ? 'Cybersecurity' : idx === 1 ? 'Engineering' : 'Product');
+                    }}
+                    style={{
+                      background: 'rgba(124, 58, 237, 0.1)',
+                      border: '1px solid rgba(124, 58, 237, 0.25)',
+                      borderRadius: 8,
+                      padding: '6px 12px',
+                      color: '#C4B5FD',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
                   >
-                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="forge-card-category" style={{ fontSize: '0.65rem', display: 'block' }}>COMPLEXITY</label>
-                  <select 
-                    className="form-control" 
-                    value={difficulty} 
-                    onChange={e => setDifficulty(e.target.value)}
-                    style={{ background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', height: 50, borderRadius: 12 }}
-                  >
-                    <option value="beginner">Beginner</option>
-                    <option value="intermediate">Intermediate</option>
-                    <option value="advanced">Advanced</option>
-                    <option value="expert">Expert</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="forge-card-category" style={{ fontSize: '0.65rem', display: 'block' }}>TIME NEEDED (HOURS)</label>
-                  <div style={{ position: 'relative' }}>
-                    <Clock size={14} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--forge-text-dim)' }} />
-                    <input 
-                      type="number" 
-                      className="form-control" 
-                      value={hours} 
-                      min={0.5} 
-                      step={0.5} 
-                      onChange={e => setHours(parseFloat(e.target.value))} 
-                      style={{ paddingLeft: 44, background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', height: 50, borderRadius: 12 }} 
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 40, borderTop: '1px solid var(--forge-border)', paddingTop: 40 }}>
-                <button className="btn btn-primary" onClick={() => { if(!title) toast.error('Title is required'); else setStep(2); }} style={{ height: 54, padding: '0 40px', borderRadius: 14, background: 'var(--forge-accent)', border: 'none', fontWeight: 800 }}>
-                  GO TO LESSON PLAN <ArrowRight size={18} />
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Step 2: Design Studio (Unified Curriculum & Content) */}
-        {step === 2 && (
-          <div className="animate-fade-in">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 32 }}>
-              <div>
-                <h3 style={{ margin: 0, color: 'var(--forge-text-main)', letterSpacing: '-0.02em', fontSize: '1.8rem' }}>Course Structure</h3>
-                <p style={{ color: 'var(--forge-text-dim)', fontSize: '0.95rem', margin: '6px 0 0' }}>Design your lessons and assessment modules in one focus area.</p>
-              </div>
-              <button className="btn btn-ghost" onClick={addSection} style={{ background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', borderRadius: 12, height: 44, padding: '0 24px', display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, color: 'var(--forge-text-main)' }}>
-                <PlusCircle size={16} /> ADD LESSON
-              </button>
-            </div>
-            
-            {sections.length === 0 && (
-              <div style={{ textAlign: 'center', padding: '100px 40px', background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', borderRadius: 32, borderStyle: 'dotted' }}>
-                <div style={{ fontSize: '3.5rem', marginBottom: 20, opacity: 0.5 }}>🏗️</div>
-                <p style={{ color: 'var(--forge-text-dim)', fontSize: '1.1rem', fontWeight: 600 }}>Your curriculum is empty. Start by adding your first lesson.</p>
-                <button className="btn btn-primary" onClick={addSection} style={{ marginTop: 24, background: 'var(--forge-accent)', border: 'none', borderRadius: 12, padding: '14px 32px' }}>
-                  <PlusCircle size={16} /> ADD FIRST LESSON
-                </button>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-              {sections.map((s, i) => {
-                const isExpanded = expandedIndex === i;
-                return (
-                  <div key={i} className={`forge-course-card ${isExpanded ? 'expanded' : ''}`} style={{ 
-                    background: 'var(--forge-card-bg)', 
-                    border: isExpanded ? '2px solid var(--forge-accent)' : '1px solid var(--forge-border)', 
-                    borderRadius: 24,
-                    padding: isExpanded ? 40 : 24,
-                    transition: 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
-                    boxShadow: isExpanded ? '0 20px 60px rgba(0,0,0,0.15)' : 'none'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 20, flex: 1 }}>
-                        <div style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--forge-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, color: 'var(--forge-accent)', border: '1px solid var(--forge-border)' }}>
-                          {i + 1}
-                        </div>
-                        {isExpanded ? (
-                          <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                            <input 
-                              className="form-control" 
-                              value={s.title} 
-                              onChange={e => updateSection(i, 'title', e.target.value)} 
-                              placeholder="Lesson Title..." 
-                              style={{ background: 'transparent', border: 'none', borderBottom: '1px solid var(--forge-border)', borderRadius: 0, fontSize: '1.4rem', fontWeight: 800, color: 'var(--forge-text-main)', padding: '4px 0' }} 
-                            />
-                          </div>
-                        ) : (
-                          <div style={{ flex: 1 }}>
-                            <h4 style={{ margin: 0, color: 'var(--forge-text-main)', fontSize: '1.15rem', fontWeight: 700 }}>{s.title || 'Untitled Lesson'}</h4>
-                            <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
-                              <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--forge-accent)', letterSpacing: '0.05em' }}>{s.content_type.toUpperCase()}</span>
-                              <span style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--forge-text-dim)' }}>{s.duration_minutes} MINS</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <button className="btn btn-ghost" style={{ padding: 8, height: 'auto', minWidth: 0, color: 'var(--forge-text-dim)' }} disabled={i===0} onClick={() => moveSection(i, -1)}>▲</button>
-                        <button className="btn btn-ghost" style={{ padding: 8, height: 'auto', minWidth: 0, color: 'var(--forge-text-dim)' }} disabled={i===sections.length-1} onClick={() => moveSection(i, 1)}>▼</button>
-                        <button 
-                          className={`btn ${isExpanded ? 'btn-primary' : 'btn-ghost'}`} 
-                          onClick={() => setExpandedIndex(isExpanded ? -1 : i)}
-                          style={{ borderRadius: 12, padding: '8px 24px', fontSize: '0.75rem', fontWeight: 800, background: isExpanded ? 'var(--forge-accent)' : 'var(--forge-card-bg)', border: isExpanded ? 'none' : '1px solid var(--forge-border)', color: isExpanded ? '#FFF' : 'var(--forge-text-main)' }}
-                        >
-                          {isExpanded ? 'CONFIRM' : 'OPEN EDITOR'}
-                        </button>
-                        <button className="btn btn-ghost" style={{ color: '#EF4444', padding: 8, height: 'auto', minWidth: 0 }} onClick={() => removeSection(i)}><Trash2 size={18} /></button>
-                      </div>
-                    </div>
-
-                    {isExpanded && (
-                      <div className="animate-fade-in" style={{ marginTop: 40, paddingTop: 40, borderTop: '1px solid var(--forge-border)' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32, marginBottom: 32 }}>
-                          <div className="form-group">
-                            <label className="forge-card-category" style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--forge-text-dim)' }}>TYPE OF CONTENT</label>
-                            <select className="form-control" value={s.content_type} onChange={e => updateSection(i, 'content_type', e.target.value)} style={{ background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', borderRadius: 12, height: 50 }}>
-                              <option value="video">Cinema / Video Courseware</option>
-                              <option value="article">Technical Article / Documentation</option>
-                              <option value="quiz">Verification Quiz / Assessment</option>
-                              <option value="pdf">Manual / PDF Document</option>
-                            </select>
-                          </div>
-                          <div className="form-group">
-                            <label className="forge-card-category" style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--forge-text-dim)' }}>ESTIMATED TIME (MINS)</label>
-                            <input type="number" className="form-control" value={s.duration_minutes} onChange={e => updateSection(i, 'duration_minutes', parseInt(e.target.value))} style={{ background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', borderRadius: 12, height: 50 }} />
-                          </div>
-                        </div>
-
-                        {s.content_type === 'video' && (
-                          <div className="form-group">
-                            <label className="forge-card-category" style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--forge-text-dim)' }}>VIDEO ASSET LOCATION</label>
-                            <div style={{ display: 'flex', gap: 12 }}>
-                              <input className="form-control" value={s.content_url} onChange={e => updateSection(i, 'content_url', e.target.value)} placeholder="https://..." style={{ flex: 1, background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', borderRadius: 12, height: 50 }} />
-                              <div style={{ position: 'relative' }}>
-                                <button className="btn btn-ghost" style={{ background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', borderRadius: 12, height: 50, padding: '0 24px', fontWeight: 800 }}>
-                                  {uploadingSection === i ? 'UPLOADING...' : 'UPLOAD RAW'}
-                                </button>
-                                <input type="file" accept="video/*" style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} onChange={(e) => handleFileUpload(i, e.target.files[0])} disabled={uploadingSection === i} />
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {s.content_type === 'article' && (
-                          <div className="form-group">
-                            <label className="forge-card-category" style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--forge-text-dim)', marginBottom: 12, display: 'block' }}>ARTICLE CONTENT (MARKDOWN)</label>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 1, background: 'var(--forge-border)', borderRadius: 16, overflow: 'hidden', border: '1px solid var(--forge-border)' }}>
-                              <textarea 
-                                className="form-control" 
-                                rows={14} 
-                                value={s.content_markdown} 
-                                onChange={e => updateSection(i, 'content_markdown', e.target.value)} 
-                                placeholder="# Introduction\nWrite the technical content for this lesson using markdown syntax..."
-                                style={{ border: 'none', borderRadius: 0, resize: 'none', background: 'var(--forge-bg)', color: 'var(--forge-text-main)', fontSize: '0.9rem', fontFamily: 'monospace', padding: 24 }}
-                              />
-                              <div style={{ padding: 24, background: 'rgba(0,0,0,0.02)', overflowY: 'auto', maxHeight: 400 }} className="markdown-body">
-                                <ReactMarkdown>{s.content_markdown || '*Neural preview awaiting data...*'}</ReactMarkdown>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {s.content_type === 'quiz' && (
-                          <div className="animate-fade-in">
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                              <label className="forge-card-category" style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--forge-text-dim)' }}>MCQ REPOSITORY ({s.quizzes.length})</label>
-                              <div className="form-group" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
-                                <span style={{ fontSize: '0.65rem', fontWeight: 800 }}>MINIMUM SCORE:</span>
-                                <input type="number" value={s.pass_score} onChange={e => updateSection(i, 'pass_score', parseInt(e.target.value))} style={{ width: 60, height: 32, background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', textAlign: 'center', borderRadius: 8, fontWeight: 900 }} />
-                                <span style={{ fontSize: '0.65rem', fontWeight: 800 }}>%</span>
-                              </div>
-                            </div>
-                            
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                              {s.quizzes.map((q, qi) => (
-                                <div key={qi} style={{ background: 'var(--forge-bg)', border: '1px solid var(--forge-border)', borderRadius: 20, padding: 32 }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
-                                    <span style={{ fontSize: '0.75rem', fontWeight: 900, color: 'var(--forge-accent)', background: 'rgba(124, 58, 237, 0.1)', padding: '4px 12px', borderRadius: 8 }}>QUESTION {qi + 1}</span>
-                                    <button className="btn btn-ghost" style={{ padding: 0, height: 'auto', color: '#EF4444' }} onClick={() => removeQuiz(i, qi)}><Trash2 size={16} /></button>
-                                  </div>
-                                  <textarea className="form-control" value={q.question} onChange={e => updateQuiz(i, qi, 'question', e.target.value)} placeholder="Formulate the verification query..." style={{ background: 'transparent', border: 'none', borderBottom: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', borderRadius: 0, marginBottom: 24, fontSize: '1.1rem', fontWeight: 700, padding: '0 0 12px 0' }} />
-                                  
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                                    {q.options.map((opt, oi) => (
-                                      <div key={oi} style={{ display: 'flex', gap: 12, alignItems: 'center', background: 'var(--forge-card-bg)', padding: '4px 16px', borderRadius: 12, border: q.correct_index === oi ? '2px solid #10B981' : '1px solid var(--forge-border)' }}>
-                                        <input 
-                                          type="radio" 
-                                          name={`q-${i}-${qi}`} 
-                                          checked={q.correct_index === oi} 
-                                          onChange={() => updateQuiz(i, qi, 'correct_index', oi)} 
-                                          style={{ accentColor: '#10B981', width: 18, height: 18 }} 
-                                        />
-                                        <input className="form-control" value={opt} onChange={e => updateQuizOption(i, qi, oi, e.target.value)} placeholder={`Potential Conclusion ${oi + 1}`} style={{ background: 'transparent', border: 'none', color: 'var(--forge-text-main)', borderRadius: 0, fontSize: '0.9rem' }} />
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              ))}
-                              <button className="btn btn-ghost" onClick={() => addQuiz(i)} style={{ background: 'var(--forge-card-bg)', border: '1px dashed var(--forge-border)', borderRadius: 16, padding: '24px', fontWeight: 800, color: 'var(--forge-text-main)' }}>
-                                <PlusCircle size={14} /> APPEND NEW VERIFICATION QUERY
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 80, paddingTop: 40, borderTop: '1px solid var(--forge-border)' }}>
-              <button className="btn btn-ghost" onClick={() => setStep(1)} style={{ color: 'var(--forge-text-dim)', fontWeight: 800 }}><ArrowLeft size={18} /> BACK TO IDENTITY</button>
-              <button className="btn btn-primary" onClick={() => setStep(3)} style={{ background: 'var(--forge-text-main)', color: 'var(--forge-bg)', border: 'none', borderRadius: 14, padding: '0 48px', height: 56, fontWeight: 900 }}>
-                REVIEW FOR PUBLISHING <ArrowRight size={18} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Step 3: Review & Publish (Final) */}
-        {step === 3 && (
-          <div className="animate-fade-in">
-            <div style={{ marginBottom: 32 }}>
-              <h3 style={{ margin: 0, color: 'var(--forge-text-main)', letterSpacing: '-0.02em', fontSize: '1.8rem' }}>Final Review</h3>
-              <p style={{ color: 'var(--forge-text-dim)', fontSize: '0.95rem', margin: '4px 0 0' }}>Confirm the architecture before committing to the neural engine.</p>
-            </div>
-            
-            <div className="forge-course-card" style={{ background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', padding: 40, marginBottom: 40, borderRadius: 24 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--forge-border)', paddingBottom: 32, marginBottom: 32 }}>
-                <div>
-                  <div className="forge-card-category" style={{ fontSize: '0.7rem', marginBottom: 12 }}>METADATA PROFILE</div>
-                  <h2 style={{ fontSize: '2.5rem', color: 'var(--forge-text-main)', margin: 0, letterSpacing: '-0.03em', fontWeight: 900 }}>{title || 'Untitled Course'}</h2>
-                  <p style={{ color: 'var(--forge-text-dim)', fontSize: '1.1rem', marginTop: 12, maxWidth: 600, lineHeight: 1.6 }}>{desc || 'Zero context provided.'}</p>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                   <div style={{ fontSize: '0.65rem', fontWeight: 900, color: 'var(--forge-accent)', background: 'rgba(124, 58, 237, 0.1)', padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(124, 58, 237, 0.2)', display: 'inline-block', marginBottom: 16 }}>{difficulty.toUpperCase()}</div>
-                   <div style={{ color: 'var(--forge-text-main)', fontWeight: 800, fontSize: '1.1rem', display: 'block' }}>{category.toUpperCase()}</div>
-                   <div style={{ color: 'var(--forge-text-dim)', fontSize: '0.8rem', marginTop: 6, fontWeight: 700 }}>{hours}H DURATION</div>
-                </div>
-              </div>
-              
-              <h5 style={{ color: 'var(--forge-text-main)', fontSize: '0.85rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 24 }}>Curriculum Manifest ({sections.length} Lessons)</h5>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {sections.map((s, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '18px 24px', background: 'rgba(0,0,0,0.02)', border: '1px solid var(--forge-border)', borderRadius: 16 }}>
-                    <span style={{ color: 'var(--forge-accent)', fontWeight: 900, fontSize: '1rem' }}>{i + 1}</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 800, color: 'var(--forge-text-main)', fontSize: '1rem' }}>{s.title || 'Untitled Lesson'}</div>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--forge-text-dim)', fontWeight: 900, textTransform: 'uppercase', marginTop: 2 }}>{s.content_type} • {s.duration_minutes}M</div>
-                    </div>
-                    {s.content_type === 'quiz' && <div style={{ color: '#10B981', fontSize: '0.75rem', fontWeight: 900, background: 'rgba(16, 185, 129, 0.1)', padding: '4px 12px', borderRadius: 20 }}>{s.quizzes.length} QUESTIONS</div>}
-                  </div>
+                    {item.label}
+                  </button>
                 ))}
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <button className="btn btn-ghost" onClick={() => setStep(2)} style={{ color: 'var(--forge-text-dim)', fontWeight: 800 }}><ArrowLeft size={16} /> BACK TO STUDIO</button>
-              <div style={{ display: 'flex', gap: 16 }}>
-                <button className="btn btn-ghost" onClick={() => save('draft')} disabled={loading} style={{ background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)', color: 'var(--forge-text-main)', borderRadius: 12, padding: '0 32px', height: 56, fontWeight: 800 }}>
-                  SAVE DRAFT
-                </button>
-                <button className="btn btn-primary" onClick={() => save(canPublishDirectly ? 'publish' : 'review')} disabled={loading} style={{ background: 'var(--forge-text-main)', color: 'var(--forge-bg)', border: 'none', borderRadius: 14, padding: '0 40px', height: 56, fontWeight: 900, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
-                  {loading ? 'PROCESSING...' : '🚀 DEPLOY TO FORGE'}
-                </button>
-              </div>
+            {/* Generate Action Button */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 14 }}>
+              <button
+                type="button"
+                onClick={() => setMode('studio')}
+                className="btn btn-ghost"
+                style={{ color: 'var(--text-muted)', fontWeight: 700 }}
+              >
+                Skip & Use Blank Studio Canvas
+              </button>
+              <button
+                type="button"
+                onClick={handleGenerateCourse}
+                disabled={isGenerating || !aiPrompt.trim()}
+                className="btn btn-primary"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '14px 32px',
+                  borderRadius: 14, fontWeight: 800, fontSize: '1rem',
+                  background: 'linear-gradient(135deg, #7C3AED, #9333EA)',
+                  boxShadow: '0 6px 20px rgba(124, 58, 237, 0.4)'
+                }}
+              >
+                {isGenerating ? (
+                  <>
+                    <div className="spinner" style={{ width: 18, height: 18 }} />
+                    Generating Curriculum with Groq...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={18} />
+                    Generate Full Course with AI →
+                  </>
+                )}
+              </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Bulk Upload Processing Overlay */}
-        {bulkProgress && (
-          <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
-            <div className="animate-fade-in" style={{ maxWidth: 400 }}>
-              <div className="spinner" style={{ width: 60, height: 60, border: '4px solid rgba(124, 58, 237, 0.2)', borderTopColor: 'var(--forge-accent)', margin: '0 auto 40px' }} />
-              <h2 style={{ color: '#FFF', fontSize: '1.8rem', fontWeight: 900, letterSpacing: '-0.02em', marginBottom: 12 }}>Course Import Architect</h2>
-              <p style={{ color: 'var(--forge-text-dim)', fontSize: '1.1rem', lineHeight: 1.6 }}>{bulkProgress}</p>
-              <div style={{ marginTop: 40 }}>
-                <div style={{ height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
-                  <div className="progress-bar-glow" style={{ height: '100%', width: '60%', background: 'var(--forge-accent)' }} />
+      {/* ── TAB 2: Visual Studio & Course Editor ───────────────────────────── */}
+      {mode === 'studio' && (
+        <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24, alignItems: 'start' }}>
+          
+          {/* Left Column: Lesson Tree & Course Metadata */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {/* Course Title Card */}
+            <div className="card" style={{ padding: 18, borderRadius: 16, background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)' }}>
+              <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--forge-accent)', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>
+                Course Title
+              </label>
+              <input
+                type="text"
+                className="form-control"
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                placeholder="Course Title..."
+                style={{ fontWeight: 800, fontSize: '1rem', background: '#0B0F19', color: 'white', borderRadius: 10 }}
+              />
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
+                <div>
+                  <label style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)' }}>Difficulty</label>
+                  <select
+                    className="form-control"
+                    value={difficulty}
+                    onChange={e => setDifficulty(e.target.value)}
+                    style={{ fontSize: '0.78rem', background: '#0B0F19', color: 'white', borderRadius: 8, padding: '4px 8px' }}
+                  >
+                    <option value="beginner">Beginner</option>
+                    <option value="intermediate">Intermediate</option>
+                    <option value="advanced">Advanced</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)' }}>Estimated (Hrs)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={estimatedHours}
+                    onChange={e => setEstimatedHours(parseFloat(e.target.value) || 1)}
+                    className="form-control"
+                    style={{ fontSize: '0.78rem', background: '#0B0F19', color: 'white', borderRadius: 8, padding: '4px 8px' }}
+                  />
                 </div>
               </div>
             </div>
+
+            {/* Lessons List Navigation */}
+            <div className="card" style={{ padding: 18, borderRadius: 16, background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
+                  Curriculum Lessons ({lessons.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={addLesson}
+                  className="btn btn-secondary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', fontSize: '0.72rem', borderRadius: 8 }}
+                >
+                  <PlusCircle size={12} /> Add Lesson
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 460, overflowY: 'auto' }}>
+                {lessons.map((lesson, idx) => {
+                  const isActive = idx === activeLessonIdx;
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => setActiveLessonIdx(idx)}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        background: isActive ? 'rgba(124, 58, 237, 0.15)' : 'rgba(255,255,255,0.02)',
+                        border: isActive ? '1px solid var(--forge-accent)' : '1px solid rgba(255,255,255,0.06)',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '0.7rem', color: isActive ? 'var(--forge-accent)' : 'var(--text-muted)', fontWeight: 800 }}>
+                            LESSON {idx + 1}
+                          </div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {lesson.title || 'Untitled Lesson'}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 4, fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                            <span><Clock size={10} style={{ verticalAlign: 'middle' }} /> {lesson.duration_minutes || 15}m</span>
+                            <span>•</span>
+                            <span>{lesson.quizzes?.length || 0} Quiz Qs</span>
+                          </div>
+                        </div>
+
+                        {/* Move & Delete controls */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }} onClick={e => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => moveLesson(idx, -1)}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', padding: '2px 4px', cursor: 'pointer', fontSize: '0.7rem' }}
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === lessons.length - 1}
+                            onClick={() => moveLesson(idx, 1)}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', padding: '2px 4px', cursor: 'pointer', fontSize: '0.7rem' }}
+                          >
+                            ▼
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeLesson(idx)}
+                            style={{ background: 'none', border: 'none', color: '#EF4444', padding: '2px 4px', cursor: 'pointer' }}
+                            title="Delete Lesson"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
-        )}
-      </div>
+
+          {/* Right Column: Visual Studio Active Lesson Workspace */}
+          <div className="card" style={{ padding: '28px 24px', borderRadius: 20, background: 'var(--forge-card-bg)', border: '1px solid var(--forge-border)' }}>
+            
+            {/* Active Lesson Header Input */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--forge-border)', paddingBottom: 20, marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 260 }}>
+                <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--forge-accent)', textTransform: 'uppercase', marginBottom: 4 }}>
+                  Editing Lesson {activeLessonIdx + 1} of {lessons.length}
+                </div>
+                <input
+                  type="text"
+                  className="form-control"
+                  value={activeLesson.title}
+                  onChange={e => updateActiveLesson('title', e.target.value)}
+                  placeholder="Lesson Title..."
+                  style={{ fontSize: '1.25rem', fontWeight: 900, background: 'transparent', border: 'none', borderBottom: '1px solid var(--forge-border)', borderRadius: 0, padding: '4px 0', color: 'white' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  <Clock size={14} />
+                  <span>Duration:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="180"
+                    value={activeLesson.duration_minutes || 15}
+                    onChange={e => updateActiveLesson('duration_minutes', parseInt(e.target.value, 10) || 15)}
+                    style={{ width: 55, padding: '4px 8px', borderRadius: 6, background: '#0B0F19', border: '1px solid var(--forge-border)', color: 'white', textAlign: 'center' }}
+                  />
+                  <span>mins</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Visual Studio Sub-Tabs */}
+            <div style={{ display: 'flex', gap: 12, borderBottom: '1px solid var(--forge-border)', marginBottom: 20 }}>
+              <button
+                type="button"
+                onClick={() => setEditorSubTab('cards')}
+                style={{
+                  padding: '10px 16px',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: editorSubTab === 'cards' ? '3px solid var(--forge-accent)' : '3px solid transparent',
+                  color: editorSubTab === 'cards' ? 'var(--forge-accent)' : 'var(--text-muted)',
+                  fontWeight: 800,
+                  fontSize: '0.85rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}
+              >
+                <Layers size={14} /> 1. Visual Card & Narration
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setEditorSubTab('markdown')}
+                style={{
+                  padding: '10px 16px',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: editorSubTab === 'markdown' ? '3px solid var(--forge-accent)' : '3px solid transparent',
+                  color: editorSubTab === 'markdown' ? 'var(--forge-accent)' : 'var(--text-muted)',
+                  fontWeight: 800,
+                  fontSize: '0.85rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}
+              >
+                <AlignLeft size={14} /> 2. Full Instructional Body
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setEditorSubTab('quiz')}
+                style={{
+                  padding: '10px 16px',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: editorSubTab === 'quiz' ? '3px solid var(--forge-accent)' : '3px solid transparent',
+                  color: editorSubTab === 'quiz' ? 'var(--forge-accent)' : 'var(--text-muted)',
+                  fontWeight: 800,
+                  fontSize: '0.85rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}
+              >
+                <HelpCircle size={14} /> 3. Knowledge Check Quizzes ({activeLesson.quizzes?.length || 0})
+              </button>
+            </div>
+
+            {/* Sub-Tab 1: Visual Cards & Narration Script */}
+            {editorSubTab === 'cards' && (
+              <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                {/* Hero Key Concept Card */}
+                <div style={{ background: 'rgba(124, 58, 237, 0.06)', border: '1px solid rgba(124, 58, 237, 0.3)', borderRadius: 14, padding: 18 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, color: '#A78BFA', fontWeight: 800, fontSize: '0.82rem' }}>
+                    <Zap size={16} /> Key Concept Card (Hero Insight)
+                  </div>
+                  <textarea
+                    rows={3}
+                    className="form-control"
+                    value={activeLesson.summary_card || ''}
+                    onChange={e => updateActiveLesson('summary_card', e.target.value)}
+                    placeholder="Enter the primary punchy insight learners will see first..."
+                    style={{ background: '#0B0F19', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 10, fontSize: '0.9rem' }}
+                  />
+                </div>
+
+                {/* Narration & Voiceover Script Card */}
+                <div style={{ background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.25)', borderRadius: 14, padding: 18 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, color: '#60A5FA', fontWeight: 800, fontSize: '0.82rem' }}>
+                    🎙️ Audio Narration & Storyboard Voiceover Script
+                  </div>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 8px 0' }}>
+                    Instructional script for voice recording, TTS synthesis, or human video presenter.
+                  </p>
+                  <textarea
+                    rows={4}
+                    className="form-control"
+                    value={activeLesson.narration_script || ''}
+                    onChange={e => updateActiveLesson('narration_script', e.target.value)}
+                    placeholder="e.g. Welcome everyone. In this section we examine why decoupling microservices protects database performance..."
+                    style={{ background: '#0B0F19', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 10, fontSize: '0.88rem' }}
+                  />
+                </div>
+
+                {/* Key Takeaways */}
+                <div style={{ background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: 14, padding: 18 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, color: '#34D399', fontWeight: 800, fontSize: '0.82rem' }}>
+                    <CheckCircle size={16} /> Key Takeaways (Bullet Points)
+                  </div>
+                  <textarea
+                    rows={3}
+                    className="form-control"
+                    value={(activeLesson.key_takeaways || []).join('\n')}
+                    onChange={e => updateActiveLesson('key_takeaways', e.target.value.split('\n').filter(Boolean))}
+                    placeholder="Enter one key takeaway per line..."
+                    style={{ background: '#0B0F19', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 10, fontSize: '0.85rem' }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Sub-Tab 2: Markdown Lesson Body with Live Split Preview */}
+            {editorSubTab === 'markdown' && (
+              <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+                    Markdown Source Code
+                  </label>
+                  <textarea
+                    rows={18}
+                    className="form-control"
+                    value={activeLesson.content_markdown || ''}
+                    onChange={e => updateActiveLesson('content_markdown', e.target.value)}
+                    placeholder="# Lesson Title&#10;&#10;Explain your concepts here with markdown headers, bullets, code blocks..."
+                    style={{ fontFamily: 'monospace', fontSize: '0.85rem', background: '#0B0F19', color: '#E2E8F0', borderRadius: 12, border: '1px solid rgba(255,255,255,0.12)', resize: 'vertical' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+                    Live Visual Preview
+                  </label>
+                  <div style={{ height: 380, overflowY: 'auto', padding: 16, background: '#0B0F19', borderRadius: 12, border: '1px solid rgba(255,255,255,0.1)', color: '#CBD5E1', fontSize: '0.88rem', lineHeight: 1.6 }}>
+                    <ReactMarkdown>{activeLesson.content_markdown || '*No content provided yet.*'}</ReactMarkdown>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Sub-Tab 3: Knowledge Check Quizzes */}
+            {editorSubTab === 'quiz' && (
+              <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    Formative multiple-choice questions testing core concepts from this lesson.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={addQuizQuestion}
+                    className="btn btn-secondary btn-sm"
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, fontWeight: 700 }}
+                  >
+                    <PlusCircle size={14} /> Add Question
+                  </button>
+                </div>
+
+                {(activeLesson.quizzes || []).length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: 36, background: 'rgba(255,255,255,0.02)', borderRadius: 14, border: '1px dashed var(--forge-border)' }}>
+                    <HelpCircle size={32} style={{ color: 'var(--text-muted)', marginBottom: 8 }} />
+                    <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.88rem' }}>No quizzes added to this lesson yet.</p>
+                    <button type="button" onClick={addQuizQuestion} className="btn btn-primary btn-sm" style={{ marginTop: 12 }}>
+                      <PlusCircle size={13} /> Add Knowledge Check
+                    </button>
+                  </div>
+                ) : (
+                  (activeLesson.quizzes || []).map((q, qIdx) => (
+                    <div key={qIdx} style={{ background: '#0B0F19', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14, padding: 18 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--forge-accent)', textTransform: 'uppercase' }}>
+                          Question {qIdx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeQuizQuestion(qIdx)}
+                          className="btn btn-ghost btn-sm"
+                          style={{ color: '#EF4444', padding: 4 }}
+                          title="Remove Question"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+
+                      {/* Question Text */}
+                      <input
+                        type="text"
+                        className="form-control"
+                        value={q.question_text || ''}
+                        onChange={e => updateQuiz(qIdx, 'question_text', e.target.value)}
+                        placeholder="Enter the question text..."
+                        style={{ fontWeight: 700, fontSize: '0.95rem', background: '#131926', color: 'white', borderRadius: 8, marginBottom: 14 }}
+                      />
+
+                      {/* 4 Options */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+                        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                          Select the Radio Button next to the Correct Answer:
+                        </span>
+                        {(q.options || []).map((opt, optIdx) => {
+                          const isCorrect = q.correct_answer === opt;
+                          return (
+                            <div key={optIdx} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <input
+                                type="radio"
+                                name={`correct_ans_${qIdx}`}
+                                checked={isCorrect}
+                                onChange={() => updateQuiz(qIdx, 'correct_answer', opt)}
+                                style={{ accentColor: '#10B981', width: 16, height: 16, cursor: 'pointer' }}
+                                title="Mark as correct answer"
+                              />
+                              <input
+                                type="text"
+                                className="form-control"
+                                value={opt}
+                                onChange={e => updateQuizOption(qIdx, optIdx, e.target.value)}
+                                placeholder={`Option ${String.fromCharCode(65 + optIdx)}...`}
+                                style={{
+                                  flex: 1,
+                                  fontSize: '0.85rem',
+                                  borderRadius: 8,
+                                  background: isCorrect ? 'rgba(16, 185, 129, 0.08)' : '#131926',
+                                  borderColor: isCorrect ? '#10B981' : 'rgba(255,255,255,0.08)',
+                                  color: 'white'
+                                }}
+                              />
+                              {isCorrect && (
+                                <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#10B981' }}>
+                                  ✓ Correct
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Explanation */}
+                      <div>
+                        <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                          Pedagogical Explanation (Shown after answering)
+                        </label>
+                        <input
+                          type="text"
+                          className="form-control"
+                          value={q.explanation || ''}
+                          onChange={e => updateQuiz(qIdx, 'explanation', e.target.value)}
+                          placeholder="Explain why this option is correct and how it reinforces the concept..."
+                          style={{ fontSize: '0.82rem', background: '#131926', color: '#CBD5E1', borderRadius: 8 }}
+                        />
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* Bottom Actions Bar */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 28, paddingTop: 20, borderTop: '1px solid var(--forge-border)' }}>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  type="button"
+                  disabled={activeLessonIdx === 0}
+                  onClick={() => setActiveLessonIdx(Math.max(0, activeLessonIdx - 1))}
+                  className="btn btn-secondary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  <ArrowLeft size={14} /> Previous Lesson
+                </button>
+                <button
+                  type="button"
+                  disabled={activeLessonIdx === lessons.length - 1}
+                  onClick={() => setActiveLessonIdx(Math.min(lessons.length - 1, activeLessonIdx + 1))}
+                  className="btn btn-secondary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  Next Lesson <ArrowRight size={14} />
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => handleSaveCourse(false)}
+                  disabled={isSaving}
+                  className="btn btn-secondary"
+                  style={{ fontWeight: 700 }}
+                >
+                  <Save size={14} /> Save Draft
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveCourse(true)}
+                  disabled={isSaving}
+                  className="btn btn-primary"
+                  style={{ fontWeight: 800, background: 'linear-gradient(135deg, #7C3AED, #6D28D9)' }}
+                >
+                  <CheckCircle size={15} /> Publish to Library
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* ── INTERACTIVE LEARNER PREVIEW MODAL ─────────────────────────────── */}
+      {previewModalOpen && (
+        <div className="modal-overlay" onClick={() => setPreviewModalOpen(false)} style={{ zIndex: 700 }}>
+          <div
+            className="modal animate-scale-in"
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: 880, width: '95%', maxHeight: '90vh', background: '#0F172A', color: 'white', borderRadius: 20, display: 'flex', flexDirection: 'column' }}
+          >
+            {/* Modal Header */}
+            <div className="modal-header" style={{ padding: '16px 24px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+              <div>
+                <span style={{ fontSize: '0.68rem', fontWeight: 800, color: '#A78BFA', textTransform: 'uppercase' }}>
+                  Learner Simulation Mode
+                </span>
+                <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 900 }}>
+                  {title || 'Untitled Course'}
+                </h3>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setPreviewModalOpen(false)} style={{ color: '#94A3B8' }}>
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="modal-body" style={{ padding: '24px', overflowY: 'auto', flex: 1, display: 'grid', gridTemplateColumns: '240px 1fr', gap: 20 }}>
+              {/* Left: Lesson Checklist */}
+              <div style={{ borderRight: '1px solid rgba(255,255,255,0.08)', paddingRight: 16 }}>
+                <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 10 }}>
+                  Curriculum Progress
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {lessons.map((l, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setPreviewLessonIdx(idx)}
+                      style={{
+                        textAlign: 'left',
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        background: previewLessonIdx === idx ? 'rgba(124, 58, 237, 0.25)' : 'transparent',
+                        border: previewLessonIdx === idx ? '1px solid #7C3AED' : 'none',
+                        color: previewLessonIdx === idx ? 'white' : '#94A3B8',
+                        fontSize: '0.8rem',
+                        fontWeight: previewLessonIdx === idx ? 800 : 500,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {idx + 1}. {l.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Right: Active Lesson View */}
+              <div>
+                {lessons[previewLessonIdx] && (
+                  <div>
+                    <h2 style={{ margin: '0 0 16px 0', fontSize: '1.4rem', fontWeight: 900 }}>
+                      {lessons[previewLessonIdx].title}
+                    </h2>
+
+                    {/* Key Concept Hero Card */}
+                    {lessons[previewLessonIdx].summary_card && (
+                      <div style={{ background: 'rgba(124, 58, 237, 0.1)', border: '1px solid rgba(124, 58, 237, 0.3)', borderRadius: 12, padding: 14, marginBottom: 18 }}>
+                        <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#A78BFA', marginBottom: 4 }}>
+                          💡 KEY CONCEPT
+                        </div>
+                        <div style={{ fontSize: '0.9rem', lineHeight: 1.4 }}>
+                          {lessons[previewLessonIdx].summary_card}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Narration Script Box */}
+                    {lessons[previewLessonIdx].narration_script && (
+                      <details style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: 10, padding: 10, marginBottom: 18 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700, color: '#60A5FA' }}>
+                          🎙️ Audio Voiceover / Storyboard Script
+                        </summary>
+                        <div style={{ fontSize: '0.85rem', color: '#CBD5E1', marginTop: 8, fontStyle: 'italic' }}>
+                          "{lessons[previewLessonIdx].narration_script}"
+                        </div>
+                      </details>
+                    )}
+
+                    {/* Lesson Markdown */}
+                    <div style={{ fontSize: '0.9rem', lineHeight: 1.6, color: '#E2E8F0', marginBottom: 24 }}>
+                      <ReactMarkdown>{lessons[previewLessonIdx].content_markdown || ''}</ReactMarkdown>
+                    </div>
+
+                    {/* Interactive Quizzes */}
+                    {lessons[previewLessonIdx].quizzes?.length > 0 && (
+                      <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 18, marginTop: 18 }}>
+                        <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: 800, color: '#34D399' }}>
+                          Interactive Knowledge Check
+                        </h4>
+                        {lessons[previewLessonIdx].quizzes.map((q, qIdx) => {
+                          const qKey = `${previewLessonIdx}_${qIdx}`;
+                          const selectedOpt = previewQuizAnswer[qKey];
+                          const submitted = previewQuizSubmitted[qKey];
+                          const isCorrect = selectedOpt === q.correct_answer;
+
+                          return (
+                            <div key={qIdx} style={{ background: '#131926', borderRadius: 12, padding: 14, marginBottom: 12 }}>
+                              <p style={{ margin: '0 0 10px 0', fontWeight: 700, fontSize: '0.9rem' }}>
+                                {q.question_text}
+                              </p>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                {q.options.map((opt, optIdx) => (
+                                  <label
+                                    key={optIdx}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: 8,
+                                      padding: '8px 10px',
+                                      borderRadius: 8,
+                                      background: submitted
+                                        ? opt === q.correct_answer
+                                          ? 'rgba(16, 185, 129, 0.2)'
+                                          : selectedOpt === opt
+                                          ? 'rgba(239, 68, 68, 0.2)'
+                                          : 'rgba(255,255,255,0.02)'
+                                        : selectedOpt === opt
+                                        ? 'rgba(124, 58, 237, 0.15)'
+                                        : 'rgba(255,255,255,0.02)',
+                                      cursor: submitted ? 'default' : 'pointer',
+                                      fontSize: '0.85rem'
+                                    }}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`quiz_sim_${qKey}`}
+                                      checked={selectedOpt === opt}
+                                      onChange={() => !submitted && setPreviewQuizAnswer(p => ({ ...p, [qKey]: opt }))}
+                                      disabled={submitted}
+                                      style={{ accentColor: '#7C3AED' }}
+                                    />
+                                    <span>{opt}</span>
+                                  </label>
+                                ))}
+                              </div>
+
+                              {!submitted ? (
+                                <button
+                                  type="button"
+                                  disabled={!selectedOpt}
+                                  onClick={() => setPreviewQuizSubmitted(p => ({ ...p, [qKey]: true }))}
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ marginTop: 10, fontSize: '0.75rem' }}
+                                >
+                                  Submit Answer
+                                </button>
+                              ) : (
+                                <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: isCorrect ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', fontSize: '0.82rem' }}>
+                                  <div style={{ fontWeight: 800, color: isCorrect ? '#34D399' : '#F87171' }}>
+                                    {isCorrect ? '✓ Correct!' : '✕ Incorrect'}
+                                  </div>
+                                  <div style={{ color: '#CBD5E1', marginTop: 4 }}>
+                                    {q.explanation}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="modal-footer" style={{ padding: '14px 24px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  type="button"
+                  disabled={previewLessonIdx === 0}
+                  onClick={() => setPreviewLessonIdx(Math.max(0, previewLessonIdx - 1))}
+                  className="btn btn-secondary btn-sm"
+                >
+                  ← Previous
+                </button>
+                <button
+                  type="button"
+                  disabled={previewLessonIdx === lessons.length - 1}
+                  onClick={() => setPreviewLessonIdx(Math.min(lessons.length - 1, previewLessonIdx + 1))}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Next →
+                </button>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={() => setPreviewModalOpen(false)}>
+                Done Previewing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

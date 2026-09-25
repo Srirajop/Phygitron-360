@@ -210,18 +210,9 @@ export const forgeApi = {
   // Employee Profile Tab
   employeeCourses: (empId) => api.get(`/api/v1/forge/employee-courses/${empId}`),
 
-  // Legacy/Video support
-  uploadVideo: (fileData) => api.post('/api/v1/forge/upload-video', fileData, { headers: { 'Content-Type': 'multipart/form-data' } }),
-  bulkUploadZip: (file) => {
-    const fd = new FormData();
-    fd.append('file', file);
-    return api.post('/api/v1/forge/courses/bulk-zip', fd, {
-      headers: {
-        'X-Filename': file?.name || 'course-package.zip',
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
+  // AI Course Builder & Visual Studio
+  generateAiCourse: (data) => api.post('/api/v1/forge/ai/generate-course', data),
+  saveAiCourse: (data) => api.post('/api/v1/forge/ai/save-course', data),
 };
 
 // ── Deploy ────────────────────────────────────────────────────────────────

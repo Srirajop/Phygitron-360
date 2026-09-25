@@ -325,6 +325,19 @@ export default function CourseLibrary() {
         {isOfficial && (
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <button
+              onClick={() => nav('/forge/build')}
+              className="btn btn-secondary"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 18px',
+                borderRadius: '12px', fontWeight: 800, fontSize: '0.85rem',
+                border: '1px solid rgba(124, 58, 237, 0.4)',
+                background: 'rgba(124, 58, 237, 0.12)',
+                color: '#C4B5FD'
+              }}
+            >
+              <Sparkles size={16} /> AI Course Studio
+            </button>
+            <button
               onClick={() => setDomainModalOpen(true)}
               className="btn btn-secondary"
               style={{

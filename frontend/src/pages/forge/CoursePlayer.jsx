@@ -5,11 +5,12 @@ import { useAuth } from '../../context/AuthContext';
 import {
   ChevronLeft, Award, PlayCircle, CheckCircle, Clock, Maximize2,
   Minimize2, RefreshCw, Bookmark, Sparkles, X, Shield, Download,
-  ExternalLink, Layers
+  ExternalLink, Layers, BookOpen, ArrowLeft, ArrowRight, HelpCircle, Check, Radio
 } from 'lucide-react';
 import './forge_styles.css';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -112,6 +113,12 @@ export default function CoursePlayer() {
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
+  // Native Interactive Course State
+  const [nativeSectionIdx, setNativeSectionIdx] = useState(0);
+  const [completedSections, setCompletedSections] = useState(new Set());
+  const [nativeQuizAnswers, setNativeQuizAnswers] = useState({});
+  const [nativeQuizSubmitted, setNativeQuizSubmitted] = useState({});
+
   const iframeRef = useRef(null);
   const scormDataRef = useRef({});
   const saveTimerRef = useRef(null);
@@ -141,6 +148,18 @@ export default function CoursePlayer() {
         if (!initLoc && data.enrollment.scorm_suspend_data) {
           initLoc = extractBookmark({ 'cmi.suspend_data': data.enrollment.scorm_suspend_data });
           if (initLoc) data.enrollment.scorm_location = initLoc;
+        }
+
+        // Restore native completed sections
+        if (data.sections && data.sections.length > 0) {
+          const prog = parseFloat(data.enrollment.progress_percent || 0);
+          const totalSec = data.sections.length;
+          const completedCount = Math.round((prog / 100) * totalSec);
+          const initialCompleted = new Set();
+          for (let i = 0; i < completedCount; i++) {
+            if (data.sections[i]) initialCompleted.add(data.sections[i].id);
+          }
+          setCompletedSections(initialCompleted);
         }
 
         scormDataRef.current = {
@@ -236,6 +255,44 @@ export default function CoursePlayer() {
       toast.error("Failed to mark course complete");
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  // Complete a native lesson and calculate progress
+  const handleCompleteNativeSection = async (secId, nextIdx) => {
+    const newCompleted = new Set(completedSections);
+    newCompleted.add(secId);
+    setCompletedSections(newCompleted);
+
+    const totalSec = course?.sections?.length || 1;
+    const newProg = Math.min(100, Math.round((newCompleted.size / totalSec) * 100));
+
+    setCourse(prev => ({
+      ...prev,
+      enrollment: {
+        ...(prev?.enrollment || {}),
+        progress_percent: newProg,
+        status: newProg >= 100 ? 'completed' : 'in_progress',
+        completed_at: newProg >= 100 ? new Date().toISOString() : prev?.enrollment?.completed_at,
+      }
+    }));
+
+    try {
+      await forgeApi.syncProgress(id, {
+        progress_percent: newProg,
+        status: newProg >= 100 ? 'completed' : 'in_progress',
+        scorm_location: `Lesson ${nextIdx !== undefined ? nextIdx + 1 : nativeSectionIdx + 1}`,
+      });
+      if (newProg >= 100) {
+        setShowCelebration(true);
+        toast.success("🎉 Course completed! Official certificate generated.");
+      }
+    } catch (e) {
+      console.error('Failed to sync native lesson progress', e);
+    }
+
+    if (nextIdx !== undefined && nextIdx < totalSec) {
+      setNativeSectionIdx(nextIdx);
     }
   };
 
@@ -546,7 +603,7 @@ export default function CoursePlayer() {
       </header>
 
       {/* ── Main Player Frame ───────────────────────────────────────────── */}
-      <div style={{ flex: 1, position: 'relative', width: '100%', height: '100%' }}>
+      <div style={{ flex: 1, position: 'relative', width: '100%', height: '100%', display: 'flex' }}>
         {launchUrl ? (
           <iframe
             ref={iframeRef}
@@ -561,10 +618,219 @@ export default function CoursePlayer() {
             }}
             allow="fullscreen; autoplay"
           />
+        ) : course?.sections && course.sections.length > 0 ? (
+          /* Native Interactive Course Player */
+          <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', width: '100%', height: '100%', background: '#0B0F19' }}>
+            
+            {/* Left Drawer: Course Lessons List */}
+            <div style={{ background: '#131926', borderRight: '1px solid rgba(255,255,255,0.08)', padding: '20px 16px', overflowY: 'auto' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--forge-accent)', textTransform: 'uppercase', marginBottom: 12, letterSpacing: '0.05em' }}>
+                Course Modules ({course.sections.length})
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {course.sections.map((sec, sIdx) => {
+                  const isActive = sIdx === nativeSectionIdx;
+                  const isDone = completedSections.has(sec.id);
+                  return (
+                    <div
+                      key={sec.id || sIdx}
+                      onClick={() => setNativeSectionIdx(sIdx)}
+                      style={{
+                        padding: '12px 14px',
+                        borderRadius: 12,
+                        background: isActive ? 'rgba(124, 58, 237, 0.2)' : 'rgba(255,255,255,0.02)',
+                        border: isActive ? '1px solid var(--forge-accent)' : '1px solid rgba(255,255,255,0.05)',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span style={{ fontSize: '0.68rem', fontWeight: 800, color: isActive ? '#A78BFA' : 'var(--text-muted)' }}>
+                          LESSON {sIdx + 1}
+                        </span>
+                        {isDone ? (
+                          <span style={{ color: '#10B981', display: 'flex', alignItems: 'center', gap: 2, fontSize: '0.7rem', fontWeight: 800 }}>
+                            <CheckCircle size={12} /> Done
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                            {sec.duration_minutes || 15}m
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'white', lineHeight: 1.3 }}>
+                        {sec.title}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Right Main Content Pane */}
+            <div style={{ padding: '36px 48px', overflowY: 'auto', maxHeight: 'calc(100vh - 65px)' }}>
+              {course.sections[nativeSectionIdx] && (() => {
+                const curSec = course.sections[nativeSectionIdx];
+                const isDone = completedSections.has(curSec.id);
+                return (
+                  <div style={{ maxWidth: 860, margin: '0 auto' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--forge-accent)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                        Lesson {nativeSectionIdx + 1} of {course.sections.length}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        <Clock size={13} /> {curSec.duration_minutes || 15} mins
+                      </div>
+                    </div>
+
+                    <h1 style={{ margin: '0 0 24px 0', fontSize: '2rem', fontWeight: 900, color: 'white', letterSpacing: '-0.02em' }}>
+                      {curSec.title}
+                    </h1>
+
+                    {/* Lesson Markdown Content */}
+                    <div className="course-lesson-content" style={{ fontSize: '0.96rem', lineHeight: 1.7, color: '#E2E8F0', marginBottom: 36 }}>
+                      <ReactMarkdown>{curSec.content_markdown || '*No lesson content available.*'}</ReactMarkdown>
+                    </div>
+
+                    {/* Interactive Quizzes */}
+                    {curSec.quizzes && curSec.quizzes.length > 0 && (
+                      <div style={{ background: '#131926', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 18, padding: '24px 28px', marginBottom: 36 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                          <HelpCircle size={20} color="#34D399" />
+                          <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'white' }}>
+                            Interactive Knowledge Check
+                          </h3>
+                        </div>
+
+                        {curSec.quizzes.map((q, qIdx) => {
+                          const qKey = `${curSec.id}_${q.id || qIdx}`;
+                          const selectedOpt = nativeQuizAnswers[qKey];
+                          const submitted = nativeQuizSubmitted[qKey];
+                          const isCorrect = selectedOpt === q.correct_answer;
+
+                          return (
+                            <div key={q.id || qIdx} style={{ background: '#0B0F19', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 14, padding: 18, marginBottom: 16 }}>
+                              <p style={{ margin: '0 0 14px 0', fontWeight: 700, fontSize: '0.95rem', color: 'white' }}>
+                                {qIdx + 1}. {q.question_text}
+                              </p>
+
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                {(q.options || []).map((opt, optIdx) => (
+                                  <label
+                                    key={optIdx}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: 10,
+                                      padding: '10px 14px',
+                                      borderRadius: 10,
+                                      background: submitted
+                                        ? opt === q.correct_answer
+                                          ? 'rgba(16, 185, 129, 0.2)'
+                                          : selectedOpt === opt
+                                          ? 'rgba(239, 68, 68, 0.2)'
+                                          : 'rgba(255,255,255,0.02)'
+                                        : selectedOpt === opt
+                                        ? 'rgba(124, 58, 237, 0.2)'
+                                        : 'rgba(255,255,255,0.03)',
+                                      border: submitted && opt === q.correct_answer
+                                        ? '1px solid #10B981'
+                                        : selectedOpt === opt
+                                        ? '1px solid var(--forge-accent)'
+                                        : '1px solid rgba(255,255,255,0.06)',
+                                      cursor: submitted ? 'default' : 'pointer',
+                                      color: 'white',
+                                      fontSize: '0.9rem'
+                                    }}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`native_quiz_${qKey}`}
+                                      checked={selectedOpt === opt}
+                                      onChange={() => !submitted && setNativeQuizAnswers(p => ({ ...p, [qKey]: opt }))}
+                                      disabled={submitted}
+                                      style={{ accentColor: '#7C3AED' }}
+                                    />
+                                    <span>{opt}</span>
+                                  </label>
+                                ))}
+                              </div>
+
+                              {!submitted ? (
+                                <button
+                                  type="button"
+                                  disabled={!selectedOpt}
+                                  onClick={() => setNativeQuizSubmitted(p => ({ ...p, [qKey]: true }))}
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ marginTop: 12, fontWeight: 700 }}
+                                >
+                                  Check Answer
+                                </button>
+                              ) : (
+                                <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: isCorrect ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', fontSize: '0.85rem' }}>
+                                  <div style={{ fontWeight: 800, color: isCorrect ? '#34D399' : '#F87171', marginBottom: 4 }}>
+                                    {isCorrect ? '✓ Correct Answer!' : '✕ Incorrect'}
+                                  </div>
+                                  <div style={{ color: '#CBD5E1' }}>
+                                    {q.explanation}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Lesson Footer Navigation */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 24, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                      <button
+                        type="button"
+                        disabled={nativeSectionIdx === 0}
+                        onClick={() => setNativeSectionIdx(Math.max(0, nativeSectionIdx - 1))}
+                        className="btn btn-secondary"
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700 }}
+                      >
+                        <ArrowLeft size={16} /> Previous Lesson
+                      </button>
+
+                      {nativeSectionIdx < course.sections.length - 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => handleCompleteNativeSection(curSec.id, nativeSectionIdx + 1)}
+                          className="btn btn-primary"
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 8, padding: '10px 24px',
+                            borderRadius: 12, fontWeight: 800, background: 'linear-gradient(135deg, #7C3AED, #6D28D9)'
+                          }}
+                        >
+                          Complete & Next Lesson <ArrowRight size={16} />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleCompleteNativeSection(curSec.id, nativeSectionIdx)}
+                          className="btn btn-primary"
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 8, padding: '10px 26px',
+                            borderRadius: 12, fontWeight: 800, background: 'linear-gradient(135deg, #10B981, #059669)',
+                            boxShadow: '0 4px 14px rgba(16, 185, 129, 0.4)'
+                          }}
+                        >
+                          <CheckCircle size={18} /> Complete Course & Claim Certificate
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+          </div>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', flexDirection: 'column', gap: 12 }}>
             <Award size={48} style={{ color: 'var(--text-muted)' }} />
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>SCORM package launch URL is not available.</p>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Course content is currently being prepared.</p>
           </div>
         )}
       </div>

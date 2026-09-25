@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   Users, Upload, CheckSquare, BookOpen, Briefcase, Settings,
   LogOut, BarChart2, PlusCircle, FileText, Award, Map, Target,
-  Layers, UserCheck, Home, Cpu, Milestone, Clock, Shield, Folder, Database
+  Layers, UserCheck, Home, Cpu, Milestone, Clock, Shield, Folder, Database, Sparkles
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -40,6 +40,7 @@ const roleNavItems = {
     { section: 'Learning', module: 'forge', items: [
       { to: '/forge', label: 'My Learning', icon: BookOpen },
       { to: '/forge/library', label: 'Course Library', icon: Layers },
+      { to: '/forge/build', label: 'AI Course Studio', icon: Sparkles },
       { to: '/forge/team', label: 'Executive Analytics', icon: BarChart2 },
       { to: '/forge/transcript', label: 'Certificates', icon: FileText },
     ]},
@@ -71,6 +72,7 @@ const roleNavItems = {
     { section: 'Learning', module: 'forge', items: [
       { to: '/forge', label: 'My Learning', icon: BookOpen },
       { to: '/forge/library', label: 'Course Library', icon: Layers },
+      { to: '/forge/build', label: 'AI Course Studio', icon: Sparkles },
       { to: '/forge/team', label: 'Executive Analytics', icon: BarChart2 },
       { to: '/forge/transcript', label: 'Certificates', icon: FileText },
     ]},
@@ -114,6 +116,7 @@ const roleNavItems = {
     { section: 'Learning', module: 'forge', items: [
       { to: '/forge', label: 'My Learning', icon: BookOpen },
       { to: '/forge/library', label: 'Course Library', icon: Layers },
+      { to: '/forge/build', label: 'AI Course Studio', icon: Sparkles },
       { to: '/forge/team', label: 'Executive Analytics', icon: BarChart2 },
       { to: '/forge/transcript', label: 'Certificates', icon: FileText },
     ]},

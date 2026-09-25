@@ -1041,7 +1041,10 @@ async def get_course_details(
 ):
     course_res = await db.execute(
         select(Course)
-        .options(selectinload(Course.domain))
+        .options(
+            selectinload(Course.domain),
+            selectinload(Course.sections).selectinload(CourseSection.quizzes),
+        )
         .where(Course.id == course_id)
     )
     course = course_res.scalar_one_or_none()
@@ -1056,6 +1059,21 @@ async def get_course_details(
         )
     )
     enrollment = enroll_res.scalar_one_or_none()
+
+    # Auto-enroll if native course and user hasn't enrolled yet
+    if not enrollment and not course.is_scorm:
+        enrollment = Enrollment(
+            user_id=current_user.id,
+            course_id=course.id,
+            progress_percent=0.0,
+            status="in_progress",
+            triggered_by=EnrollmentTrigger.manual,
+            last_accessed_at=datetime.utcnow(),
+        )
+        db.add(enrollment)
+        await db.commit()
+        await db.refresh(enrollment)
+
     if enrollment and float(enrollment.progress_percent or 0.0) <= 0.0 and enrollment.scorm_suspend_data:
         est_p, d_loc = _compute_scorm_progress_and_location(
             enrollment.scorm_location, enrollment.scorm_suspend_data, enrollment.status, 0.0
@@ -1077,6 +1095,31 @@ async def get_course_details(
     )
     cert = cert_res.scalar_one_or_none()
 
+    # Format sections and quizzes
+    sections_data = []
+    for sec in sorted(course.sections or [], key=lambda s: s.order_index):
+        quizzes_data = []
+        for q in (sec.quizzes or []):
+            quizzes_data.append({
+                "id": q.id,
+                "question_text": q.question_text,
+                "options": q.options or [],
+                "correct_answer": q.correct_answer,
+                "explanation": q.explanation,
+                "marks": float(q.marks or 1.0),
+            })
+        sections_data.append({
+            "id": sec.id,
+            "title": sec.title,
+            "order_index": sec.order_index,
+            "content_type": sec.content_type.value if hasattr(sec.content_type, "value") else str(sec.content_type),
+            "content_url": sec.content_url,
+            "content_markdown": sec.content_markdown,
+            "duration_minutes": sec.duration_minutes,
+            "pass_score": float(sec.pass_score or 50.0),
+            "quizzes": quizzes_data,
+        })
+
     return success({
         "id": course.id,
         "title": course.title,
@@ -1092,6 +1135,7 @@ async def get_course_details(
         "scorm_version": course.scorm_version,
         "scorm_mastery_score": float(course.scorm_mastery_score or 70.0),
         "status": course.status.value if hasattr(course.status, "value") else str(course.status),
+        "sections": sections_data,
         "enrollment": {
             "id": enrollment.id,
             "progress_percent": float(enrollment.progress_percent or 0.0),
@@ -1406,6 +1450,97 @@ async def get_my_learning(
             "completed_count": len(completed),
             "certificates_count": len(certs_data),
         }
+    })
+
+
+# ── Learner Transcript & Certificates ────────────────────────────────────────
+
+@router.get("/transcript")
+async def get_my_transcript(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns learning transcript, course enrollment history, and earned certificates for the current user.
+    """
+    # 1. Fetch user's enrollments
+    query = (
+        select(Enrollment, Course)
+        .join(Course, Course.id == Enrollment.course_id)
+        .where(Enrollment.user_id == current_user.id)
+        .order_by(Enrollment.last_accessed_at.desc().nullslast(), Enrollment.created_at.desc())
+    )
+    res = await db.execute(query)
+    rows = res.all()
+
+    enrollments_data = []
+    needs_commit = False
+
+    for enroll, course in rows:
+        prog = float(enroll.progress_percent or 0.0)
+        # Auto-heal progress if suspend data exists
+        if prog <= 0.0 and enroll.scorm_suspend_data:
+            est_p, d_loc = _compute_scorm_progress_and_location(
+                enroll.scorm_location, enroll.scorm_suspend_data, enroll.status, 0.0
+            )
+            if est_p > 0:
+                enroll.progress_percent = est_p
+                prog = est_p
+                needs_commit = True
+
+        # Auto-generate certificate if completed but missing certificate record
+        if enroll.status == "completed" or prog >= 100.0 or enroll.completed_at:
+            if not enroll.completed_at:
+                enroll.completed_at = datetime.utcnow()
+                needs_commit = True
+            cert_chk = await db.execute(
+                select(Certificate).where(
+                    Certificate.user_id == current_user.id,
+                    Certificate.course_id == course.id,
+                )
+            )
+            if not cert_chk.scalar_one_or_none():
+                try:
+                    await _generate_certificate_inline(enroll.id, current_user.id, db)
+                    needs_commit = True
+                except Exception as cert_err:
+                    logger.warning(f"Auto-generate cert failed for enroll {enroll.id}: {cert_err}")
+
+        enrollments_data.append({
+            "enrollment_id": enroll.id,
+            "course_id": course.id,
+            "course_title": course.title,
+            "category": course.category or "General",
+            "progress_percent": prog,
+            "score": float(enroll.score) if enroll.score is not None else None,
+            "status": enroll.status or "not_started",
+            "enrolled_at": enroll.created_at.isoformat() if enroll.created_at else None,
+            "completed_at": enroll.completed_at.isoformat() if enroll.completed_at else None,
+            "last_accessed_at": enroll.last_accessed_at.isoformat() if enroll.last_accessed_at else None,
+        })
+
+    if needs_commit:
+        await db.commit()
+
+    # 2. Fetch all certificates earned by user
+    certs_res = await db.execute(
+        select(Certificate, Course)
+        .join(Course, Course.id == Certificate.course_id)
+        .where(Certificate.user_id == current_user.id)
+        .order_by(Certificate.issued_at.desc())
+    )
+    certs_data = [{
+        "id": cert.id,
+        "course_id": c.id,
+        "course_title": c.title,
+        "verification_code": cert.verification_code,
+        "pdf_url": cert.pdf_url,
+        "issued_at": cert.issued_at.isoformat(),
+    } for cert, c in certs_res.all()]
+
+    return success({
+        "enrollments": enrollments_data,
+        "certificates": certs_data,
     })
 
 
@@ -2192,3 +2327,377 @@ async def generate_certificate_for_enrollment(
         "pdf_url": pdf_url,
         "issued_at": cert.issued_at.isoformat(),
     }, "Certificate generated successfully")
+
+
+# ── AI Automated Course Builder & Visual Studio ───────────────────────────────
+
+class AiLessonQuizSchema(BaseModel):
+    question_text: str
+    options: List[str]
+    correct_answer: str
+    explanation: Optional[str] = None
+    marks: Optional[float] = 1.0
+
+
+class AiLessonSchema(BaseModel):
+    title: str
+    duration_minutes: Optional[int] = 15
+    content_type: Optional[str] = "article"
+    summary_card: Optional[str] = None
+    content_markdown: Optional[str] = None
+    narration_script: Optional[str] = None
+    key_takeaways: Optional[List[str]] = []
+    quizzes: Optional[List[AiLessonQuizSchema]] = []
+
+
+class AiCourseGenerateRequest(BaseModel):
+    prompt: str
+    audience: Optional[str] = "General Enterprise Staff"
+    difficulty: Optional[str] = "beginner"
+    estimated_hours: Optional[float] = 2.0
+    domain_id: Optional[int] = None
+    category: Optional[str] = "Engineering"
+    tone: Optional[str] = "Professional and Actionable"
+
+
+class AiCourseSaveRequest(BaseModel):
+    id: Optional[int] = None
+    title: str
+    description: Optional[str] = None
+    difficulty: Optional[str] = "beginner"
+    estimated_hours: Optional[float] = 2.0
+    domain_id: Optional[int] = None
+    category: Optional[str] = "General"
+    status: Optional[str] = "published"
+    lessons: List[AiLessonSchema]
+
+
+AI_COURSE_SYSTEM_PROMPT = """You are a Principal Instructional Designer & E-Learning Architect.
+Generate a complete, production-grade interactive course structure from the user's prompt or storyboard.
+
+CRITICAL INSTRUCTIONS:
+- OUTPUT STRICT VALID JSON ONLY. NO markdown fences (no ```json). NO conversational filler.
+- Keep the content dense, educational, and high-impact.
+- Generate 3-4 structured modules with 2 lessons each (6 total lessons).
+- Each lesson MUST include:
+  1. "title": descriptive lesson title
+  2. "duration_minutes": integer between 10 and 25
+  3. "summary_card": 1-2 sentence core concept takeaway
+  4. "content_markdown": in-depth, structured educational content using markdown formatting (headings, bullet points, real-world examples, and best practice warnings)
+  5. "narration_script": complete audio voiceover narration script for this lesson (ready for voice recording or TTS)
+  6. "key_takeaways": array of 2-3 concise summary bullets
+  7. "quizzes": array of 1-2 multiple-choice knowledge check questions with "question_text", "options" (array of 4 strings), "correct_answer" (exact string matching one of the options), and "explanation".
+
+JSON SCHEMA:
+{
+  "title": "string",
+  "description": "string (150-250 words explaining purpose, skills acquired, and real-world application)",
+  "difficulty": "beginner" | "intermediate" | "advanced",
+  "estimated_hours": number,
+  "category": "string",
+  "skills_covered": ["string", "string", "string"],
+  "lessons": [
+    {
+      "title": "string",
+      "duration_minutes": number,
+      "content_type": "article",
+      "summary_card": "string",
+      "content_markdown": "string",
+      "narration_script": "string",
+      "key_takeaways": ["string", "string"],
+      "quizzes": [
+        {
+          "question_text": "string",
+          "options": ["string", "string", "string", "string"],
+          "correct_answer": "string",
+          "explanation": "string"
+        }
+      ]
+    }
+  ]
+}"""
+
+
+def _generate_fallback_course(prompt: str, difficulty: str, hours: float, category: str) -> dict:
+    """Smart fallback generator if Groq encounters network or rate limits."""
+    clean_title = f"Mastering {prompt[:60].strip().title()}"
+    return {
+        "title": clean_title,
+        "description": f"An intensive, competency-driven curriculum on {prompt}. Designed to accelerate enterprise readiness through hands-on architectures, core methodologies, and practical assessments.",
+        "difficulty": difficulty or "beginner",
+        "estimated_hours": hours or 2.0,
+        "category": category or "General",
+        "skills_covered": [f"{prompt[:20]} Fundamentals", "Architectural Best Practices", "Operational Implementation"],
+        "lessons": [
+            {
+                "title": f"1. Foundations of {prompt[:30].title()}",
+                "duration_minutes": 15,
+                "content_type": "article",
+                "summary_card": f"Foundational principles, strategic value, and core drivers of {prompt}.",
+                "content_markdown": f"# Foundations of {prompt}\n\nUnderstanding the fundamental primitives is the first step toward enterprise excellence.\n\n### Core Drivers\n- **Scalability**: Decoupling architecture for rapid execution.\n- **Reliability**: Fault tolerance and predictable outputs.\n- **Governance**: Security and compliance by design.\n\n### Practical Example\nWhen designing solutions, start by identifying input constraints and target performance metrics before implementation.",
+                "narration_script": f"Welcome to module one. In this session, we establish the foundational pillars of {prompt}. Pay close attention to how these concepts directly impact production environments.",
+                "key_takeaways": ["Grasp core architectural primitives", "Identify design tradeoffs early"],
+                "quizzes": [
+                    {
+                        "question_text": f"What is the primary objective of understanding {prompt[:25]} foundations?",
+                        "options": ["Establishing predictable, secure architectures", "Bypassing documentation", "Deploying without validation", "Ignoring governance policies"],
+                        "correct_answer": "Establishing predictable, secure architectures",
+                        "explanation": "Strong foundations ensure high reliability, security, and maintainability across teams."
+                    }
+                ]
+            },
+            {
+                "title": f"2. Core Methodologies & Design Patterns",
+                "duration_minutes": 20,
+                "content_type": "article",
+                "summary_card": "Essential design patterns, workflow pipelines, and anti-patterns to avoid.",
+                "content_markdown": f"# Core Methodologies & Design Patterns\n\nModern architectures rely on resilient design patterns to ensure consistency.\n\n### Key Patterns\n1. **Modular Encapsulation**: Isolating concerns across boundaries.\n2. **Automated Verification**: Continuous checks and testing gates.\n3. **Observability First**: Instrumenting metrics, traces, and audit logs.\n\n> 💡 **Best Practice**: Always enforce idempotent operations to avoid state corruption during retries.",
+                "narration_script": f"In this second lesson, we explore battle-tested design patterns. Understanding these patterns will save you hundreds of hours in refactoring.",
+                "key_takeaways": ["Apply modular patterns", "Design for idempotency and recovery"],
+                "quizzes": [
+                    {
+                        "question_text": "Why is idempotency critical in enterprise operations?",
+                        "options": ["Prevents state corruption during network retries", "Increases database storage costs", "Disables error handling", "Forces manual approvals"],
+                        "correct_answer": "Prevents state corruption during network retries",
+                        "explanation": "Idempotent operations allow safe retries without duplicating side effects or corrupting data."
+                    }
+                ]
+            },
+            {
+                "title": f"3. Implementation & Real-World Execution",
+                "duration_minutes": 25,
+                "content_type": "article",
+                "summary_card": "Step-by-step implementation guide, operational trade-offs, and rollout strategies.",
+                "content_markdown": f"# Implementation & Real-World Execution\n\nPutting theory into practice requires a structured rollout checklist.\n\n### Phased Rollout Strategy\n- **Phase 1: Pilot Verification** - Deploy in controlled sandbox environments.\n- **Phase 2: Progressive Delivery** - Canary releases with telemetry monitoring.\n- **Phase 3: Organization-Wide Enablement** - Team onboarding and runbook documentation.\n\n```bash\n# Verify deployment health\ncurl -fsSL https://api.phygitron.internal/health\n```",
+                "narration_script": f"Now we arrive at execution. In this lesson, we walk through the phased rollout methodology that ensures zero-downtime adoption.",
+                "key_takeaways": ["Follow canary rollout protocols", "Maintain up-to-date runbooks"],
+                "quizzes": [
+                    {
+                        "question_text": "What is the recommended approach for enterprise rollouts?",
+                        "options": ["Phased canary deployment with telemetry", "Direct global production push", "Disabling monitoring during rollout", "Deleting previous backups"],
+                        "correct_answer": "Phased canary deployment with telemetry",
+                        "explanation": "Canary rollouts allow immediate detection of edge cases while minimizing blast radius."
+                    }
+                ]
+            },
+            {
+                "title": f"4. Quality Assurance, Security & Governance",
+                "duration_minutes": 20,
+                "content_type": "article",
+                "summary_card": "Enterprise security controls, compliance auditing, and continuous improvement.",
+                "content_markdown": f"# Quality Assurance, Security & Governance\n\nSecurity is not an afterthought; it must be baked into every layer of the curriculum.\n\n### Security Standards\n- **Zero Trust**: Validate credentials explicitly for every access.\n- **Least Privilege**: Grant minimal necessary permissions.\n- **Auditability**: Maintain immutable logs for compliance.\n\n> ⚠️ **Warning**: Never store plain-text secrets in code repositories or environment logs.",
+                "narration_script": f"Security and compliance protect the organization. In this lesson, we study the Zero Trust principles and auditing requirements for {prompt}.",
+                "key_takeaways": ["Adopt Zero Trust access control", "Maintain immutable audit logs"],
+                "quizzes": [
+                    {
+                        "question_text": "Which principle guarantees that credentials are authenticated at every step?",
+                        "options": ["Zero Trust Architecture", "Perimeter-only defense", "Open access mode", "Root-level delegation"],
+                        "correct_answer": "Zero Trust Architecture",
+                        "explanation": "Zero Trust operates on the principle of 'never trust, always verify'."
+                    }
+                ]
+            }
+        ]
+    }
+
+
+@router.post("/ai/generate-course")
+async def generate_ai_course(
+    req: AiCourseGenerateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generates a full interactive enterprise course using Groq LLM with rate-limit handling and smart fallback.
+    """
+    prompt = req.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt or topic description is required")
+
+    from app.agents.agents import call_groq
+
+    user_prompt = f"""Generate a high-quality enterprise course based on the following topic or storyboard:
+TOPIC / STORYBOARD:
+{prompt}
+
+Target Audience: {req.audience}
+Difficulty Level: {req.difficulty}
+Estimated Hours: {req.estimated_hours}
+Category / Domain: {req.category}
+Tone: {req.tone}
+
+Output strict JSON adhering to the schema."""
+
+    parsed_json = None
+    try:
+        parsed_json = await run_in_threadpool(
+            call_groq,
+            AI_COURSE_SYSTEM_PROMPT,
+            user_prompt,
+            max_tokens=3200,
+        )
+    except Exception as e:
+        logger.warning(f"Groq generation failed or rate limited: {e}. Generating pedagogical template course...")
+        parsed_json = _generate_fallback_course(prompt, req.difficulty or "beginner", req.estimated_hours or 2.0, req.category or "General")
+
+    if not parsed_json or not isinstance(parsed_json, dict):
+        parsed_json = _generate_fallback_course(prompt, req.difficulty or "beginner", req.estimated_hours or 2.0, req.category or "General")
+
+    # Ensure required structure
+    title = parsed_json.get("title") or f"Mastering {prompt[:50].title()}"
+    description = parsed_json.get("description") or f"Comprehensive enterprise training on {prompt}."
+    difficulty = parsed_json.get("difficulty") or req.difficulty or "beginner"
+    estimated_hours = float(parsed_json.get("estimated_hours") or req.estimated_hours or 2.0)
+    category = parsed_json.get("category") or req.category or "General"
+    skills_covered = parsed_json.get("skills_covered") or []
+    raw_lessons = parsed_json.get("lessons") or []
+
+    if not raw_lessons and "modules" in parsed_json:
+        for mod in parsed_json.get("modules", []):
+            for l in mod.get("lessons", []):
+                raw_lessons.append(l)
+
+    if not raw_lessons:
+        fallback_data = _generate_fallback_course(prompt, difficulty, estimated_hours, category)
+        raw_lessons = fallback_data.get("lessons", [])
+
+    formatted_lessons = []
+    for idx, l in enumerate(raw_lessons):
+        formatted_lessons.append({
+            "order_index": idx,
+            "title": l.get("title") or f"Lesson {idx + 1}",
+            "duration_minutes": int(l.get("duration_minutes") or 15),
+            "content_type": l.get("content_type") or "article",
+            "summary_card": l.get("summary_card") or f"Core fundamentals of {l.get('title') or 'this topic'}.",
+            "content_markdown": l.get("content_markdown") or f"# {l.get('title')}\n\nDetailed learning material.",
+            "narration_script": l.get("narration_script") or f"Welcome to {l.get('title')}. In this session we examine practical implementations.",
+            "key_takeaways": l.get("key_takeaways") or ["Understand core concepts", "Apply in real workflows"],
+            "quizzes": [
+                {
+                    "question_text": q.get("question_text") or "What is the primary principle discussed?",
+                    "options": q.get("options") or ["Approach A", "Approach B", "Approach C", "Approach D"],
+                    "correct_answer": q.get("correct_answer") or (q.get("options", ["Approach A"])[0]),
+                    "explanation": q.get("explanation") or "This represents the foundational concept discussed in the module.",
+                    "marks": 1.0,
+                }
+                for q in (l.get("quizzes") or [])
+            ]
+        })
+
+    return success({
+        "title": title,
+        "description": description,
+        "difficulty": difficulty,
+        "estimated_hours": estimated_hours,
+        "category": category,
+        "domain_id": req.domain_id,
+        "skills_covered": skills_covered,
+        "lessons": formatted_lessons,
+    }, "Course structure generated successfully")
+
+
+@router.post("/ai/save-course")
+async def save_ai_course(
+    req: AiCourseSaveRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Saves an AI-generated or visually edited course directly into Phygitron Forge's database as a native interactive course.
+    """
+    if current_user.role not in ["org_admin", "super_admin", "instructor", "hr", "manager"]:
+        raise HTTPException(status_code=403, detail="Not authorized to publish courses")
+
+    if not req.title.strip():
+        raise HTTPException(status_code=400, detail="Course title cannot be empty")
+    if not req.lessons:
+        raise HTTPException(status_code=400, detail="Course must contain at least one lesson")
+
+    diff_enum = CourseDifficulty.beginner
+    if req.difficulty == "intermediate":
+        diff_enum = CourseDifficulty.intermediate
+    elif req.difficulty in ["advanced", "expert"]:
+        diff_enum = CourseDifficulty.advanced
+
+    status_enum = CourseStatus.published if req.status == "published" else CourseStatus.draft
+
+    # If updating an existing course
+    course = None
+    if req.id:
+        c_res = await db.execute(select(Course).where(Course.id == req.id, Course.org_id == current_user.org_id))
+        course = c_res.scalar_one_or_none()
+        if course:
+            course.title = req.title.strip()
+            course.description = req.description
+            course.difficulty = diff_enum
+            course.estimated_hours = req.estimated_hours
+            course.domain_id = req.domain_id
+            course.category = req.category or "General"
+            course.status = status_enum
+            course.is_scorm = False
+            # Clear old sections and recreate
+            await db.execute(delete(CourseSection).where(CourseSection.course_id == course.id))
+
+    if not course:
+        course = Course(
+            org_id=current_user.org_id,
+            title=req.title.strip(),
+            description=req.description,
+            difficulty=diff_enum,
+            estimated_hours=req.estimated_hours,
+            domain_id=req.domain_id,
+            category=req.category or "General",
+            status=status_enum,
+            instructor_id=current_user.id,
+            is_scorm=False,
+        )
+        db.add(course)
+        await db.flush()
+
+    # Create sections and quizzes
+    for idx, l in enumerate(req.lessons):
+        lesson_md = l.content_markdown or ""
+        meta_tags = []
+        if l.summary_card:
+            meta_tags.append(f"> **💡 Key Concept**: {l.summary_card}\n")
+        if l.narration_script:
+            meta_tags.append(f"<details><summary>🎙️ <b>Voiceover / Audio Script</b></summary>\n\n_{l.narration_script}_\n\n</details>\n")
+        if l.key_takeaways:
+            takeaways_str = "\n".join([f"- {t}" for t in l.key_takeaways])
+            meta_tags.append(f"### 📌 Key Takeaways\n{takeaways_str}\n")
+
+        full_content = "\n\n".join(meta_tags) + "\n\n" + lesson_md if meta_tags else lesson_md
+
+        sec = CourseSection(
+            course_id=course.id,
+            title=l.title.strip() or f"Lesson {idx + 1}",
+            order_index=idx,
+            content_type=ContentType.quiz if l.content_type == "quiz" else ContentType.article,
+            content_markdown=full_content,
+            duration_minutes=l.duration_minutes or 15,
+            pass_score=60.0,
+        )
+        db.add(sec)
+        await db.flush()
+
+        for q in (l.quizzes or []):
+            quiz = SectionQuiz(
+                section_id=sec.id,
+                question_text=q.question_text,
+                options=q.options,
+                correct_answer=q.correct_answer,
+                explanation=q.explanation,
+                marks=q.marks or 1.0,
+            )
+            db.add(quiz)
+
+    await db.commit()
+    await db.refresh(course)
+
+    return success({
+        "id": course.id,
+        "title": course.title,
+        "status": course.status.value,
+        "sections_count": len(req.lessons),
+    }, "Course saved and published to library successfully!")
+
